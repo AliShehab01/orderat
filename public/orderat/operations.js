@@ -98,8 +98,14 @@ function analyticsPage() {
     return { item, quantity, value: quantity * Number(item.price || 0) };
   }).sort((a, b) => b.quantity - a.quantity);
   const maxQuantity = Math.max(1, ...byProduct.map((row) => row.quantity));
-  const sourceLabels = { text: ["Pasted text", "نص منسوخ"], image: ["Screenshot", "صورة"], voice: ["Voice note", "رسالة صوتية"], manual: ["Manual", "يدوي"] };
-  const bySource = Object.keys(sourceLabels).map((source) => ({ source, count: orders.filter((order) => order.source === source).length })).filter((row) => row.count);
+  const sourceLabels = {
+    "whatsapp-auto": ["WhatsApp · Automatic", "واتساب · تلقائي"],
+    "instagram-auto": ["Instagram · Automatic", "إنستغرام · تلقائي"],
+    "whatsapp-manual": ["WhatsApp · Manual", "واتساب · يدوي"],
+    "instagram-manual": ["Instagram · Manual", "إنستغرام · يدوي"],
+    "other-manual": ["Other · Manual", "مصدر آخر · يدوي"]
+  };
+  const bySource = Object.keys(sourceLabels).map((source) => ({ source, count: orders.filter((order) => `${order.channel || "other"}-${order.intake || "manual"}` === source).length })).filter((row) => row.count);
   const top = byProduct[0];
   const insight = !orders.length ? "" : top?.quantity ? tr(`${pname(top.item)} leads with ${top.quantity} units. Keep its ready stock visible and easy to reorder.`, `${pname(top.item)} يتصدر بـ ${top.quantity} قطعة. حافظ على مخزونه الجاهز واضحًا وسهل التحديث.`) : tr("Add product quantities to reveal your bestseller.", "أضف كميات المنتجات لمعرفة الأكثر مبيعًا.");
   return heading(
@@ -115,7 +121,7 @@ function analyticsPage() {
   <section class="insight-card">${icon("analytics")}<div><span>${tr("WHAT THE DATA SAYS", "ماذا تقول البيانات")}</span><strong>${esc(insight)}</strong></div></section>
   <div class="analytics-grid">
     <section class="panel chart-panel"><div class="panel-title"><div><h2>${tr("Best-selling products", "المنتجات الأكثر مبيعًا")}</h2><p>${tr("Confirmed, prepared, packed and collected orders", "الطلبات المؤكدة والمحضرة والمغلفة والمستلمة")}</p></div></div><div class="bar-list">${byProduct.map((row) => `<div class="bar-row"><div class="bar-label"><span>${esc(pname(row.item))}</span><strong>${row.quantity} ${tr("units", "قطعة")}</strong></div><div class="bar-track"><i style="width:${Math.round(row.quantity / maxQuantity * 100)}%"></i></div><small>${money(row.value)}</small></div>`).join("")}</div></section>
-    <section class="panel breakdown-panel"><div class="panel-title"><div><h2>${tr("How orders arrived", "كيف وصلت الطلبات")}</h2><p>${tr("Useful for choosing where to focus", "لتعرف أين تركز البيع")}</p></div></div><div class="breakdown-list">${bySource.map((row) => `<div><span>${tr(...sourceLabels[row.source])}</span><strong>${row.count}</strong></div>`).join("") || `<p class="muted">${tr("No source data yet.", "لا توجد بيانات مصدر بعد.")}</p>`}</div><div class="panel-title compact"><div><h2>${tr("Order progress", "تقدم الطلبات")}</h2></div></div><div class="breakdown-list">${Object.keys(statuses).filter((status) => status !== "cancelled").map((status) => `<div><span>${statusText(status)}</span><strong>${orders.filter((order) => order.status === status).length}</strong></div>`).join("")}</div></section>
+    <section class="panel breakdown-panel"><div class="panel-title"><div><h2>${tr("Channel and intake", "القناة وطريقة الإدخال")}</h2><p>${tr("Automatic connections and owner-entered orders", "الربط التلقائي والطلبات التي أدخلها المالك")}</p></div></div><div class="breakdown-list">${bySource.map((row) => `<div><span>${tr(...sourceLabels[row.source])}</span><strong>${row.count}</strong></div>`).join("") || `<p class="muted">${tr("No source data yet.", "لا توجد بيانات مصدر بعد.")}</p>`}</div><div class="panel-title compact"><div><h2>${tr("Order progress", "تقدم الطلبات")}</h2></div></div><div class="breakdown-list">${Object.keys(statuses).filter((status) => status !== "cancelled").map((status) => `<div><span>${statusText(status)}</span><strong>${orders.filter((order) => order.status === status).length}</strong></div>`).join("")}</div></section>
   </div>
   <p class="data-note">${tr("Booked sales are estimates based on current prices. Connect payment data later for net revenue and refunds.", "المبيعات المحجوزة تقديرية بحسب الأسعار الحالية. اربط بيانات الدفع لاحقًا لصافي الإيراد والمبالغ المستردة.")}</p>` : `<section class="panel">${empty(tr("No sales to read yet", "لا توجد مبيعات لتحليلها بعد"), tr("Confirm the first order and Orderat will start showing demand and booked value here.", "أكّد أول طلب وستبدأ اوردرات بعرض الطلب والقيمة المحجوزة هنا."), captureButton())}</section>`);
 }

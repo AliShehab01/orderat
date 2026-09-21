@@ -22,6 +22,8 @@ Orderat behaves like a reliable operations partner for small sellers. It is clea
 | Slate | `#66747B` | Secondary text and supporting labels |
 | Line | `#D9E0DD` | Borders, dividers and chart tracks |
 
+Dark mode keeps Citrus and Palm as the action colours, while Canvas becomes `#0D202A`, Paper becomes `#172F3A`, primary text becomes `#F4F6F2`, secondary text becomes `#AFBEC0`, and dividers become `#31505A`.
+
 ## Typography
 
 Use **IBM Plex Sans Arabic** for Arabic and **IBM Plex Sans** for English.
