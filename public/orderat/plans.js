@@ -24,7 +24,7 @@ function planNavPatch() {
   button.className = `nav-item ${view === "plans" ? "active" : ""}`;
   button.dataset.nav = "plans";
   if (view === "plans") button.setAttribute("aria-current", "page");
-  button.innerHTML = `${icon("spark")}<span>${tr("Plans", "الباقات")}</span><span class="pro-nav-badge">${tr("NEW", "جديد")}</span>`;
+  button.innerHTML = `${icon("plans")}<span>${tr("Plans", "الباقات")}</span><span class="pro-nav-badge">${tr("NEW", "جديد")}</span>`;
   nav.appendChild(button);
   button.onclick = () => navigate("plans");
 }
@@ -69,7 +69,7 @@ function pricingPage() {
       <small class="price-note">${tr("Proposed test price. No payment is collected in this prototype.", "سعر مقترح للاختبار. لا يتم تحصيل أي مبلغ في هذه النسخة.")}</small>
     </article>
     <article class="price-card pro ${current === "pro-waitlist" ? "selected" : ""}">
-      <div class="price-top"><span class="plan-icon pro-icon">${icon("spark")}</span><span class="plan-state review">${tr("META REVIEW PENDING", "بانتظار مراجعة META")}</span></div>
+      <div class="price-top"><span class="plan-icon pro-icon">${icon("plans")}</span><span class="plan-state review">${tr("META REVIEW PENDING", "بانتظار مراجعة META")}</span></div>
       <h2>${tr("Pro", "برو")}</h2>
       <p>${tr("Connect business channels so new messages arrive automatically.", "اربط قنوات النشاط لتصل الرسائل الجديدة تلقائيًا.")}</p>
       <div class="price"><strong>15</strong><span><b>${tr("BHD", "د.ب")}</b><small>${tr("per month", "شهريًا")}</small></span></div>
@@ -87,7 +87,7 @@ function pricingPage() {
   <section class="trust-strip">
     <div>${icon("check")}<span><strong>${tr("Basic stays private", "بيسك تحافظ على الخصوصية")}</strong><small>${tr("No WhatsApp or Instagram account access", "دون وصول إلى حساب واتساب أو إنستغرام")}</small></span></div>
     <div>${icon("clock")}<span><strong>${tr("Pro has a readiness gate", "برو لديها بوابة جاهزية")}</strong><small>${tr("Owners see requirements before subscribing", "يشاهد المالك المتطلبات قبل الاشتراك")}</small></span></div>
-    <div>${icon("spark")}<span><strong>${tr("Owner approval first", "موافقة المالك أولًا")}</strong><small>${tr("Draft replies are the default", "مسودات الرد هي الوضع الافتراضي")}</small></span></div>
+    <div>${icon("check")}<span><strong>${tr("Owner approval first", "موافقة المالك أولًا")}</strong><small>${tr("Draft replies are the default", "مسودات الرد هي الوضع الافتراضي")}</small></span></div>
   </section>`;
 }
 
