@@ -85,7 +85,10 @@ function extractCollection(tokens: string[], consumed: Set<number>, now: Date) {
   if (weekday === undefined && dayOffset !== undefined) date.setDate(date.getDate() + dayOffset);
   if (weekday === undefined && dayOffset === undefined && hour !== undefined && hour < now.getHours()) date.setDate(date.getDate() + 1);
   date = new Date(date); date.setHours(hour ?? 10, hour === undefined ? 0 : minute, 0, 0);
-  return { iso: date.toISOString(), confidence: (dateConf === "high" && timeConf === "high" ? "high" : "low") as Confidence };
+  const confidence: Confidence = [dateConf, timeConf].every((value) => value === "high")
+    ? "high"
+    : "low";
+  return { iso: date.toISOString(), confidence };
 }
 
 function extractItems(tokens: string[], consumed: Set<number>, products: Product[]) {
