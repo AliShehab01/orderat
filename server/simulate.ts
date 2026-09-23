@@ -8,7 +8,7 @@
 // messaged the business number in the last 24 hours, and a test number can only message its allowed list.
 
 import { existsSync } from "node:fs";
-import { signBody } from "./meta/verify";
+import { signBody } from "./meta/verify.ts";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 const env = (name: string) => process.env[name]?.trim() || undefined;

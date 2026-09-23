@@ -1,7 +1,7 @@
 // Shared pieces of Meta webhooks (WhatsApp and Instagram): the GET handshake, the POST signature check,
 // and running message work after the 200 response.
 
-import { verifySignature, verifySubscription } from "./verify";
+import { verifySignature, verifySubscription } from "./verify.ts";
 
 export interface AcceptOptions {
   verifyToken: string;

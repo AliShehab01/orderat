@@ -1,8 +1,8 @@
 // Sends Instagram DM replies (Instagram API with Instagram Login) and downloads attachments.
 
-import type { SendText } from "../agent/processor";
-import type { MediaInput } from "../ai/gemini";
-import { metaSendError } from "../meta/send-error";
+import type { SendText } from "../agent/processor.ts";
+import type { MediaInput } from "../ai/gemini.ts";
+import { metaSendError } from "../meta/send-error.ts";
 
 export interface InstagramConfig {
   /** Instagram user access token for the connected professional account. */

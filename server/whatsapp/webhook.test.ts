@@ -93,9 +93,9 @@ describe("agent replies", () => {
     expect(sent[0].text).toContain("براونيز بوكس × 10");
     expect(sent[0].text).toContain("السبت");
     expect(sent[0].text).toContain("بنأكد لك الطلب");
-    expect(store.all()).toHaveLength(1);
-    expect(store.all()[0].order.customerName).toBe("Sara");
-    expect(store.all()[0].order.status).toBe("pending");
+    expect(await store.all()).toHaveLength(1);
+    expect((await store.all())[0].order.customerName).toBe("Sara");
+    expect((await store.all())[0].order.status).toBe("pending");
   });
 
   it("asks for the collection time when it is missing", async () => {
@@ -110,16 +110,16 @@ describe("agent replies", () => {
     await post(textPayload("wamid.c1", "97333333333", "ابي 12 تشيز كيك كب"));
     await post(textPayload("wamid.c2", "97333333333", "الخميس الساعة 5 العصر"));
     expect(sent[1].text).toContain("الخميس");
-    expect(store.all()).toHaveLength(1);
-    expect(store.all()[0].order.collectionAt).toBeDefined();
+    expect(await store.all()).toHaveLength(1);
+    expect((await store.all())[0].order.collectionAt).toBeDefined();
   });
 
   it("applies a quantity change to the customer's open order", async () => {
     const { post, sent, store } = setup();
     await post(textPayload("wamid.d1", "97333333333", "بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح"));
     await post(textPayload("wamid.d2", "97333333333", "ياليت تخليها 35 كب مو 20 اذا ممكن"));
-    expect(store.all()).toHaveLength(1);
-    expect(store.all()[0].order.items[0].quantity).toBe(35);
+    expect(await store.all()).toHaveLength(1);
+    expect((await store.all())[0].order.items[0].quantity).toBe(35);
     expect(sent[1].text).toContain("20");
     expect(sent[1].text).toContain("35");
   });
@@ -136,7 +136,7 @@ describe("agent replies", () => {
     const { post, sent, store } = setup();
     await post(textPayload("wamid.f", "97333333333", "السلام عليكم"));
     expect(sent[0].text).toContain("تشيز كيك كب");
-    expect(store.all()).toHaveLength(0);
+    expect(await store.all()).toHaveLength(0);
   });
 
   it("does not reply twice to a retried delivery", async () => {
@@ -161,7 +161,7 @@ describe("agent replies", () => {
     msg.type = "audio"; delete msg.text; msg.audio = { id: "media-1", mime_type: "audio/ogg" };
     await post(p);
     expect(sent).toHaveLength(1);
-    expect(store.all()).toHaveLength(0);
+    expect(await store.all()).toHaveLength(0);
   });
 
   it("reads a voice note with the AI extractor and replies with the order", async () => {
@@ -189,7 +189,7 @@ describe("agent replies", () => {
     expect(reads).toEqual(["media-9"]);
     expect(sent[0].text).toContain("كب كيك فانيلا × 30");
     expect(sent[0].text).toContain("السبت");
-    expect(store.all()[0].sourceText).toContain("30 كب كيك");
+    expect((await store.all())[0].sourceText).toContain("30 كب كيك");
   });
 
   it("falls back to the built-in parser when the AI extractor fails on text", async () => {
@@ -202,7 +202,7 @@ describe("agent replies", () => {
     });
     await handler(new Request(URL_BASE, { method: "POST", body: JSON.stringify(textPayload("wamid.x1", "97333333333", "ابي 12 تشيز كيك كب")) }));
     expect(sent[0].text).toContain("تشيز كيك كب × 12");
-    expect(store.all()).toHaveLength(1);
+    expect(await store.all()).toHaveLength(1);
   });
 
   it("acknowledges a voice note when the AI extractor fails", async () => {
@@ -219,7 +219,7 @@ describe("agent replies", () => {
     msg.type = "audio"; delete msg.text; msg.audio = { id: "media-10", mime_type: "audio/ogg" };
     await handler(new Request(URL_BASE, { method: "POST", body: JSON.stringify(p) }));
     expect(sent[0].text).toContain("استلمنا رسالتك");
-    expect(store.all()).toHaveLength(0);
+    expect(await store.all()).toHaveLength(0);
   });
 
   it("answers Meta right away and finishes the work in the background when a defer hook is given", async () => {
@@ -254,7 +254,7 @@ describe("agent replies", () => {
     await post("wamid.o2", "ياليت تخليها 35 كب مو 20");
     expect(seen[0]).toBeUndefined();
     expect(seen[1]).toMatchObject({ items: [{ productId: "p-cheesecake", quantity: 20 }] });
-    expect(store.all()[0].order.items[0].quantity).toBe(35);
+    expect((await store.all())[0].order.items[0].quantity).toBe(35);
   });
 
   it("still returns 200 when sending the reply fails", async () => {

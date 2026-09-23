@@ -1,13 +1,13 @@
 // WhatsApp Cloud API webhook: GET = Meta's verification handshake, POST = incoming messages.
 // Written against the standard Request/Response API so it can run in Node, Supabase Edge or Vercel.
 
-import type { Product } from "../../src/lib/types";
-import type { OrderExtractor } from "../ai/gemini";
-import { createMessageProcessor, type SendText } from "../agent/processor";
-import type { MemoryStore } from "../agent/store";
-import { acceptMetaWebhook, received, runAfterResponse } from "../meta/webhook-common";
-import { extractMessages } from "./incoming";
-import type { ReadMedia } from "./media";
+import type { Product } from "../../src/lib/types.ts";
+import type { OrderExtractor } from "../ai/gemini.ts";
+import { createMessageProcessor, type SendText } from "../agent/processor.ts";
+import type { OrderStore } from "../agent/store.ts";
+import { acceptMetaWebhook, received, runAfterResponse } from "../meta/webhook-common.ts";
+import { extractMessages, type IncomingMessage } from "./incoming.ts";
+import type { ReadMedia } from "./media.ts";
 
 export interface WebhookDeps {
   verifyToken: string;
@@ -16,7 +16,7 @@ export interface WebhookDeps {
   /** Local testing only: accept POSTs without a signature when no app secret is set. */
   allowUnsigned: boolean;
   send: SendText;
-  store: MemoryStore;
+  store: OrderStore;
   products: Product[];
   /** AI order reader (Gemini). Without it, text uses the built-in parser and media gets an acknowledgement. */
   extractor?: OrderExtractor;
@@ -47,7 +47,8 @@ export function createWebhookHandler(deps: WebhookDeps): (req: Request) => Promi
     const accepted = await acceptMetaWebhook(req, deps);
     if ("response" in accepted) return accepted.response;
     // Mark messages as seen before any slow work, so a retried delivery is never handled twice.
-    const fresh = extractMessages(accepted.payload).filter((msg) => deps.store.markSeen(msg.id));
+    const fresh: IncomingMessage[] = [];
+    for (const msg of extractMessages(accepted.payload)) if (await deps.store.markSeen(msg.id)) fresh.push(msg);
     await runAfterResponse(async () => { for (const msg of fresh) await process(msg); }, deps.defer, log);
     return received();
   };

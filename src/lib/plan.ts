@@ -1,8 +1,9 @@
-import type { Draft, Order, OrderItem, Product } from "./types";
-import { normalizeName, nextWeekday } from "./parser";
+import type { Draft, Order, OrderItem, Product } from "./types.ts";
+import { normalizeName } from "./parser.ts";
+import { bahrainDate, bahrainDateKey, bahrainParts } from "./bahrain-time.ts";
 
-export const dateKey = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/** The order's Bahrain calendar day ("YYYY-MM-DD"), independent of the process time zone. */
+export const dateKey = bahrainDateKey;
 export const keyOf = (iso: string) => dateKey(new Date(iso));
 
 export interface Diff { label: string; oldValue: string; newValue: string }
@@ -95,7 +96,10 @@ export function demoProducts(): Product[] {
 }
 
 export function demoOrders(now = new Date()): Order[] {
-  const at = (wd: number, h: number) => { const d = nextWeekday(now, wd); d.setHours(h, 0, 0, 0); return d.toISOString(); };
+  const at = (wd: number, h: number) => {
+    const p = bahrainParts(now);
+    return bahrainDate(p.year, p.month, p.day + ((wd - p.weekday + 7) % 7), h, 0).toISOString();
+  };
   const mk = (customerName: string, items: [string, number][], collectionAt?: string, notes?: string): Order => ({
     id: crypto.randomUUID(), customerName, items: items.map(([productId, quantity]) => ({ productId, rawText: productId, quantity })),
     collectionAt, notes, status: "confirmed", changes: [], createdAt: new Date(now.getTime() - 86400000).toISOString(),

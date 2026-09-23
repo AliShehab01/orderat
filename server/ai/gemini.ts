@@ -1,8 +1,8 @@
 // Reads an order from a customer's text, screenshot or voice note with the Gemini API.
 // The API key travels in a header, never in the URL. Customer phone numbers are never sent.
 
-import type { Draft, DraftItem, Product } from "../../src/lib/types";
-import type { Lang } from "../agent/store";
+import type { Draft, DraftItem, Product } from "../../src/lib/types.ts";
+import type { Lang } from "../agent/store.ts";
 
 export interface GeminiConfig {
   apiKey: string;

@@ -1,4 +1,5 @@
-import type { Confidence, Draft, DraftItem, Product } from "./types";
+import type { Confidence, Draft, DraftItem, Product } from "./types.ts";
+import { bahrainDate, bahrainParts } from "./bahrain-time.ts";
 
 const AR_DIGITS = "٠١٢٣٤٥٦٧٨٩";
 export const normalizeDigits = (s: string) =>
@@ -35,10 +36,10 @@ const TIME_LEAD = new Set(["الساعه", "ساعه", "at", "by", "@", "around"
 const WD_EN: Record<string, number> = { sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2, wednesday: 3, wed: 3, thursday: 4, thu: 4, thurs: 4, friday: 5, fri: 5, saturday: 6, sat: 6 };
 const WD_AR: [RegExp, number][] = [[/احد$/, 0], [/اثنين$/, 1], [/ثلاثاء$/, 2], [/اربعاء$/, 3], [/خميس$/, 4], [/جمعه$/, 5], [/سبت$/, 6]];
 
+/** Next occurrence of weekday `wd` (0 = Sunday) at or after `from`, keeping `from`'s Bahrain time of day. */
 export function nextWeekday(from: Date, wd: number): Date {
-  const d = new Date(from);
-  d.setDate(d.getDate() + ((wd - from.getDay() + 7) % 7));
-  return d;
+  const p = bahrainParts(from);
+  return bahrainDate(p.year, p.month, p.day + ((wd - p.weekday + 7) % 7), p.hours, p.minutes);
 }
 const numAt = (t?: string) => (t === undefined ? undefined : /^\d+$/.test(t) ? Number(t) : NUM_WORDS[t]);
 
@@ -81,10 +82,15 @@ function extractCollection(tokens: string[], consumed: Set<number>, now: Date) {
     if (!mer && hour >= 1 && hour <= 7) { hour += 12; timeConf = "low"; }
   }
   if (dayOffset === undefined && weekday === undefined && hour === undefined) return undefined;
-  let date = weekday !== undefined ? nextWeekday(now, weekday) : new Date(now);
-  if (weekday === undefined && dayOffset !== undefined) date.setDate(date.getDate() + dayOffset);
-  if (weekday === undefined && dayOffset === undefined && hour !== undefined && hour < now.getHours()) date.setDate(date.getDate() + 1);
-  date = new Date(date); date.setHours(hour ?? 10, hour === undefined ? 0 : minute, 0, 0);
+  // All date math below happens in Bahrain wall-clock terms (see bahrain-time.ts), not the
+  // process's own time zone, so an Edge Function running in UTC resolves "بكرا"/"tomorrow" and
+  // "the 5 pm slot has passed today" the same way the local dev server (forced to Asia/Bahrain) does.
+  const p = bahrainParts(now);
+  let day = p.day;
+  if (weekday !== undefined) day += (weekday - p.weekday + 7) % 7;
+  else if (dayOffset !== undefined) day += dayOffset;
+  else if (hour !== undefined && hour < p.hours) day += 1;
+  const date = bahrainDate(p.year, p.month, day, hour ?? 10, hour === undefined ? 0 : minute);
   const confidence: Confidence = [dateConf, timeConf].every((value) => value === "high")
     ? "high"
     : "low";

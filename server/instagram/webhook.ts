@@ -4,19 +4,20 @@
 // senders in `replyTo` (Instagram-scoped user IDs), or to everyone when replyTo is "all". Every other
 // sender is only logged, never answered and never stored, so their ID can be added once known.
 
-import type { Product } from "../../src/lib/types";
-import type { MediaInput, OrderExtractor } from "../ai/gemini";
-import { createMessageProcessor, type SendText } from "../agent/processor";
-import type { MemoryStore } from "../agent/store";
-import { acceptMetaWebhook, received, runAfterResponse } from "../meta/webhook-common";
-import { extractInstagramMessages } from "./incoming";
+import type { Product } from "../../src/lib/types.ts";
+import type { MediaInput, OrderExtractor } from "../ai/gemini.ts";
+import { createMessageProcessor, type SendText } from "../agent/processor.ts";
+import type { OrderStore } from "../agent/store.ts";
+import { acceptMetaWebhook, received, runAfterResponse } from "../meta/webhook-common.ts";
+import { extractInstagramMessages } from "./incoming.ts";
+import type { IncomingMessage } from "../whatsapp/incoming.ts";
 
 export interface InstagramWebhookDeps {
   verifyToken: string;
   /** Instagram app secret (Instagram use case > API setup), used for X-Hub-Signature-256. */
   appSecret?: string;
   allowUnsigned: boolean;
-  store: MemoryStore;
+  store: OrderStore;
   products: Product[];
   /** Missing until an Instagram access token is set; messages are then read but not answered. */
   send?: SendText;
@@ -45,7 +46,8 @@ export function createInstagramWebhookHandler(deps: InstagramWebhookDeps): (req:
   return async (req) => {
     const accepted = await acceptMetaWebhook(req, deps);
     if ("response" in accepted) return accepted.response;
-    const fresh = extractInstagramMessages(accepted.payload).filter((msg) => deps.store.markSeen(msg.id));
+    const fresh: IncomingMessage[] = [];
+    for (const msg of extractInstagramMessages(accepted.payload)) if (await deps.store.markSeen(msg.id)) fresh.push(msg);
     await runAfterResponse(async () => {
       for (const msg of fresh) {
         if (!allowed(msg.from)) {

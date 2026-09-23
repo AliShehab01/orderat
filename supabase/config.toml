@@ -1,0 +1,18 @@
+# Supabase project config. project_id is set for real by `supabase link --project-ref <ref>`
+# (see README.md "Hosting on Supabase") — this placeholder just lets the CLI recognise the project
+# locally before that.
+project_id = "orderat"
+
+# Meta's webhook POSTs (WhatsApp, Instagram) and the owner page's ?key= sign-in carry no Supabase
+# JWT, only Meta's own X-Hub-Signature-256 / the app's OWNER_KEY — both checked inside the function
+# itself (server/meta/verify.ts, server/owner/auth.ts). verify_jwt=false only turns off Supabase's
+# own gateway-level "Authorization: Bearer <supabase jwt>" requirement; it does not mean the
+# function is otherwise unauthenticated.
+[functions.whatsapp]
+verify_jwt = false
+
+[functions.instagram]
+verify_jwt = false
+
+[functions.owner]
+verify_jwt = false

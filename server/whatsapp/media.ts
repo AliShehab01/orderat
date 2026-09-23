@@ -1,6 +1,6 @@
 // Downloads a voice note or image a customer sent, using the WhatsApp Cloud API media endpoints.
 
-import type { MediaInput } from "../ai/gemini";
+import type { MediaInput } from "../ai/gemini.ts";
 
 export interface MediaReaderConfig {
   token: string;

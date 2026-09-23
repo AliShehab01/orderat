@@ -1,15 +1,15 @@
 // Handles one customer message from any channel: optional AI reading, the order agent, and the reply.
 
-import type { Product } from "../../src/lib/types";
-import type { MediaInput, OpenOrderContext, OrderExtractor } from "../ai/gemini";
-import type { IncomingMessage } from "../whatsapp/incoming";
-import { handleCustomerMessage, type PreparedDraft } from "./reply";
-import type { Channel, MemoryStore } from "./store";
+import type { Product } from "../../src/lib/types.ts";
+import type { MediaInput, OpenOrderContext, OrderExtractor } from "../ai/gemini.ts";
+import type { IncomingMessage } from "../whatsapp/incoming.ts";
+import { handleCustomerMessage, type PreparedDraft } from "./reply.ts";
+import type { Channel, OrderStore } from "./store.ts";
 
 export type SendText = (to: string, text: string) => Promise<void>;
 
 export interface ProcessorDeps {
-  store: MemoryStore;
+  store: OrderStore;
   products: Product[];
   /** How to reply on each channel. A channel without a sender is read but not answered. */
   senders: Partial<Record<Channel, SendText>>;
@@ -29,8 +29,8 @@ export function createMessageProcessor(deps: ProcessorDeps): (msg: IncomingMessa
   const log = deps.log ?? console.log;
   const now = deps.now ?? (() => new Date());
 
-  function openOrderContext(msg: IncomingMessage, at: Date): OpenOrderContext | undefined {
-    const open = deps.store.openOrdersFor(msg.channel, msg.from, at)[0]?.order;
+  async function openOrderContext(msg: IncomingMessage, at: Date): Promise<OpenOrderContext | undefined> {
+    const open = (await deps.store.openOrdersFor(msg.channel, msg.from, at))[0]?.order;
     if (!open) return undefined;
     return {
       items: open.items.map((i) => ({ productId: i.productId, name: deps.products.find((p) => p.id === i.productId)?.name ?? i.rawText, quantity: i.quantity })),
@@ -48,7 +48,7 @@ export function createMessageProcessor(deps: ProcessorDeps): (msg: IncomingMessa
   /** Reads the message with the AI extractor when possible. Returns undefined to use the built-in path. */
   async function prepareWithAi(msg: IncomingMessage, at: Date): Promise<PreparedDraft | undefined> {
     if (!deps.extractor) return undefined;
-    const openOrder = openOrderContext(msg, at);
+    const openOrder = await openOrderContext(msg, at);
     if (msg.type === "text" && msg.text?.trim()) {
       return deps.extractor({ text: msg.text, products: deps.products, now: at, openOrder });
     }
@@ -67,7 +67,7 @@ export function createMessageProcessor(deps: ProcessorDeps): (msg: IncomingMessa
     } catch (err) {
       log(`AI reading failed for ${msg.id}, using the built-in path: ${err instanceof Error ? err.message : String(err)}`);
     }
-    const outcome = handleCustomerMessage(msg, deps.store, deps.products, at, prepared);
+    const outcome = await handleCustomerMessage(msg, deps.store, deps.products, at, prepared);
     const shown = msg.text ?? (prepared?.sourceText ? `<${msg.type}> ${prepared.sourceText}` : `<${msg.type}>`);
     log(`[${msg.channel} ${outcome.kind}${prepared ? ", ai" : ""}] ${msg.from}${msg.profileName ? ` (${msg.profileName})` : ""}: ${shown}`);
 

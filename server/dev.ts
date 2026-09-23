@@ -3,15 +3,15 @@
 
 import { createServer, type IncomingMessage } from "node:http";
 import { existsSync } from "node:fs";
-import { MemoryStore } from "./agent/store";
-import { createWhatsAppSender } from "./whatsapp/client";
-import { createWebhookHandler } from "./whatsapp/webhook";
-import { createOwnerHandler } from "./owner/handler";
-import { createGeminiExtractor, DEFAULT_MODEL } from "./ai/gemini";
-import { createMediaReader } from "./whatsapp/media";
-import { createInstagramSender, createUrlReader } from "./instagram/client";
-import { createInstagramWebhookHandler } from "./instagram/webhook";
-import { demoProducts } from "../src/lib/plan";
+import { MemoryStore } from "./agent/store.ts";
+import { createWhatsAppSender } from "./whatsapp/client.ts";
+import { createWebhookHandler } from "./whatsapp/webhook.ts";
+import { createOwnerHandler } from "./owner/handler.ts";
+import { createGeminiExtractor, DEFAULT_MODEL } from "./ai/gemini.ts";
+import { createMediaReader } from "./whatsapp/media.ts";
+import { createInstagramSender, createUrlReader } from "./instagram/client.ts";
+import { createInstagramWebhookHandler } from "./instagram/webhook.ts";
+import { demoProducts } from "../src/lib/plan.ts";
 
 // Orders are parsed and shown in Bahrain time, whatever the machine's time zone.
 process.env.TZ = "Asia/Bahrain";

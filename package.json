@@ -10,7 +10,13 @@
     "test": "vitest run",
     "whatsapp:dev": "tsx server/dev.ts",
     "whatsapp:simulate": "tsx server/simulate.ts",
-    "ai:check": "tsx server/check-gemini.ts"
+    "ai:check": "tsx server/check-gemini.ts",
+    "supabase:init": "supabase init",
+    "supabase:link": "supabase link",
+    "supabase:secrets": "node scripts/supabase-secrets.mjs",
+    "supabase:deploy": "node scripts/supabase-deploy.mjs",
+    "supabase:migrate": "supabase db push",
+    "supabase:logs": "supabase functions logs"
   },
   "dependencies": {
     "next": "16.3.5",
@@ -24,6 +30,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
+    "supabase": "^2.117.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5",

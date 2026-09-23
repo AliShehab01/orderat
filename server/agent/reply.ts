@@ -1,13 +1,13 @@
 // The order agent: reads one customer message and decides what to store and what to reply.
 // The agent only acknowledges and summarises. The owner still confirms every order in Orderat.
 
-import type { Draft, Order, OrderItem, Product } from "../../src/lib/types";
-import { parseOrderText } from "../../src/lib/parser";
-import { findChangeCandidate, keyOf } from "../../src/lib/plan";
-import type { IncomingMessage } from "../whatsapp/incoming";
-import type { Lang, MemoryStore } from "./store";
+import type { Draft, Order, OrderItem, Product } from "../../src/lib/types.ts";
+import { parseOrderText } from "../../src/lib/parser.ts";
+import { findChangeCandidate, keyOf } from "../../src/lib/plan.ts";
+import type { IncomingMessage } from "../whatsapp/incoming.ts";
+import type { Lang, OrderStore } from "./store.ts";
 
-export type { Lang } from "./store";
+export type { Lang } from "./store.ts";
 export type OutcomeKind = "new" | "change" | "time" | "ask_quantity" | "noted" | "help" | "media";
 export interface AgentOutcome { kind: OutcomeKind; reply: string; order?: Order }
 
@@ -100,13 +100,13 @@ export function confirmationMessage(order: Order, products: Product[], lang: Lan
   ].join("\n");
 }
 
-export function handleCustomerMessage(
+export async function handleCustomerMessage(
   msg: IncomingMessage,
-  store: MemoryStore,
+  store: OrderStore,
   products: Product[],
   now: Date,
   prepared?: PreparedDraft,
-): AgentOutcome {
+): Promise<AgentOutcome> {
   let draft: Draft;
   let lang: Lang;
   let sourceText: string | undefined;
@@ -120,24 +120,25 @@ export function handleCustomerMessage(
   }
   const c = COPY[lang];
   const withQty = draft.items.filter((i) => (i.quantity ?? 0) > 0);
-  const open = store.openOrdersFor(msg.channel, msg.from, now)[0]?.order;
+  const open = (await store.openOrdersFor(msg.channel, msg.from, now))[0]?.order;
 
   if (open) {
     // A reply with only a time fills the missing time of the open order.
     if (!open.collectionAt && draft.collectionAt && withQty.length === 0) {
-      open.collectionAt = draft.collectionAt;
-      open.changes.push(`time: - → ${draft.collectionAt}`);
-      return { kind: "time", order: open, reply: `${c.updated}\n${collectionLine(open.collectionAt, draft.collectionConfidence === "high", lang)}\n${c.changeSoon}` };
+      const changes = [...open.changes, `time: - → ${draft.collectionAt}`];
+      const updated = await store.update(open.id, { collectionAt: draft.collectionAt, changes });
+      const order = updated?.order ?? { ...open, collectionAt: draft.collectionAt, changes };
+      return { kind: "time", order, reply: `${c.updated}\n${collectionLine(order.collectionAt, draft.collectionConfidence === "high", lang)}\n${c.changeSoon}` };
     }
     // Items for a different day are a new order, not a change.
     const differentDay = withQty.length > 0 && !!draft.collectionAt && !!open.collectionAt && keyOf(draft.collectionAt) !== keyOf(open.collectionAt);
     if (!differentDay) {
       const cand = findChangeCandidate({ ...draft, customerName: open.customerName }, [open], products, now);
       if (cand) {
-        open.items = cand.items;
-        open.collectionAt = cand.collectionAt;
-        if (draft.notes) open.notes = [open.notes, draft.notes].filter(Boolean).join("; ");
-        open.changes.push(cand.diffs.map((d) => `${d.label}: ${d.oldValue} → ${d.newValue}`).join("; "));
+        const notes = draft.notes ? [open.notes, draft.notes].filter(Boolean).join("; ") : open.notes;
+        const changes = [...open.changes, cand.diffs.map((d) => `${d.label}: ${d.oldValue} → ${d.newValue}`).join("; ")];
+        const updated = await store.update(open.id, { items: cand.items, collectionAt: cand.collectionAt, notes, changes });
+        const order = updated?.order ?? { ...open, items: cand.items, collectionAt: cand.collectionAt, notes, changes };
         const lines = cand.diffs.map((d) => {
           if (d.label === "time") {
             const next = formatCollection(d.newValue, lang);
@@ -147,7 +148,7 @@ export function handleCustomerMessage(
           const name = p ? (lang === "ar" ? p.nameAr : p.name) : d.label;
           return d.oldValue === "0" ? `• ${name} × ${d.newValue} (${c.added})` : `• ${name}: ${c.from(d.oldValue, d.newValue)}`;
         });
-        return { kind: "change", order: open, reply: [c.updated, ...lines, c.changeSoon].join("\n") };
+        return { kind: "change", order, reply: [c.updated, ...lines, c.changeSoon].join("\n") };
       }
     }
   }
@@ -163,7 +164,7 @@ export function handleCustomerMessage(
       changes: [],
       createdAt: now.toISOString(),
     };
-    store.add({ order, channel: msg.channel, customerId: msg.from, lang, sourceText });
+    await store.add({ order, channel: msg.channel, customerId: msg.from, lang, sourceText });
     const lines = [
       c.hello(msg.profileName),
       c.got,

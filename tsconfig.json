@@ -11,6 +11,10 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // server/ and src/lib/ use explicit .ts extensions on relative imports so the same files also
+    // run under Deno (Supabase Edge Functions), which requires them. noEmit above satisfies the
+    // TS5096 requirement this option comes with.
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "incremental": true,
     "plugins": [
@@ -30,5 +34,7 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  // supabase/functions is Deno code (Deno.serve, Deno.env, npm: specifiers) with its own
+  // supabase/functions/deno.json; it is not part of the Next.js/Node TypeScript project.
+  "exclude": ["node_modules", "supabase"]
 }
