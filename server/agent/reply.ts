@@ -35,6 +35,7 @@ const COPY = {
     notes: "ملاحظات",
     checking: "بنتأكد منه",
     confirmSoon: "بنأكد لك الطلب قريباً ✅",
+    alreadyRecorded: "طلبك مسجل عندنا ✅ بنأكد لك قريباً.",
     updated: "تم تحديث طلبك ✅",
     from: (a: string, b: string) => `من ${a} إلى ${b}`,
     added: "مضاف",
@@ -53,6 +54,7 @@ const COPY = {
     notes: "Notes",
     checking: "we'll check this one",
     confirmSoon: "We'll confirm your order shortly ✅",
+    alreadyRecorded: "Your order is already with us ✅ We'll confirm it shortly.",
     updated: "Your order is updated ✅",
     from: (a: string, b: string) => `${a} → ${b}`,
     added: "added",
@@ -150,6 +152,10 @@ export async function handleCustomerMessage(
         });
         return { kind: "change", order, reply: [c.updated, ...lines, c.changeSoon].join("\n") };
       }
+      // Items with quantities but zero diffs mean the customer repeated an order that's already
+      // recorded (same items, same quantities). Acknowledge it instead of falling through to the
+      // "new order" branch below, which would otherwise create a duplicate for the same order.
+      if (withQty.length > 0) return { kind: "noted", reply: c.alreadyRecorded };
     }
   }
 
