@@ -6,13 +6,27 @@ import type { Lang } from "../agent/store";
 
 export interface GeminiConfig {
   apiKey: string;
-  /** Defaults to gemini-2.5-flash, which reads text, images and audio. */
+  /** First model to try. Defaults to gemini-3.6-flash, which reads text, images and audio. */
   model?: string;
+  /** Models tried in order when the previous one is busy (429/5xx) or retired (404). */
+  fallbackModels?: string[];
 }
+
+export const DEFAULT_MODEL = "gemini-3.6-flash";
+export const DEFAULT_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite"];
+
+/** Statuses that mean "try another model": retired model, rate limit, or temporary overload. */
+const TRY_NEXT_MODEL = new Set([404, 429, 500, 502, 503, 504]);
 
 export interface MediaInput {
   data: Uint8Array;
   mimeType: string;
+}
+
+/** The customer's current open order, so a change like "make it 35 not 20" maps to the right item. */
+export interface OpenOrderContext {
+  items: { productId?: string; name: string; quantity: number }[];
+  collectionAt?: string;
 }
 
 export interface ExtractInput {
@@ -20,6 +34,7 @@ export interface ExtractInput {
   media?: MediaInput;
   products: Product[];
   now: Date;
+  openOrder?: OpenOrderContext;
 }
 
 export interface AiResult {
@@ -79,13 +94,23 @@ function bahrainClock(now: Date): string {
   }).format(now);
 }
 
-function buildPrompt(products: Product[], now: Date, hasText: boolean): string {
+function buildPrompt(products: Product[], now: Date, hasText: boolean, openOrder?: OpenOrderContext): string {
   const menu = products.map((p) => `- ${p.id}: ${p.name} / ${p.nameAr}${p.aliases.length ? ` / ${p.aliases.join(", ")}` : ""}`).join("\n");
+  const open = openOrder
+    ? [
+      "This customer already has an open order:",
+      ...openOrder.items.map((i) => `- ${i.productId ?? "unmatched"}: ${i.name} × ${i.quantity}`),
+      openOrder.collectionAt ? `Collection: ${bahrainClock(new Date(openOrder.collectionAt))}` : "Collection: not set yet",
+      "If the message changes this order, use the same product ids, and put the quantities being replaced in oldQuantities.",
+      "A short word like \"cup\" or \"كب\" refers to the matching item in this open order.",
+    ]
+    : [];
   return [
     "You read one customer message sent to a small food business in Bahrain and extract the order.",
     `Current date and time in Bahrain (UTC+3): ${bahrainClock(now)}.`,
     "Products (id: English name / Arabic name / other names):",
     menu,
+    ...open,
     "Rules:",
     "- Only extract what the customer states. Never guess quantities, dates or times; leave them null.",
     "- Use a product id only when the item clearly matches that product. Otherwise set productId to null and keep the customer's words in rawText.",
@@ -134,23 +159,33 @@ function toDraft(answer: AiAnswer, products: Product[]): Draft {
 }
 
 export function createGeminiExtractor(cfg: GeminiConfig, fetchImpl: typeof fetch = fetch): OrderExtractor {
-  const model = cfg.model ?? "gemini-2.5-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const models = [cfg.model ?? DEFAULT_MODEL, ...(cfg.fallbackModels ?? DEFAULT_FALLBACK_MODELS)];
 
-  return async ({ text, media, products, now }) => {
-    const parts: Record<string, unknown>[] = [{ text: buildPrompt(products, now, !!text) }];
+  return async ({ text, media, products, now, openOrder }) => {
+    const parts: Record<string, unknown>[] = [{ text: buildPrompt(products, now, !!text, openOrder) }];
     if (text) parts.push({ text: `Customer message:\n${text}` });
     if (media) parts.push({ inlineData: { mimeType: media.mimeType.split(";")[0].trim(), data: toBase64(media.data) } });
-
-    const res = await fetchImpl(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": cfg.apiKey },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts }],
-        generationConfig: { responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA, temperature: 0 },
-      }),
+    const body = JSON.stringify({
+      contents: [{ role: "user", parts }],
+      generationConfig: { responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA, temperature: 0 },
     });
-    if (!res.ok) throw new Error(`Gemini request failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+
+    let res: Response | undefined;
+    const failures: string[] = [];
+    for (const model of models) {
+      res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": cfg.apiKey },
+        body,
+      });
+      if (res.ok) break;
+      failures.push(`${model}: ${res.status}`);
+      if (!TRY_NEXT_MODEL.has(res.status)) break;
+    }
+    if (!res || !res.ok) {
+      const detail = res ? (await res.text()).slice(0, 300) : "";
+      throw new Error(`Gemini request failed (${failures.join(", ")}): ${detail}`);
+    }
 
     const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
     const raw = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";

@@ -222,6 +222,41 @@ describe("agent replies", () => {
     expect(store.all()).toHaveLength(0);
   });
 
+  it("answers Meta right away and finishes the work in the background when a defer hook is given", async () => {
+    const sent: { to: string; text: string }[] = [];
+    const pending: Promise<void>[] = [];
+    let release!: () => void;
+    const slowAi = new Promise<void>((r) => { release = r; });
+    const handler = createWebhookHandler({
+      verifyToken: "v", allowUnsigned: true, store: new MemoryStore(), products: demoProducts(), now: () => NOW, log: () => {},
+      send: async (to, text) => { sent.push({ to, text }); },
+      extractor: async ({ text, products, now }) => { await slowAi; return { lang: "ar", draft: (await import("../../src/lib/parser")).parseOrderText(text!, products, now), sourceText: text }; },
+      defer: (work) => { pending.push(work); },
+    });
+    const res = await handler(new Request(URL_BASE, { method: "POST", body: JSON.stringify(textPayload("wamid.bg", "97333333333", "ابي 12 تشيز كيك كب")) }));
+    expect(res.status).toBe(200);
+    expect(sent).toHaveLength(0);
+    release();
+    await Promise.all(pending);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("gives the AI the customer's open order", async () => {
+    const seen: unknown[] = [];
+    const store = new MemoryStore();
+    const handler = createWebhookHandler({
+      verifyToken: "v", allowUnsigned: true, store, products: demoProducts(), now: () => NOW, log: () => {},
+      send: async () => {},
+      extractor: async (input) => { seen.push(input.openOrder); throw new Error("use parser"); },
+    });
+    const post = (id: string, text: string) => handler(new Request(URL_BASE, { method: "POST", body: JSON.stringify(textPayload(id, "97333333333", text)) }));
+    await post("wamid.o1", "بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح");
+    await post("wamid.o2", "ياليت تخليها 35 كب مو 20");
+    expect(seen[0]).toBeUndefined();
+    expect(seen[1]).toMatchObject({ items: [{ productId: "p-cheesecake", quantity: 20 }] });
+    expect(store.all()[0].order.items[0].quantity).toBe(35);
+  });
+
   it("still returns 200 when sending the reply fails", async () => {
     const store = new MemoryStore();
     const handler = createWebhookHandler({ verifyToken: "v", allowUnsigned: true, send: async () => { throw new Error("boom"); }, store, products: demoProducts(), now: () => NOW, log: () => {} });

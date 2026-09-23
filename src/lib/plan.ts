@@ -22,9 +22,11 @@ export function findChangeCandidate(draft: Draft, orders: Order[], products: Pro
   const label = (id?: string) => products.find((p) => p.id === id)?.name ?? "item";
   for (const d of draft.items) {
     if (d.quantity === undefined) continue;
-    const target = d.productId
-      ? items.find((i) => i.productId === d.productId)
-      : items.find((i) => draft.oldQuantities.includes(i.quantity)) ?? (items.length === 1 ? items[0] : undefined);
+    // Match by product first. If the named product is not in the order, the quantity the customer
+    // says to replace ("35 not 20") identifies the item; a lone item is the last resort for unnamed items.
+    const target = (d.productId ? items.find((i) => i.productId === d.productId) : undefined)
+      ?? items.find((i) => draft.oldQuantities.includes(i.quantity))
+      ?? (!d.productId && items.length === 1 ? items[0] : undefined);
     if (target) {
       if (target.quantity !== d.quantity) { diffs.push({ label: label(target.productId), oldValue: String(target.quantity), newValue: String(d.quantity) }); target.quantity = d.quantity; }
     } else if (d.productId) {

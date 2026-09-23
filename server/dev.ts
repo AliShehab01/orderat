@@ -7,7 +7,7 @@ import { MemoryStore } from "./agent/store";
 import { createWhatsAppSender } from "./whatsapp/client";
 import { createWebhookHandler } from "./whatsapp/webhook";
 import { createOwnerHandler } from "./owner/handler";
-import { createGeminiExtractor } from "./ai/gemini";
+import { createGeminiExtractor, DEFAULT_MODEL } from "./ai/gemini";
 import { createMediaReader } from "./whatsapp/media";
 import { demoProducts } from "../src/lib/plan";
 
@@ -34,12 +34,15 @@ const store = new MemoryStore();
 const products = demoProducts();
 const send = createWhatsAppSender({ token: token ?? "", phoneNumberId: phoneNumberId ?? "", apiVersion: env("WHATSAPP_API_VERSION"), dryRun });
 const geminiKey = env("GEMINI_API_KEY");
-const extractor = geminiKey ? createGeminiExtractor({ apiKey: geminiKey, model: env("GEMINI_MODEL") }) : undefined;
+const fallbackModels = env("GEMINI_FALLBACK_MODELS")?.split(",").map((m) => m.trim()).filter(Boolean);
+const extractor = geminiKey ? createGeminiExtractor({ apiKey: geminiKey, model: env("GEMINI_MODEL"), fallbackModels }) : undefined;
 const readMedia = token ? createMediaReader({ token, apiVersion: env("WHATSAPP_API_VERSION") }) : undefined;
 console.log(extractor
-  ? `AI reading: Gemini (${env("GEMINI_MODEL") ?? "gemini-2.5-flash"}) for text, voice notes and images.`
+  ? `AI reading: Gemini (${env("GEMINI_MODEL") ?? DEFAULT_MODEL}, with fallbacks) for text, voice notes and images.`
   : "AI reading off (no GEMINI_API_KEY): text uses the built-in parser; voice notes and images get an acknowledgement.");
-const handler = createWebhookHandler({ verifyToken, appSecret, allowUnsigned, store, products, send, extractor, readMedia });
+// Answer Meta at once; the agent reads and replies in the background.
+const defer = (work: Promise<void>) => { void work; };
+const handler = createWebhookHandler({ verifyToken, appSecret, allowUnsigned, store, products, send, extractor, readMedia, defer });
 const ownerHandler = createOwnerHandler({ store, products, send });
 
 /** Owner routes are for this computer only. Tunnel traffic also arrives from loopback but carries Cloudflare headers. */
