@@ -1,0 +1,34 @@
+/* Shared styles for the privacy policy and data deletion pages. Colours follow BRAND_GUIDELINES.md. */
+:root {
+  --harbor: #173142; --palm: #2F6D62; --citrus: #D8EF63; --slate: #66747B;
+  --canvas: #F6F4EF; --paper: #FFFFFF; --line: #D9E0DD; --text: #173142;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --canvas: #0D202A; --paper: #172F3A; --text: #F4F6F2; --slate: #AFBEC0; --line: #31505A; --harbor: #F4F6F2; --palm: #8FD3C4; }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--canvas); color: var(--text);
+  font-family: "IBM Plex Sans Arabic", "IBM Plex Sans", system-ui, sans-serif; font-weight: 400; line-height: 1.75;
+}
+[lang="en"] { font-family: "IBM Plex Sans", "IBM Plex Sans Arabic", system-ui, sans-serif; }
+header.bar { background: #173142; color: #fff; }
+header.bar .inner { max-width: 820px; margin: 0 auto; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+header.bar a.brand { color: #fff; text-decoration: none; font-weight: 700; font-size: 1.25rem; display: flex; align-items: center; gap: 10px; }
+header.bar a.brand img { width: 32px; height: 32px; }
+header.bar nav { display: flex; gap: 8px; flex-wrap: wrap; }
+header.bar nav a { color: #fff; text-decoration: none; font-weight: 700; font-size: .9rem; padding: 6px 12px; border: 1px solid rgba(255,255,255,.4); border-radius: 999px; }
+header.bar nav a:hover, header.bar nav a:focus-visible { background: var(--citrus); color: #173142; border-color: var(--citrus); }
+main { max-width: 820px; margin: 0 auto; padding: 24px 16px 48px; }
+section.lang { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 24px; margin-bottom: 24px; }
+h1 { font-weight: 700; font-size: 1.6rem; line-height: 1.3; margin: 0 0 4px; color: var(--harbor); }
+h2 { font-weight: 700; font-size: 1.1rem; margin: 28px 0 8px; color: var(--harbor); }
+p, li { margin: 0 0 10px; }
+ul, ol { padding-inline-start: 22px; margin: 0 0 12px; }
+.meta { color: var(--slate); font-size: .9rem; margin-bottom: 16px; }
+a { color: var(--palm); }
+.note { border-inline-start: 4px solid var(--palm); padding: 8px 14px; background: var(--canvas); border-radius: 8px; }
+footer { max-width: 820px; margin: 0 auto; padding: 0 16px 32px; color: var(--slate); font-size: .9rem; }
+footer a { margin-inline-end: 16px; }
