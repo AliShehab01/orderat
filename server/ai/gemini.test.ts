@@ -99,4 +99,40 @@ describe("Gemini order extractor", () => {
     const extract = createGeminiExtractor({ apiKey: "bad", fallbackModels: [] }, (async () => new Response('{"error":{"message":"API key not valid"}}', { status: 400 })) as unknown as typeof fetch);
     await expect(extract({ text: "hi", products: demoProducts(), now: NOW })).rejects.toThrow(/400/);
   });
+
+  it("falls through to the next model when one hangs past the timeout", async () => {
+    const tried: string[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const model = url.split("/models/")[1].split(":")[0];
+      tried.push(model);
+      if (model === "hung-model") {
+        return new Promise<Response>((_resolve, reject) => {
+          (init.signal as AbortSignal).addEventListener("abort", () => {
+            const err = new Error("This operation was aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        });
+      }
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ isOrder: true, language: "en", items: [{ productId: "p-brownie", rawText: "brownie box", quantity: 2 }] }) }] } }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const extract = createGeminiExtractor({ apiKey: "k", model: "hung-model", fallbackModels: ["good-model"], timeoutMs: 20 }, fetchImpl);
+    const result = await extract({ text: "2 brownie box", products: demoProducts(), now: NOW });
+    expect(tried).toEqual(["hung-model", "good-model"]);
+    expect(result.draft.items[0].quantity).toBe(2);
+  });
+
+  it("throws an error naming the model and status when the 200 response body is not JSON", async () => {
+    const extract = createGeminiExtractor({ apiKey: "k", model: "gemini-3.6-flash", fallbackModels: [] }, (async () => new Response("<html>not json</html>", { status: 200 })) as unknown as typeof fetch);
+    await expect(extract({ text: "hi", products: demoProducts(), now: NOW })).rejects.toThrow(/gemini-3\.6-flash/);
+    await expect(extract({ text: "hi", products: demoProducts(), now: NOW })).rejects.toThrow(/200/);
+  });
+
+  it("includes the block reason and finish reason when Gemini returns no content", async () => {
+    const extract = createGeminiExtractor({ apiKey: "k", fallbackModels: [] }, (async () => new Response(JSON.stringify({
+      candidates: [{ finishReason: "SAFETY", content: { parts: [] } }],
+      promptFeedback: { blockReason: "SAFETY" },
+    }), { status: 200 })) as unknown as typeof fetch);
+    await expect(extract({ text: "hi", products: demoProducts(), now: NOW })).rejects.toThrow(/SAFETY/);
+  });
 });
