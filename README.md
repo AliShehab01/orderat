@@ -53,6 +53,99 @@ Commands:
 
 Meta needs a public HTTPS address for the webhook, so expose port 8787 through a tunnel while testing, for example `cloudflared tunnel --url http://localhost:8787`. While the Meta app is unpublished, Meta only delivers its own test webhooks, not messages from real phones; use the simulator to demo the flow.
 
+## Hosting on Supabase
+
+`server/` and `src/lib/` run unchanged under Deno as three Supabase Edge Functions — the same
+webhook handlers, agent, parser and day-plan logic as `npm run whatsapp:dev`, just deployed instead
+of run on your machine, and backed by Postgres instead of an in-memory array. Nothing here is
+required for local development; `npm run whatsapp:dev` keeps working exactly as before.
+
+**What changed to make this possible:**
+
+- **Storage.** `OrderStore` (`server/agent/store.ts`) is now an async interface. `MemoryStore`
+  (used locally) and `SupabaseStore` (`server/agent/supabase-store.ts`, Postgres over PostgREST,
+  no extra dependency) both implement it, and the agent persists every change explicitly through
+  `store.update()`/`store.add()` — required once a store might be a network round-trip, since an
+  Edge Function isolate can be recycled between requests the way a long-lived Node process isn't.
+- **Time zone.** Bahrain has a fixed UTC+3 offset (no DST). Edge Functions run in UTC, so
+  `src/lib/parser.ts` and `src/lib/plan.ts` compute Bahrain dates directly from the instant
+  (`src/lib/bahrain-time.ts`) instead of through local `Date` methods, which used to depend on
+  `server/dev.ts` forcing `process.env.TZ = "Asia/Bahrain"`. `src/lib/parser.timezone.test.ts`
+  proves this with the process forced to UTC.
+- **Deno compatibility.** Relative imports in `server/` and `src/lib/` carry explicit `.ts`
+  extensions, which Deno 2 requires and which `tsc`/`tsx`/`vitest` also resolve fine
+  (`allowImportingTsExtensions` in `tsconfig.json`, which excludes `supabase/` — that folder has
+  its own `supabase/functions/deno.json` and is Deno's project, not Next's).
+- **Owner access.** The local owner page trusts "this computer only" (`isLocalRequest` in
+  `server/dev.ts`). The hosted one is public, so `supabase/functions/owner/index.ts` wraps it with
+  `server/owner/auth.ts`: an `OWNER_KEY` you set, checked as an `HttpOnly; Secure; SameSite=Strict`
+  cookie (set once by visiting `/owner?key=<OWNER_KEY>`) or an `Authorization: Bearer <OWNER_KEY>`
+  header, compared in constant time.
+
+**Layout:** three thin `Deno.serve` entry points, `supabase/functions/{whatsapp,instagram,owner}/index.ts`,
+import `server/` and `src/lib/` by relative path and are deployed with `--use-api` (server-side
+bundling, no local Docker daemon needed). Supabase's own docs show `--use-api` bundling a sibling
+folder outside `supabase/` for exactly this kind of monorepo case, but it's a newer path than the
+Docker-based deploy and has had reported bundler rough edges with outside imports on some layouts,
+and local `supabase functions serve` still needs Docker regardless of `--use-api` (that flag only
+changes how a real deploy bundles). **If a deploy ever fails to bundle the outside imports**, the
+fallback is to physically copy `server/` and `src/lib/` into `supabase/functions/_shared/` (the
+officially-supported, Docker-bundled pattern) and re-point the three `index.ts` files and
+`server/dev.ts` at that copy instead — a single source of truth either way, just relocated.
+
+### What the founder needs to do (none of this has been done for you)
+
+1. **Sign up at [supabase.com](https://supabase.com) and create a project.** Supabase has no
+   Middle East region; Mumbai (`ap-south-1`) and Frankfurt (`eu-central-1`) are the two candidates
+   nearest Bahrain, and which is actually faster from Bahrain depends on real network routing —
+   worth an empirical check, since a project's region can't be changed later without recreating it.
+2. **Get the CLI and sign in** (already added as a dev dependency, so no global/Scoop install):
+   ```
+   npm install
+   npx supabase login
+   ```
+   This opens a browser once to create an access token. In a non-interactive/CI context, use
+   `npx supabase login --no-browser` or set `SUPABASE_ACCESS_TOKEN` instead.
+3. **Link this repo to the project** (the project ref is in its dashboard URL):
+   ```
+   npx supabase link --project-ref <project-ref>
+   ```
+4. **Run the migration** (creates `orders` and `processed_messages`, RLS on, no public policies):
+   ```
+   npm run supabase:migrate
+   ```
+5. **Add the new settings to `.env.local`**, alongside the existing WhatsApp/Gemini ones — get
+   `SUPABASE_URL` and the service role key from Settings > API in the dashboard, and make up a long
+   random string for `OWNER_KEY`:
+
+   | Name | Purpose |
+   | --- | --- |
+   | `SUPABASE_URL` | Project URL, `https://<project-ref>.supabase.co` |
+   | `SUPABASE_SERVICE_ROLE_KEY` | Service role key from Settings > API — bypasses RLS, server-side only |
+   | `OWNER_KEY` | Long random string protecting the hosted `/owner` page |
+
+6. **Push secrets and deploy** (never prints a secret value):
+   ```
+   npm run supabase:secrets
+   npm run supabase:deploy
+   ```
+   Deploy one function at a time with `npm run supabase:deploy -- whatsapp`.
+7. **Point Meta at the deployed webhooks** (App Dashboard > WhatsApp/Instagram > Configuration >
+   Webhooks), then click Verify and Save:
+   - WhatsApp: `https://<project-ref>.supabase.co/functions/v1/whatsapp`
+   - Instagram: `https://<project-ref>.supabase.co/functions/v1/instagram`
+8. **Check `verify_jwt` in the dashboard** (Edge Functions > function > Details) for all three
+   functions. `supabase/config.toml` sets it to `false`, but the CLI has been reported to not
+   always apply that on a redeploy — Meta's verification GET will fail with a 401 from Supabase
+   itself (not from this code) if it's stuck on.
+9. **Sign in to the hosted owner page** once, in a browser: visit
+   `https://<project-ref>.supabase.co/functions/v1/owner?key=<OWNER_KEY>`. It redirects back to the
+   same page with the cookie set; bookmark the plain URL (without `?key=`) after that.
+10. **Tail logs** while testing: `npm run supabase:logs -- whatsapp`.
+
+None of this was run as part of preparing the code — no Supabase account was created, and nothing
+was deployed or pushed.
+
 ## Legal pages
 
 `public/orderat/privacy.html`, `terms.html` and `data-deletion.html` are published on GitHub Pages and set in the Meta app settings. The `gh-pages` branch is a copy of `public/orderat`.
