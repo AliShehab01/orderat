@@ -1,4 +1,4 @@
-/* Ready-stock automation, sales analysis and brand guidance for the pitch MVP. */
+/* Ready-stock automation, sales analysis and brand guidance. */
 let salesRange = "30";
 
 function ensureCommerceState() {
@@ -39,7 +39,7 @@ function sellableUnits(productId) {
 }
 
 function money(value) {
-  return new Intl.NumberFormat(state.lang === "en" ? "en-BH" : "ar-BH", { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(value) + ` ${tr("BHD", "د.ب")}`;
+  return new Intl.NumberFormat(state.lang === "en" ? "en-BH" : "ar-BH-u-nu-latn", { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(value) + ` ${tr("BHD", "د.ب")}`;
 }
 
 function inventoryPage() {
