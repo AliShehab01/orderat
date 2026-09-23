@@ -5,6 +5,7 @@
 
 import { createInstagramWebhookHandler } from "../../../server/instagram/webhook.ts";
 import { createInstagramSender, createUrlReader } from "../../../server/instagram/client.ts";
+import { instagramAllowUnsigned } from "../../../server/instagram/config.ts";
 import { createGeminiExtractor } from "../../../server/ai/gemini.ts";
 import { SupabaseStore } from "../../../server/agent/supabase-store.ts";
 import { demoProducts } from "../../../src/lib/plan.ts";
@@ -35,7 +36,7 @@ const defer = typeof EdgeRuntime !== "undefined" ? (work: Promise<void>) => Edge
 const handler = createInstagramWebhookHandler({
   verifyToken: env("INSTAGRAM_VERIFY_TOKEN") ?? env("WHATSAPP_VERIFY_TOKEN") ?? "",
   appSecret: env("INSTAGRAM_APP_SECRET"),
-  allowUnsigned: env("INSTAGRAM_ALLOW_UNSIGNED") === "1" || env("WHATSAPP_ALLOW_UNSIGNED") === "1",
+  allowUnsigned: instagramAllowUnsigned(env),
   store,
   products,
   send: igSend,

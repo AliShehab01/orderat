@@ -7,10 +7,13 @@ import { MemoryStore } from "./agent/store.ts";
 import { createWhatsAppSender } from "./whatsapp/client.ts";
 import { createWebhookHandler } from "./whatsapp/webhook.ts";
 import { createOwnerHandler } from "./owner/handler.ts";
+import { withOwnerAuth } from "./owner/auth.ts";
+import { isLocalRequest, resolveOwnerKey } from "./owner/local-guard.ts";
 import { createGeminiExtractor, DEFAULT_MODEL } from "./ai/gemini.ts";
 import { createMediaReader } from "./whatsapp/media.ts";
 import { createInstagramSender, createUrlReader } from "./instagram/client.ts";
 import { createInstagramWebhookHandler } from "./instagram/webhook.ts";
+import { instagramAllowUnsigned } from "./instagram/config.ts";
 import { demoProducts } from "../src/lib/plan.ts";
 
 // Orders are parsed and shown in Bahrain time, whatever the machine's time zone.
@@ -18,6 +21,7 @@ process.env.TZ = "Asia/Bahrain";
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 
 const env = (name: string) => process.env[name]?.trim() || undefined;
+const port = Number(env("PORT") ?? 8787);
 const verifyToken = env("WHATSAPP_VERIFY_TOKEN");
 const token = env("WHATSAPP_TOKEN");
 const phoneNumberId = env("WHATSAPP_PHONE_NUMBER_ID");
@@ -55,18 +59,20 @@ const igAppSecret = env("INSTAGRAM_APP_SECRET");
 const igHandler = createInstagramWebhookHandler({
   verifyToken: env("INSTAGRAM_VERIFY_TOKEN") ?? verifyToken,
   appSecret: igAppSecret,
-  allowUnsigned: env("INSTAGRAM_ALLOW_UNSIGNED") === "1" || allowUnsigned,
+  allowUnsigned: instagramAllowUnsigned(env),
   store, products, send: igSend, replyTo: igReplyTo, extractor, readUrl: createUrlReader(), defer,
 });
 console.log(`Instagram: ${igSend ? "sending on" : "no INSTAGRAM_ACCESS_TOKEN, replies off"}; replying to ${igReplyTo === "all" ? "everyone" : igReplyTo.length ? igReplyTo.join(", ") : "nobody (observe only)"}.`);
-const ownerHandler = createOwnerHandler({ store, products, senders: { whatsapp: send, instagram: igSend } });
-
-/** Owner routes are for this computer only. Tunnel traffic also arrives from loopback but carries Cloudflare headers. */
-function isLocalRequest(req: IncomingMessage): boolean {
-  const addr = req.socket.remoteAddress ?? "";
-  const loopback = addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
-  return loopback && !req.headers["cf-connecting-ip"] && !req.headers["cf-ray"];
+const rawOwnerHandler = createOwnerHandler({ store, products, senders: { whatsapp: send, instagram: igSend } });
+// Owner routes require OWNER_KEY auth, the same as the hosted Supabase owner function (server/owner/auth.ts).
+// isLocalRequest below is an extra layer on top, not a substitute for it: relying on "no Cloudflare
+// headers" alone fails open behind any tunnel that isn't Cloudflare.
+const { key: ownerKey, generated: ownerKeyGenerated } = resolveOwnerKey(env("OWNER_KEY"));
+if (ownerKeyGenerated) {
+  console.log("No OWNER_KEY set in .env.local: generated one for this run only.");
+  console.log(`Owner sign-in (one time): http://localhost:${port}/owner?key=${ownerKey}`);
 }
+const ownerHandler = withOwnerAuth(ownerKey, rawOwnerHandler);
 
 async function toRequest(req: IncomingMessage, base: string): Promise<Request> {
   const headers = new Headers();
@@ -77,7 +83,6 @@ async function toRequest(req: IncomingMessage, base: string): Promise<Request> {
   return new Request(new URL(req.url ?? "/", base), { method: req.method, headers, body: hasBody ? Buffer.concat(chunks) : undefined });
 }
 
-const port = Number(env("PORT") ?? 8787);
 createServer(async (req, res) => {
   try {
     const isOwner = req.url?.startsWith("/owner") && isLocalRequest(req);
@@ -97,5 +102,5 @@ createServer(async (req, res) => {
 }).listen(port, () => {
   console.log(`WhatsApp webhook listening on http://localhost:${port}/whatsapp/webhook${dryRun ? " (dry run: replies are printed, not sent)" : ""}`);
   console.log(`Instagram webhook: http://localhost:${port}/instagram/webhook`);
-  console.log(`Owner page (this computer only): http://localhost:${port}/owner`);
+  console.log(`Owner page (this computer only, OWNER_KEY required): http://localhost:${port}/owner`);
 });
