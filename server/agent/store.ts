@@ -12,6 +12,8 @@ export interface StoredOrder {
   customerPhone: string;
   /** Language the customer wrote in, used for later messages such as the confirmation. */
   lang: Lang;
+  /** The customer's words: message text, or the transcript of a voice note or image. Shown to the owner for review. */
+  sourceText?: string;
 }
 
 const SEEN_LIMIT = 5000;

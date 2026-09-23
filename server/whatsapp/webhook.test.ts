@@ -164,6 +164,64 @@ describe("agent replies", () => {
     expect(store.all()).toHaveLength(0);
   });
 
+  it("reads a voice note with the AI extractor and replies with the order", async () => {
+    const sent: { to: string; text: string }[] = [];
+    const store = new MemoryStore();
+    const reads: string[] = [];
+    const handler = createWebhookHandler({
+      verifyToken: "v", allowUnsigned: true, store, products: demoProducts(), now: () => NOW, log: () => {},
+      send: async (to, text) => { sent.push({ to, text }); },
+      readMedia: async (id) => { reads.push(id); return { data: new Uint8Array([1]), mimeType: "audio/ogg" }; },
+      extractor: async () => ({
+        lang: "ar",
+        sourceText: "ودي أطلب 30 كب كيك فانيلا للسبت الساعة 6 العصر",
+        draft: {
+          customerName: undefined, customerConfidence: "low",
+          items: [{ productId: "p-cupcake", rawText: "30 كب كيك فانيلا", quantity: 30, confidence: "high" }],
+          collectionAt: "2026-09-26T15:00:00.000Z", collectionConfidence: "high", oldQuantities: [],
+        },
+      }),
+    });
+    const p = textPayload("wamid.v1", "97333333333", "");
+    const msg = p.entry[0].changes[0].value.messages[0] as Record<string, unknown>;
+    msg.type = "audio"; delete msg.text; msg.audio = { id: "media-9", mime_type: "audio/ogg; codecs=opus", voice: true };
+    await handler(new Request(URL_BASE, { method: "POST", body: JSON.stringify(p) }));
+    expect(reads).toEqual(["media-9"]);
+    expect(sent[0].text).toContain("كب كيك فانيلا × 30");
+    expect(sent[0].text).toContain("السبت");
+    expect(store.all()[0].sourceText).toContain("30 كب كيك");
+  });
+
+  it("falls back to the built-in parser when the AI extractor fails on text", async () => {
+    const sent: { to: string; text: string }[] = [];
+    const store = new MemoryStore();
+    const handler = createWebhookHandler({
+      verifyToken: "v", allowUnsigned: true, store, products: demoProducts(), now: () => NOW, log: () => {},
+      send: async (to, text) => { sent.push({ to, text }); },
+      extractor: async () => { throw new Error("Gemini down"); },
+    });
+    await handler(new Request(URL_BASE, { method: "POST", body: JSON.stringify(textPayload("wamid.x1", "97333333333", "ابي 12 تشيز كيك كب")) }));
+    expect(sent[0].text).toContain("تشيز كيك كب × 12");
+    expect(store.all()).toHaveLength(1);
+  });
+
+  it("acknowledges a voice note when the AI extractor fails", async () => {
+    const sent: { to: string; text: string }[] = [];
+    const store = new MemoryStore();
+    const handler = createWebhookHandler({
+      verifyToken: "v", allowUnsigned: true, store, products: demoProducts(), now: () => NOW, log: () => {},
+      send: async (to, text) => { sent.push({ to, text }); },
+      readMedia: async () => ({ data: new Uint8Array([1]), mimeType: "audio/ogg" }),
+      extractor: async () => { throw new Error("Gemini down"); },
+    });
+    const p = textPayload("wamid.x2", "97333333333", "");
+    const msg = p.entry[0].changes[0].value.messages[0] as Record<string, unknown>;
+    msg.type = "audio"; delete msg.text; msg.audio = { id: "media-10", mime_type: "audio/ogg" };
+    await handler(new Request(URL_BASE, { method: "POST", body: JSON.stringify(p) }));
+    expect(sent[0].text).toContain("استلمنا رسالتك");
+    expect(store.all()).toHaveLength(0);
+  });
+
   it("still returns 200 when sending the reply fails", async () => {
     const store = new MemoryStore();
     const handler = createWebhookHandler({ verifyToken: "v", allowUnsigned: true, send: async () => { throw new Error("boom"); }, store, products: demoProducts(), now: () => NOW, log: () => {} });

@@ -1,7 +1,7 @@
 // The order agent: reads one customer message and decides what to store and what to reply.
 // The agent only acknowledges and summarises. The owner still confirms every order in Orderat.
 
-import type { Order, OrderItem, Product } from "../../src/lib/types";
+import type { Draft, Order, OrderItem, Product } from "../../src/lib/types";
 import { parseOrderText } from "../../src/lib/parser";
 import { findChangeCandidate, keyOf } from "../../src/lib/plan";
 import type { IncomingMessage } from "../whatsapp/incoming";
@@ -10,6 +10,9 @@ import type { Lang, MemoryStore } from "./store";
 export type { Lang } from "./store";
 export type OutcomeKind = "new" | "change" | "time" | "ask_quantity" | "noted" | "help" | "media";
 export interface AgentOutcome { kind: OutcomeKind; reply: string; order?: Order }
+
+/** A draft read ahead of time by the AI extractor, used instead of the built-in text parser. */
+export interface PreparedDraft { draft: Draft; lang: Lang; sourceText?: string }
 
 const TIME_ZONE = "Asia/Bahrain";
 
@@ -97,12 +100,25 @@ export function confirmationMessage(order: Order, products: Product[], lang: Lan
   ].join("\n");
 }
 
-export function handleCustomerMessage(msg: IncomingMessage, store: MemoryStore, products: Product[], now: Date): AgentOutcome {
-  if (msg.type !== "text" || !msg.text?.trim()) return { kind: "media", reply: MEDIA_ACK };
-
-  const lang = detectLang(msg.text);
+export function handleCustomerMessage(
+  msg: IncomingMessage,
+  store: MemoryStore,
+  products: Product[],
+  now: Date,
+  prepared?: PreparedDraft,
+): AgentOutcome {
+  let draft: Draft;
+  let lang: Lang;
+  let sourceText: string | undefined;
+  if (prepared) {
+    ({ draft, lang, sourceText } = prepared);
+  } else {
+    if (msg.type !== "text" || !msg.text?.trim()) return { kind: "media", reply: MEDIA_ACK };
+    lang = detectLang(msg.text);
+    draft = parseOrderText(msg.text, products, now);
+    sourceText = msg.text;
+  }
   const c = COPY[lang];
-  const draft = parseOrderText(msg.text, products, now);
   const withQty = draft.items.filter((i) => (i.quantity ?? 0) > 0);
   const open = store.openOrdersFor(msg.from, now)[0]?.order;
 
@@ -147,7 +163,7 @@ export function handleCustomerMessage(msg: IncomingMessage, store: MemoryStore, 
       changes: [],
       createdAt: now.toISOString(),
     };
-    store.add({ order, customerPhone: msg.from, lang });
+    store.add({ order, customerPhone: msg.from, lang, sourceText });
     const lines = [
       c.hello(msg.profileName),
       c.got,

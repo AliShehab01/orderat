@@ -34,6 +34,7 @@ function view(s: StoredOrder, products: Product[]) {
     collectionAt: order.collectionAt ?? null,
     collectionText: order.collectionAt ? formatCollection(order.collectionAt, "ar") : null,
     notes: order.notes ?? null,
+    sourceText: s.sourceText ?? null,
     changes: order.changes,
     createdAt: order.createdAt,
   };

@@ -1,18 +1,31 @@
 // Turns a WhatsApp Cloud API webhook payload into a flat list of customer messages.
 // Delivery status updates (sent, delivered, read) are ignored.
 
+export interface IncomingMedia {
+  id: string;
+  mimeType?: string;
+  caption?: string;
+}
+
 export interface IncomingMessage {
   id: string;
   from: string;
   profileName?: string;
   type: string;
   text?: string;
+  /** Set for audio (voice notes), image, video, document and sticker messages. */
+  media?: IncomingMedia;
   timestamp?: string;
 }
 
+const MEDIA_TYPES = new Set(["audio", "image", "video", "document", "sticker"]);
+
+type RawMedia = { id?: string; mime_type?: string; caption?: string };
+type RawMessage = { id?: string; from?: string; type?: string; timestamp?: string; text?: { body?: string } } & Record<string, unknown>;
+
 interface WebhookValue {
   contacts?: { wa_id?: string; profile?: { name?: string } }[];
-  messages?: { id?: string; from?: string; type?: string; timestamp?: string; text?: { body?: string } }[];
+  messages?: RawMessage[];
 }
 
 interface WebhookPayload {
@@ -31,12 +44,14 @@ export function extractMessages(payload: unknown): IncomingMessage[] {
       for (const m of change.value.messages) {
         if (!m.id || !m.from || !m.type) continue;
         const contact = contacts.find((c) => c.wa_id === m.from) ?? contacts[0];
+        const rawMedia = MEDIA_TYPES.has(m.type) ? (m[m.type] as RawMedia | undefined) : undefined;
         out.push({
           id: m.id,
           from: m.from,
           profileName: contact?.profile?.name,
           type: m.type,
           text: m.type === "text" ? m.text?.body : undefined,
+          media: rawMedia?.id ? { id: rawMedia.id, mimeType: rawMedia.mime_type, caption: rawMedia.caption } : undefined,
           timestamp: m.timestamp,
         });
       }

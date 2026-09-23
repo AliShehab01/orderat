@@ -78,6 +78,7 @@ function render(orders) {
     card.append(top, items);
     card.append(el("p", "meta" + (o.collectionText ? "" : " warn"), o.collectionText ? "الاستلام: " + o.collectionText : "بدون وقت استلام بعد"));
     if (o.notes) card.append(el("p", "meta", "ملاحظات: " + o.notes));
+    if (o.sourceText) card.append(el("p", "meta", "رسالة العميل: " + o.sourceText));
     if (o.changes.length) card.append(el("p", "meta", "تعديلات من العميل: " + o.changes.length));
     if (o.status === "pending") {
       const btn = el("button", "", "تأكيد الطلب");
