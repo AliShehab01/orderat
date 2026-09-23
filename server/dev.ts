@@ -1,4 +1,4 @@
-// Local runner for the WhatsApp webhook: npm run whatsapp:dev
+// Local runner for the WhatsApp and Instagram webhooks: npm run whatsapp:dev
 // Meta cannot reach localhost, so expose this port through an HTTPS tunnel while testing.
 
 import { createServer, type IncomingMessage } from "node:http";
@@ -9,6 +9,8 @@ import { createWebhookHandler } from "./whatsapp/webhook";
 import { createOwnerHandler } from "./owner/handler";
 import { createGeminiExtractor, DEFAULT_MODEL } from "./ai/gemini";
 import { createMediaReader } from "./whatsapp/media";
+import { createInstagramSender, createUrlReader } from "./instagram/client";
+import { createInstagramWebhookHandler } from "./instagram/webhook";
 import { demoProducts } from "../src/lib/plan";
 
 // Orders are parsed and shown in Bahrain time, whatever the machine's time zone.
@@ -43,7 +45,21 @@ console.log(extractor
 // Answer Meta at once; the agent reads and replies in the background.
 const defer = (work: Promise<void>) => { void work; };
 const handler = createWebhookHandler({ verifyToken, appSecret, allowUnsigned, store, products, send, extractor, readMedia, defer });
-const ownerHandler = createOwnerHandler({ store, products, send });
+// Instagram: replies only to INSTAGRAM_REPLY_TO ("all" or a comma-separated list of Instagram-scoped user IDs).
+// With nothing set, messages are only logged, so a real business account never answers its real customers by accident.
+const igToken = env("INSTAGRAM_ACCESS_TOKEN");
+const igSend = igToken ? createInstagramSender({ token: igToken, apiVersion: env("INSTAGRAM_API_VERSION") }) : undefined;
+const igReplyRaw = env("INSTAGRAM_REPLY_TO") ?? "";
+const igReplyTo: "all" | string[] = igReplyRaw === "all" ? "all" : igReplyRaw.split(",").map((x) => x.trim()).filter(Boolean);
+const igAppSecret = env("INSTAGRAM_APP_SECRET");
+const igHandler = createInstagramWebhookHandler({
+  verifyToken: env("INSTAGRAM_VERIFY_TOKEN") ?? verifyToken,
+  appSecret: igAppSecret,
+  allowUnsigned: env("INSTAGRAM_ALLOW_UNSIGNED") === "1" || allowUnsigned,
+  store, products, send: igSend, replyTo: igReplyTo, extractor, readUrl: createUrlReader(), defer,
+});
+console.log(`Instagram: ${igSend ? "sending on" : "no INSTAGRAM_ACCESS_TOKEN, replies off"}; replying to ${igReplyTo === "all" ? "everyone" : igReplyTo.length ? igReplyTo.join(", ") : "nobody (observe only)"}.`);
+const ownerHandler = createOwnerHandler({ store, products, senders: { whatsapp: send, instagram: igSend } });
 
 /** Owner routes are for this computer only. Tunnel traffic also arrives from loopback but carries Cloudflare headers. */
 function isLocalRequest(req: IncomingMessage): boolean {
@@ -65,12 +81,13 @@ const port = Number(env("PORT") ?? 8787);
 createServer(async (req, res) => {
   try {
     const isOwner = req.url?.startsWith("/owner") && isLocalRequest(req);
-    if (!isOwner && !req.url?.startsWith("/whatsapp/webhook")) {
+    const isInstagram = req.url?.startsWith("/instagram/webhook");
+    if (!isOwner && !isInstagram && !req.url?.startsWith("/whatsapp/webhook")) {
       res.writeHead(404).end("Not found");
       return;
     }
     const request = await toRequest(req, `http://localhost:${port}`);
-    const response = await (isOwner ? ownerHandler : handler)(request);
+    const response = await (isOwner ? ownerHandler : isInstagram ? igHandler : handler)(request);
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(await response.text());
   } catch (err) {
@@ -79,5 +96,6 @@ createServer(async (req, res) => {
   }
 }).listen(port, () => {
   console.log(`WhatsApp webhook listening on http://localhost:${port}/whatsapp/webhook${dryRun ? " (dry run: replies are printed, not sent)" : ""}`);
+  console.log(`Instagram webhook: http://localhost:${port}/instagram/webhook`);
   console.log(`Owner page (this computer only): http://localhost:${port}/owner`);
 });

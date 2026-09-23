@@ -1,5 +1,11 @@
 // Sends WhatsApp text replies through the Cloud API.
 
+import type { SendText } from "../agent/processor";
+import { metaSendError } from "../meta/send-error";
+
+export type { SendText } from "../agent/processor";
+export { MetaSendError as WhatsAppSendError } from "../meta/send-error";
+
 export interface SenderConfig {
   token: string;
   phoneNumberId: string;
@@ -7,16 +13,6 @@ export interface SenderConfig {
   /** Log replies instead of sending them. */
   dryRun?: boolean;
   log?: (...args: unknown[]) => void;
-}
-
-export type SendText = (to: string, text: string) => Promise<void>;
-
-/** A failed send, with Meta's error code when there is one (for example 131030, 131047, 190). */
-export class WhatsAppSendError extends Error {
-  constructor(message: string, readonly code?: number, readonly status?: number) {
-    super(message);
-    this.name = "WhatsAppSendError";
-  }
 }
 
 export function createWhatsAppSender(cfg: SenderConfig, fetchImpl: typeof fetch = fetch): SendText {
@@ -38,18 +34,6 @@ export function createWhatsAppSender(cfg: SenderConfig, fetchImpl: typeof fetch 
         text: { preview_url: false, body: text },
       }),
     });
-    if (!res.ok) {
-      const raw = await res.text();
-      let code: number | undefined;
-      let detail = raw;
-      try {
-        const err = JSON.parse(raw)?.error;
-        if (typeof err?.code === "number") code = err.code;
-        if (typeof err?.message === "string") detail = err.message;
-      } catch {
-        // Body was not JSON; keep the raw text.
-      }
-      throw new WhatsAppSendError(`WhatsApp send failed (${res.status}${code ? `, code ${code}` : ""}): ${detail}`, code, res.status);
-    }
+    if (!res.ok) throw await metaSendError(res, "WhatsApp send");
   };
 }

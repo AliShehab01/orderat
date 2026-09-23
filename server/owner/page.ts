@@ -71,7 +71,7 @@ function render(orders) {
     const card = el("article", "card");
     const top = el("div", "row");
     const who = el("div");
-    who.append(el("div", "name", o.customerName), el("div", "phone", "+" + o.customerPhone));
+    who.append(el("div", "name", o.customerName), el("div", "phone", o.channel === "instagram" ? "Instagram · " + o.customerId : "WhatsApp · +" + o.customerId));
     top.append(who, el("span", "badge " + o.status, o.status === "pending" ? "بانتظار تأكيدك" : "مؤكد"));
     const items = el("ul");
     for (const i of o.items) items.append(el("li", "", i.name + " × " + i.quantity));

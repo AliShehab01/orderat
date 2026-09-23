@@ -4,12 +4,14 @@
 import type { Order } from "../../src/lib/types";
 
 export type Lang = "ar" | "en";
+export type Channel = "whatsapp" | "instagram";
 
 export interface StoredOrder {
   /** Orders captured by the agent start as status "pending" until the owner confirms them. */
   order: Order;
-  /** WhatsApp number of the customer who sent the order. */
-  customerPhone: string;
+  channel: Channel;
+  /** WhatsApp number, or Instagram-scoped user ID (IGSID), of the customer who sent the order. */
+  customerId: string;
   /** Language the customer wrote in, used for later messages such as the confirmation. */
   lang: Lang;
   /** The customer's words: message text, or the transcript of a voice note or image. Shown to the owner for review. */
@@ -31,9 +33,9 @@ export class MemoryStore {
   }
 
   /** This customer's orders that are not collected and whose collection time has not passed, newest first. */
-  openOrdersFor(phone: string, now: Date): StoredOrder[] {
+  openOrdersFor(channel: Channel, customerId: string, now: Date): StoredOrder[] {
     return this.orders
-      .filter((s) => s.customerPhone === phone && s.order.status !== "collected")
+      .filter((s) => s.channel === channel && s.customerId === customerId && s.order.status !== "collected")
       .filter((s) => !s.order.collectionAt || new Date(s.order.collectionAt).getTime() >= now.getTime())
       .sort((a, b) => b.order.createdAt.localeCompare(a.order.createdAt));
   }

@@ -1,4 +1,4 @@
-/* Orderat v1 subscription story for the pitch prototype. */
+/* Orderat v1 subscription plans. */
 state.subscriptionPlan ||= "basic";
 state.proEligibility ||= { whatsappBusiness: false, metaAccount: false, metaVerification: false, instagramProfessional: false };
 labels.plans = ["Plans", "الباقات"];
@@ -65,8 +65,8 @@ function pricingPage() {
         <li>${icon("check")}${tr("Order book, changes and day plan", "دفتر الطلبات والتعديلات وخطة اليوم")}</li>
         <li>${icon("check")}${tr("Orderat never accesses your accounts or replies", "اوردرات لا تدخل حساباتك ولا ترد على العملاء")}</li>
       </ul>
-      <button class="primary full" id="choose-basic">${current === "basic" ? tr("Current pitch plan", "باقة العرض الحالية") : tr("Choose Basic", "اختر بيسك")}</button>
-      <small class="price-note">${tr("Proposed test price. No payment is collected in this prototype.", "سعر مقترح للاختبار. لا يتم تحصيل أي مبلغ في هذه النسخة.")}</small>
+      <button class="primary full" id="choose-basic">${current === "basic" ? tr("Current plan", "باقتك الحالية") : tr("Choose Basic", "اختر بيسك")}</button>
+      <small class="price-note">${tr("No payment is collected yet.", "لا يتم تحصيل أي مبلغ حاليًا.")}</small>
     </article>
     <article class="price-card pro ${current === "pro-waitlist" ? "selected" : ""}">
       <div class="price-top"><span class="plan-icon pro-icon">${icon("plans")}</span><span class="plan-state review">${tr("META REVIEW PENDING", "بانتظار مراجعة META")}</span></div>
@@ -103,7 +103,7 @@ function proChecklist() {
       ${requirementRow("metaVerification", "Meta business verification", "توثيق النشاط لدى Meta", "Meta may request verification during connection.", "قد تطلب Meta توثيق النشاط أثناء الربط.", false)}
       ${requirementRow("instagramProfessional", "Professional Instagram account", "حساب إنستغرام احترافي", "Business or Creator — personal accounts are not supported.", "حساب Business أو Creator؛ الحساب الشخصي غير مدعوم.")}
     </div>
-    ${notice(tr("Pro is not charging or connecting accounts in this pitch prototype. Meta app review is still pending.", "لا تقوم هذه النسخة بعرض دفع أو ربط حسابات برو. مراجعة تطبيق Meta ما زالت معلّقة."), "warn")}
+    ${notice(tr("Pro opens once Meta approves the WhatsApp and Instagram connection. No payment is taken yet.", "تُفتح باقة برو بعد موافقة Meta على ربط واتساب وإنستغرام. لا يتم تحصيل أي مبلغ حاليًا."), "warn")}
     <div class="modal-foot"><button class="secondary" id="save-readiness">${tr("Save checklist", "حفظ القائمة")}</button><button class="primary" id="join-pro" ${eligible ? "" : "disabled"}>${tr("Join Pro waitlist", "انضم لقائمة انتظار برو")}</button></div>`,
     tr("No surprises before subscription.", "كل المتطلبات واضحة قبل الاشتراك.")
   );
@@ -127,13 +127,13 @@ function proChecklist() {
   };
   document.getElementById("join-pro").onclick = () => {
     state.subscriptionPlan = "pro-waitlist"; persist(); closeModal(); render();
-    toast(tr("Added to the Pro pitch waitlist. No payment was taken.", "تمت إضافتك لقائمة انتظار برو للعرض. لم يتم تحصيل أي مبلغ."));
+    toast(tr("Added to the Pro waitlist. No payment was taken.", "تمت إضافتك لقائمة انتظار برو. لم يتم تحصيل أي مبلغ."));
   };
 }
 
 function bindPricing() {
   document.getElementById("choose-basic")?.addEventListener("click", () => {
-    state.subscriptionPlan = "basic"; persist(); render(); toast(tr("Basic selected for this pitch workspace.", "تم اختيار بيسك لمساحة العرض."));
+    state.subscriptionPlan = "basic"; persist(); render(); toast(tr("Basic plan selected.", "تم اختيار باقة بيسك."));
   });
   document.getElementById("open-pro-checklist")?.addEventListener("click", proChecklist);
 }

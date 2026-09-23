@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createWebhookHandler } from "./webhook";
-import { signBody } from "./verify";
+import { signBody } from "../meta/verify";
 import { MemoryStore } from "../agent/store";
 import { demoProducts } from "../../src/lib/plan";
 

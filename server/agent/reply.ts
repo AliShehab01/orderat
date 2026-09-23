@@ -120,7 +120,7 @@ export function handleCustomerMessage(
   }
   const c = COPY[lang];
   const withQty = draft.items.filter((i) => (i.quantity ?? 0) > 0);
-  const open = store.openOrdersFor(msg.from, now)[0]?.order;
+  const open = store.openOrdersFor(msg.channel, msg.from, now)[0]?.order;
 
   if (open) {
     // A reply with only a time fills the missing time of the open order.
@@ -163,7 +163,7 @@ export function handleCustomerMessage(
       changes: [],
       createdAt: now.toISOString(),
     };
-    store.add({ order, customerPhone: msg.from, lang, sourceText });
+    store.add({ order, channel: msg.channel, customerId: msg.from, lang, sourceText });
     const lines = [
       c.hello(msg.profileName),
       c.got,

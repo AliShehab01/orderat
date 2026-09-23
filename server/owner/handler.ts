@@ -1,5 +1,5 @@
 // Owner screen for the webhook demo: lists orders the agent captured and lets the owner confirm them.
-// Confirming sends the customer a WhatsApp confirmation. Routes:
+// Confirming sends the customer a confirmation on the channel they used. Routes:
 //   GET  /owner                           owner page (HTML)
 //   GET  /owner/api/orders                orders as JSON, newest first
 //   POST /owner/api/orders/:id/confirm    confirm a pending order and message the customer
@@ -7,14 +7,16 @@
 
 import type { Product } from "../../src/lib/types";
 import { confirmationMessage, formatCollection } from "../agent/reply";
-import type { MemoryStore, StoredOrder } from "../agent/store";
-import { WhatsAppSendError, type SendText } from "../whatsapp/client";
+import type { SendText } from "../agent/processor";
+import type { Channel, MemoryStore, StoredOrder } from "../agent/store";
+import { MetaSendError } from "../meta/send-error";
 import { OWNER_PAGE } from "./page";
 
 export interface OwnerDeps {
   store: MemoryStore;
   products: Product[];
-  send: SendText;
+  /** How to message customers on each channel. */
+  senders: Partial<Record<Channel, SendText>>;
 }
 
 const json = (body: unknown, status = 200) =>
@@ -26,7 +28,8 @@ function view(s: StoredOrder, products: Product[]) {
     id: order.id,
     status: order.status,
     customerName: order.customerName,
-    customerPhone: s.customerPhone,
+    channel: s.channel,
+    customerId: s.customerId,
     items: order.items.map((i) => {
       const p = products.find((x) => x.id === i.productId);
       return { name: p ? p.nameAr : i.rawText, quantity: i.quantity };
@@ -59,15 +62,17 @@ export function createOwnerHandler(deps: OwnerDeps): (req: Request) => Promise<R
       if (!stored) return json({ error: "Order not found" }, 404);
       if (stored.order.status !== "pending") return json({ error: "Order is already confirmed" }, 409);
       stored.order.status = "confirmed";
+      const send = deps.senders[stored.channel];
+      if (!send) return json({ order: view(stored, deps.products), messageSent: false, error: `No ${stored.channel} sender configured`, errorCode: null });
       try {
-        await deps.send(stored.customerPhone, confirmationMessage(stored.order, deps.products, stored.lang));
+        await send(stored.customerId, confirmationMessage(stored.order, deps.products, stored.lang));
         return json({ order: view(stored, deps.products), messageSent: true });
       } catch (err) {
         return json({
           order: view(stored, deps.products),
           messageSent: false,
           error: err instanceof Error ? err.message : String(err),
-          errorCode: err instanceof WhatsAppSendError ? err.code ?? null : null,
+          errorCode: err instanceof MetaSendError ? err.code ?? null : null,
         });
       }
     }

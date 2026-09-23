@@ -15,10 +15,10 @@ function setup(sendImpl?: (to: string, text: string) => Promise<void>) {
   const handler = createOwnerHandler({
     store,
     products,
-    send: sendImpl ?? (async (to, text) => { sent.push({ to, text }); }),
+    senders: { whatsapp: sendImpl ?? (async (to, text) => { sent.push({ to, text }); }) },
   });
   const addOrder = (text: string, from = "97333333333", id = "wamid.1") =>
-    handleCustomerMessage({ id, from, profileName: "Sara", type: "text", text }, store, products, NOW).order!;
+    handleCustomerMessage({ channel: "whatsapp", id, from, profileName: "Sara", type: "text", text }, store, products, NOW).order!;
   return { store, handler, sent, addOrder };
 }
 
@@ -39,7 +39,8 @@ describe("owner page", () => {
     expect(orders).toHaveLength(1);
     expect(orders[0].status).toBe("pending");
     expect(orders[0].customerName).toBe("Sara");
-    expect(orders[0].customerPhone).toBe("97333333333");
+    expect(orders[0].channel).toBe("whatsapp");
+    expect(orders[0].customerId).toBe("97333333333");
     expect(orders[0].items).toEqual([{ name: "تشيز كيك كب", quantity: 20 }]);
     expect(orders[0].collectionText).toContain("السبت");
   });
