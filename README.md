@@ -27,6 +27,12 @@ What it does today:
 - With a `GEMINI_API_KEY`, Gemini reads text, voice notes and screenshots. If Gemini fails, text falls back to the built-in parser and media gets an acknowledgement. Without a key, only text is read.
 - The owner page lists the agent's orders. Confirming an order sends the customer a WhatsApp confirmation.
 - Orders are kept in memory and are lost on restart.
+- The owner routes (`/owner`, `/owner/api/...`) require `OWNER_KEY` auth (`server/owner/auth.ts`), the
+  same mechanism the hosted Supabase owner function uses — visiting `/owner?key=<OWNER_KEY>` once sets
+  a sign-in cookie. This is on top of, not instead of, the existing "this computer only" check: if
+  `OWNER_KEY` is not set in `.env.local`, `npm run whatsapp:dev` generates a random one for that run
+  and prints the one-time sign-in URL (`http://localhost:8787/owner?key=...`) to the console — open it
+  once per restart, or set `OWNER_KEY` yourself to keep the same URL across restarts.
 
 Settings in `.env.local` (never committed):
 
@@ -39,6 +45,7 @@ Settings in `.env.local` (never committed):
 | `WHATSAPP_APP_SECRET` | App settings > Basic > App secret; turns on signature checks |
 | `WHATSAPP_ALLOW_UNSIGNED` | `1` accepts unsigned calls when no app secret is set (testing only) |
 | `WHATSAPP_DRY_RUN` | `1` prints replies instead of sending them |
+| `OWNER_KEY` | Long random string protecting `/owner`; auto-generated for the run and printed to the console when unset |
 | `GEMINI_API_KEY` | Turns on AI reading of text, voice notes and screenshots |
 | `GEMINI_MODEL` | Optional, defaults to `gemini-2.5-flash` |
 | `DEMO_CUSTOMER_NUMBER` | Your own WhatsApp number, used by the simulator |
@@ -76,11 +83,13 @@ required for local development; `npm run whatsapp:dev` keeps working exactly as 
   extensions, which Deno 2 requires and which `tsc`/`tsx`/`vitest` also resolve fine
   (`allowImportingTsExtensions` in `tsconfig.json`, which excludes `supabase/` — that folder has
   its own `supabase/functions/deno.json` and is Deno's project, not Next's).
-- **Owner access.** The local owner page trusts "this computer only" (`isLocalRequest` in
-  `server/dev.ts`). The hosted one is public, so `supabase/functions/owner/index.ts` wraps it with
-  `server/owner/auth.ts`: an `OWNER_KEY` you set, checked as an `HttpOnly; Secure; SameSite=Strict`
-  cookie (set once by visiting `/owner?key=<OWNER_KEY>`) or an `Authorization: Bearer <OWNER_KEY>`
-  header, compared in constant time.
+- **Owner access.** Both the local runner and the hosted function require `OWNER_KEY` auth
+  (`server/owner/auth.ts`): an `HttpOnly; Secure; SameSite=Strict` cookie (set once by visiting
+  `/owner?key=<OWNER_KEY>`) or an `Authorization: Bearer <OWNER_KEY>` header, compared in constant
+  time. `supabase/functions/owner/index.ts` wraps the hosted function with it directly; `server/dev.ts`
+  wraps the local one the same way (generating a key for the run when `.env.local` has none) and
+  additionally checks "this computer only" (`isLocalRequest` in `server/owner/local-guard.ts`) as a
+  second, non-substitute layer — the IP check alone fails open behind a non-Cloudflare tunnel.
 
 **Layout:** three thin `Deno.serve` entry points, `supabase/functions/{whatsapp,instagram,owner}/index.ts`,
 import `server/` and `src/lib/` by relative path and are deployed with `--use-api` (server-side
