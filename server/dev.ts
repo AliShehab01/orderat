@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { MemoryStore } from "./agent/store";
 import { createWhatsAppSender } from "./whatsapp/client";
 import { createWebhookHandler } from "./whatsapp/webhook";
+import { createOwnerHandler } from "./owner/handler";
 import { demoProducts } from "../src/lib/plan";
 
 // Orders are parsed and shown in Bahrain time, whatever the machine's time zone.
@@ -28,14 +29,17 @@ const allowUnsigned = env("WHATSAPP_ALLOW_UNSIGNED") === "1";
 if (!appSecret) console.warn(allowUnsigned ? "Warning: no WHATSAPP_APP_SECRET, accepting unsigned webhook calls (testing only)." : "No WHATSAPP_APP_SECRET: unsigned webhook calls will be rejected.");
 
 const store = new MemoryStore();
-const handler = createWebhookHandler({
-  verifyToken,
-  appSecret,
-  allowUnsigned,
-  store,
-  products: demoProducts(),
-  send: createWhatsAppSender({ token: token ?? "", phoneNumberId: phoneNumberId ?? "", apiVersion: env("WHATSAPP_API_VERSION"), dryRun }),
-});
+const products = demoProducts();
+const send = createWhatsAppSender({ token: token ?? "", phoneNumberId: phoneNumberId ?? "", apiVersion: env("WHATSAPP_API_VERSION"), dryRun });
+const handler = createWebhookHandler({ verifyToken, appSecret, allowUnsigned, store, products, send });
+const ownerHandler = createOwnerHandler({ store, products, send });
+
+/** Owner routes are for this computer only. Tunnel traffic also arrives from loopback but carries Cloudflare headers. */
+function isLocalRequest(req: IncomingMessage): boolean {
+  const addr = req.socket.remoteAddress ?? "";
+  const loopback = addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+  return loopback && !req.headers["cf-connecting-ip"] && !req.headers["cf-ray"];
+}
 
 async function toRequest(req: IncomingMessage, base: string): Promise<Request> {
   const headers = new Headers();
@@ -49,11 +53,13 @@ async function toRequest(req: IncomingMessage, base: string): Promise<Request> {
 const port = Number(env("PORT") ?? 8787);
 createServer(async (req, res) => {
   try {
-    if (!req.url?.startsWith("/whatsapp/webhook")) {
+    const isOwner = req.url?.startsWith("/owner") && isLocalRequest(req);
+    if (!isOwner && !req.url?.startsWith("/whatsapp/webhook")) {
       res.writeHead(404).end("Not found");
       return;
     }
-    const response = await handler(await toRequest(req, `http://localhost:${port}`));
+    const request = await toRequest(req, `http://localhost:${port}`);
+    const response = await (isOwner ? ownerHandler : handler)(request);
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(await response.text());
   } catch (err) {
@@ -62,4 +68,5 @@ createServer(async (req, res) => {
   }
 }).listen(port, () => {
   console.log(`WhatsApp webhook listening on http://localhost:${port}/whatsapp/webhook${dryRun ? " (dry run: replies are printed, not sent)" : ""}`);
+  console.log(`Owner page (this computer only): http://localhost:${port}/owner`);
 });

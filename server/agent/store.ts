@@ -3,11 +3,15 @@
 
 import type { Order } from "../../src/lib/types";
 
+export type Lang = "ar" | "en";
+
 export interface StoredOrder {
   /** Orders captured by the agent start as status "pending" until the owner confirms them. */
   order: Order;
   /** WhatsApp number of the customer who sent the order. */
   customerPhone: string;
+  /** Language the customer wrote in, used for later messages such as the confirmation. */
+  lang: Lang;
 }
 
 const SEEN_LIMIT = 5000;
@@ -30,6 +34,10 @@ export class MemoryStore {
       .filter((s) => s.customerPhone === phone && s.order.status !== "collected")
       .filter((s) => !s.order.collectionAt || new Date(s.order.collectionAt).getTime() >= now.getTime())
       .sort((a, b) => b.order.createdAt.localeCompare(a.order.createdAt));
+  }
+
+  get(orderId: string): StoredOrder | undefined {
+    return this.orders.find((s) => s.order.id === orderId);
   }
 
   add(stored: StoredOrder): void {

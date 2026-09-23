@@ -5,9 +5,9 @@ import type { Order, OrderItem, Product } from "../../src/lib/types";
 import { parseOrderText } from "../../src/lib/parser";
 import { findChangeCandidate, keyOf } from "../../src/lib/plan";
 import type { IncomingMessage } from "../whatsapp/incoming";
-import type { MemoryStore } from "./store";
+import type { Lang, MemoryStore } from "./store";
 
-export type Lang = "ar" | "en";
+export type { Lang } from "./store";
 export type OutcomeKind = "new" | "change" | "time" | "ask_quantity" | "noted" | "help" | "media";
 export interface AgentOutcome { kind: OutcomeKind; reply: string; order?: Order }
 
@@ -81,6 +81,22 @@ function collectionLine(iso: string | undefined, confident: boolean, lang: Lang)
   return `${c.collection}: ${formatCollection(iso, lang)}${confident ? "" : ` — ${c.checkTime}`}`;
 }
 
+const CONFIRMED = {
+  ar: { title: "تم تأكيد طلبك ✅", thanks: "شكراً لك 🌸" },
+  en: { title: "Your order is confirmed ✅", thanks: "Thank you!" },
+} as const;
+
+/** Message sent to the customer after the owner confirms the order in Orderat. */
+export function confirmationMessage(order: Order, products: Product[], lang: Lang): string {
+  const c = COPY[lang];
+  return [
+    CONFIRMED[lang].title,
+    ...itemLines(order.items, products, lang),
+    ...(order.collectionAt ? [`${c.collection}: ${formatCollection(order.collectionAt, lang)}`] : []),
+    CONFIRMED[lang].thanks,
+  ].join("\n");
+}
+
 export function handleCustomerMessage(msg: IncomingMessage, store: MemoryStore, products: Product[], now: Date): AgentOutcome {
   if (msg.type !== "text" || !msg.text?.trim()) return { kind: "media", reply: MEDIA_ACK };
 
@@ -131,7 +147,7 @@ export function handleCustomerMessage(msg: IncomingMessage, store: MemoryStore, 
       changes: [],
       createdAt: now.toISOString(),
     };
-    store.add({ order, customerPhone: msg.from });
+    store.add({ order, customerPhone: msg.from, lang });
     const lines = [
       c.hello(msg.profileName),
       c.got,
