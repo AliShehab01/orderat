@@ -17,8 +17,8 @@ function setup(sendImpl?: (to: string, text: string) => Promise<void>) {
     products,
     senders: { whatsapp: sendImpl ?? (async (to, text) => { sent.push({ to, text }); }) },
   });
-  const addOrder = (text: string, from = "97333333333", id = "wamid.1") =>
-    handleCustomerMessage({ channel: "whatsapp", id, from, profileName: "Sara", type: "text", text }, store, products, NOW).order!;
+  const addOrder = async (text: string, from = "97333333333", id = "wamid.1") =>
+    (await handleCustomerMessage({ channel: "whatsapp", id, from, profileName: "Sara", type: "text", text }, store, products, NOW)).order!;
   return { store, handler, sent, addOrder };
 }
 
@@ -33,7 +33,7 @@ describe("owner page", () => {
 
   it("lists agent orders with readable item names and time", async () => {
     const { handler, addOrder } = setup();
-    addOrder("بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح");
+    await addOrder("بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح");
     const res = await handler(new Request(`${BASE}/owner/api/orders`));
     const orders = await res.json();
     expect(orders).toHaveLength(1);
@@ -47,10 +47,10 @@ describe("owner page", () => {
 
   it("confirms a pending order and messages the customer", async () => {
     const { handler, addOrder, sent, store } = setup();
-    const order = addOrder("بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح");
+    const order = await addOrder("بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح");
     const res = await handler(new Request(`${BASE}/owner/api/orders/${order.id}/confirm`, { method: "POST" }));
     expect(res.status).toBe(200);
-    expect(store.get(order.id)!.order.status).toBe("confirmed");
+    expect((await store.get(order.id))!.order.status).toBe("confirmed");
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe("97333333333");
     expect(sent[0].text).toContain("تم تأكيد طلبك");
@@ -59,14 +59,14 @@ describe("owner page", () => {
 
   it("confirms in English for an English order", async () => {
     const { handler, addOrder, sent } = setup();
-    const order = addOrder("hi i want 15 red velvet cups for thursday at 12 pm");
+    const order = await addOrder("hi i want 15 red velvet cups for thursday at 12 pm");
     await handler(new Request(`${BASE}/owner/api/orders/${order.id}/confirm`, { method: "POST" }));
     expect(sent[0].text).toContain("Your order is confirmed");
   });
 
   it("refuses to confirm the same order twice", async () => {
     const { handler, addOrder, sent } = setup();
-    const order = addOrder("بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح");
+    const order = await addOrder("بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح");
     await handler(new Request(`${BASE}/owner/api/orders/${order.id}/confirm`, { method: "POST" }));
     const res = await handler(new Request(`${BASE}/owner/api/orders/${order.id}/confirm`, { method: "POST" }));
     expect(res.status).toBe(409);
@@ -81,11 +81,11 @@ describe("owner page", () => {
 
   it("keeps the order confirmed and reports when the WhatsApp message fails", async () => {
     const { handler, addOrder, store } = setup(async () => { throw new Error("131047 window closed"); });
-    const order = addOrder("بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح");
+    const order = await addOrder("بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح");
     const res = await handler(new Request(`${BASE}/owner/api/orders/${order.id}/confirm`, { method: "POST" }));
     const body = await res.json();
     expect(res.status).toBe(200);
-    expect(store.get(order.id)!.order.status).toBe("confirmed");
+    expect((await store.get(order.id))!.order.status).toBe("confirmed");
     expect(body.messageSent).toBe(false);
     expect(body.error).toContain("131047");
   });

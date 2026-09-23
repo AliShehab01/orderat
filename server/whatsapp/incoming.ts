@@ -1,7 +1,7 @@
 // Turns a WhatsApp Cloud API webhook payload into a flat list of customer messages.
 // Delivery status updates (sent, delivered, read) are ignored.
 
-import type { Channel } from "../agent/store";
+import type { Channel } from "../agent/store.ts";
 
 export interface IncomingMedia {
   /** WhatsApp media ID, downloaded through the Cloud API. */

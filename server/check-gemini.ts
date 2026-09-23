@@ -1,7 +1,7 @@
 // Manual check of the Gemini extractor against the real API. Not part of the test suite.
 import { existsSync } from "node:fs";
-import { createGeminiExtractor } from "./ai/gemini";
-import { demoProducts } from "../src/lib/plan";
+import { createGeminiExtractor } from "./ai/gemini.ts";
+import { demoProducts } from "../src/lib/plan.ts";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 

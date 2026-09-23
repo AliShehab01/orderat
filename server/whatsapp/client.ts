@@ -1,10 +1,10 @@
 // Sends WhatsApp text replies through the Cloud API.
 
-import type { SendText } from "../agent/processor";
-import { metaSendError } from "../meta/send-error";
+import type { SendText } from "../agent/processor.ts";
+import { metaSendError } from "../meta/send-error.ts";
 
-export type { SendText } from "../agent/processor";
-export { MetaSendError as WhatsAppSendError } from "../meta/send-error";
+export type { SendText } from "../agent/processor.ts";
+export { MetaSendError as WhatsAppSendError } from "../meta/send-error.ts";
 
 export interface SenderConfig {
   token: string;

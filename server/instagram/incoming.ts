@@ -1,7 +1,7 @@
 // Turns an Instagram messaging webhook payload (Instagram API with Instagram Login) into customer messages.
 // Skips echoes of the business's own messages, read receipts, reactions and other non-message events.
 
-import type { IncomingMessage } from "../whatsapp/incoming";
+import type { IncomingMessage } from "../whatsapp/incoming.ts";
 
 interface RawAttachment { type?: string; payload?: { url?: string } }
 interface RawEvent {

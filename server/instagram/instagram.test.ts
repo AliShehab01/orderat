@@ -85,14 +85,14 @@ describe("Instagram webhook", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].to).toBe("111");
     expect(sent[0].text).toContain("تشيز كيك كب × 20");
-    expect(store.all()[0]).toMatchObject({ channel: "instagram", customerId: "111" });
+    expect((await store.all())[0]).toMatchObject({ channel: "instagram", customerId: "111" });
   });
 
   it("only observes senders that are not allowed: no reply, no order", async () => {
     const { post, sent, store, logs } = setup(["111"]);
     await post(igPayload([textEvent("999", "m2", "is this car still available?")]));
     expect(sent).toHaveLength(0);
-    expect(store.all()).toHaveLength(0);
+    expect(await store.all()).toHaveLength(0);
     expect(logs.join("\n")).toContain("999");
   });
 
@@ -107,7 +107,7 @@ describe("Instagram webhook", () => {
     await post(igPayload([textEvent("111", "m4", "بغيت 20 تشيز كيك كب للسبت الساعة 10 الصبح")]));
     const igSent: string[] = [];
     const owner = createOwnerHandler({ store, products: demoProducts(), senders: { instagram: async (to) => { igSent.push(to); } } });
-    const res = await owner(new Request(`http://localhost:8787/owner/api/orders/${store.all()[0].order.id}/confirm`, { method: "POST" }));
+    const res = await owner(new Request(`http://localhost:8787/owner/api/orders/${(await store.all())[0].order.id}/confirm`, { method: "POST" }));
     expect((await res.json()).messageSent).toBe(true);
     expect(igSent).toEqual(["111"]);
   });

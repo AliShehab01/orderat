@@ -5,15 +5,15 @@
 //   POST /owner/api/orders/:id/confirm    confirm a pending order and message the customer
 // Access control lives in the caller (the local runner only serves these routes to this computer).
 
-import type { Product } from "../../src/lib/types";
-import { confirmationMessage, formatCollection } from "../agent/reply";
-import type { SendText } from "../agent/processor";
-import type { Channel, MemoryStore, StoredOrder } from "../agent/store";
-import { MetaSendError } from "../meta/send-error";
-import { OWNER_PAGE } from "./page";
+import type { Product } from "../../src/lib/types.ts";
+import { confirmationMessage, formatCollection } from "../agent/reply.ts";
+import type { SendText } from "../agent/processor.ts";
+import type { Channel, OrderStore, StoredOrder } from "../agent/store.ts";
+import { MetaSendError } from "../meta/send-error.ts";
+import { OWNER_PAGE } from "./page.ts";
 
 export interface OwnerDeps {
-  store: MemoryStore;
+  store: OrderStore;
   products: Product[];
   /** How to message customers on each channel. */
   senders: Partial<Record<Channel, SendText>>;
@@ -52,24 +52,25 @@ export function createOwnerHandler(deps: OwnerDeps): (req: Request) => Promise<R
     }
 
     if (req.method === "GET" && pathname === "/owner/api/orders") {
-      const orders = deps.store.all().sort((a, b) => b.order.createdAt.localeCompare(a.order.createdAt));
+      const orders = (await deps.store.all()).sort((a, b) => b.order.createdAt.localeCompare(a.order.createdAt));
       return json(orders.map((s) => view(s, deps.products)));
     }
 
     const confirm = pathname.match(/^\/owner\/api\/orders\/([^/]+)\/confirm$/);
     if (req.method === "POST" && confirm) {
-      const stored = deps.store.get(decodeURIComponent(confirm[1]));
+      const stored = await deps.store.get(decodeURIComponent(confirm[1]));
       if (!stored) return json({ error: "Order not found" }, 404);
       if (stored.order.status !== "pending") return json({ error: "Order is already confirmed" }, 409);
-      stored.order.status = "confirmed";
-      const send = deps.senders[stored.channel];
-      if (!send) return json({ order: view(stored, deps.products), messageSent: false, error: `No ${stored.channel} sender configured`, errorCode: null });
+      const updated = (await deps.store.update(stored.order.id, { status: "confirmed" }))
+        ?? { ...stored, order: { ...stored.order, status: "confirmed" as const } };
+      const send = deps.senders[updated.channel];
+      if (!send) return json({ order: view(updated, deps.products), messageSent: false, error: `No ${updated.channel} sender configured`, errorCode: null });
       try {
-        await send(stored.customerId, confirmationMessage(stored.order, deps.products, stored.lang));
-        return json({ order: view(stored, deps.products), messageSent: true });
+        await send(updated.customerId, confirmationMessage(updated.order, deps.products, updated.lang));
+        return json({ order: view(updated, deps.products), messageSent: true });
       } catch (err) {
         return json({
-          order: view(stored, deps.products),
+          order: view(updated, deps.products),
           messageSent: false,
           error: err instanceof Error ? err.message : String(err),
           errorCode: err instanceof MetaSendError ? err.code ?? null : null,
