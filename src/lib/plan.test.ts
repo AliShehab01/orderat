@@ -32,4 +32,17 @@ describe("findChangeCandidate", () => {
     const c = findChangeCandidate(draft([{ productId: "p-brownie", rawText: "براونيز", quantity: 4, confidence: "high" }]), [o], demoProducts(), NOW);
     expect(c?.items.map((i) => i.quantity)).toEqual([20, 4]);
   });
+
+  it("adds a new line instead of hijacking an unrelated item when the draft names a specific product not in the order", () => {
+    // The AI correctly identified "معمول" (maamoul) — that is not a generic word like "كب" that
+    // could be a mistranslated match, so the oldQuantities fallback must not steal Brownie box's
+    // quantity just because it happens to equal 5.
+    const o = order([{ productId: "p-brownie", rawText: "براونيز", quantity: 5 }, { productId: "p-cheesecake", rawText: "تشيز كيك كب", quantity: 10 }]);
+    const c = findChangeCandidate(draft([{ productId: "p-maamoul", rawText: "معمول", quantity: 6, confidence: "high" }], [5]), [o], demoProducts(), NOW);
+    expect(c?.items).toEqual([
+      { productId: "p-brownie", rawText: "براونيز", quantity: 5 },
+      { productId: "p-cheesecake", rawText: "تشيز كيك كب", quantity: 10 },
+      { productId: "p-maamoul", rawText: "معمول", quantity: 6 },
+    ]);
+  });
 });

@@ -1,5 +1,5 @@
 import type { Draft, Order, OrderItem, Product } from "./types.ts";
-import { normalizeName } from "./parser.ts";
+import { normalizeName, normalizeText } from "./parser.ts";
 import { bahrainDate, bahrainDateKey, bahrainParts } from "./bahrain-time.ts";
 
 /** The order's Bahrain calendar day ("YYYY-MM-DD"), independent of the process time zone. */
@@ -8,6 +8,12 @@ export const keyOf = (iso: string) => dateKey(new Date(iso));
 
 export interface Diff { label: string; oldValue: string; newValue: string }
 export interface ChangeCandidate { order: Order; diffs: Diff[]; items: OrderItem[]; collectionAt?: string }
+
+/** True when `rawText` literally names `product` (its own name, Arabic name or an alias), not just a generic word. */
+function mentionsProduct(rawText: string, product: Product): boolean {
+  const text = normalizeText(rawText);
+  return [product.name, product.nameAr, ...product.aliases].some((term) => text.includes(normalizeText(term)));
+}
 
 export function findChangeCandidate(draft: Draft, orders: Order[], products: Product[], now = new Date()): ChangeCandidate | null {
   if (!draft.customerName) return null;
@@ -24,9 +30,15 @@ export function findChangeCandidate(draft: Draft, orders: Order[], products: Pro
   for (const d of draft.items) {
     if (d.quantity === undefined) continue;
     // Match by product first. If the named product is not in the order, the quantity the customer
-    // says to replace ("35 not 20") identifies the item; a lone item is the last resort for unnamed items.
-    const target = (d.productId ? items.find((i) => i.productId === d.productId) : undefined)
-      ?? items.find((i) => draft.oldQuantities.includes(i.quantity))
+    // says to replace ("35 not 20") identifies the item — but only when the draft item doesn't
+    // itself literally name a specific product (e.g. "معمول"/maamoul): a generic word like "كب"
+    // can be the AI mapping to the wrong product, but a named one that's genuinely missing from the
+    // order is a new line, not license to overwrite whatever unrelated item has a matching quantity.
+    const inOrder = d.productId ? items.find((i) => i.productId === d.productId) : undefined;
+    const namedProduct = d.productId ? products.find((p) => p.id === d.productId) : undefined;
+    const namesSpecificProduct = namedProduct ? mentionsProduct(d.rawText, namedProduct) : false;
+    const target = inOrder
+      ?? (namesSpecificProduct ? undefined : items.find((i) => draft.oldQuantities.includes(i.quantity)))
       ?? (!d.productId && items.length === 1 ? items[0] : undefined);
     if (target) {
       if (target.quantity !== d.quantity) { diffs.push({ label: label(target.productId), oldValue: String(target.quantity), newValue: String(d.quantity) }); target.quantity = d.quantity; }
