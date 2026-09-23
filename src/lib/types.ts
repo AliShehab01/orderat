@@ -16,7 +16,8 @@ export interface OrderItem {
   quantity: number;
 }
 
-export type OrderStatus = "confirmed" | "prepped" | "collected";
+/** "pending" = captured by the agent, waiting for the owner to confirm. Pending orders stay out of the day plan. */
+export type OrderStatus = "pending" | "confirmed" | "prepped" | "collected";
 
 export interface Order {
   id: string;

@@ -51,7 +51,7 @@ export interface DayPlan {
 }
 
 export function buildDayPlan(orders: Order[], products: Product[], key: string, capacity: number, locale: "ar" | "en"): DayPlan {
-  const active = orders.filter((o) => o.status !== "collected");
+  const active = orders.filter((o) => o.status !== "collected" && o.status !== "pending");
   const noTime = active.filter((o) => !o.collectionAt);
   const day = active.filter((o) => o.collectionAt && keyOf(o.collectionAt) === key);
   const totals = new Map<string, DayPlan["totals"][number]>();

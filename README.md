@@ -15,3 +15,22 @@ The visual and verbal system is documented in `BRAND_GUIDELINES.md`. Orderat use
 Light and dark modes use the same brand tokens. On mobile, the bottom navigation keeps Today, Order Book and Ready Stock visible; Day Plan, Sales, Products, Plans and Settings sit behind a single More menu.
 
 Run with `npm run dev` or create the static export with `npm run build`.
+
+## WhatsApp agent (Pro) — local webhook
+
+`server/` holds the WhatsApp Cloud API webhook. It runs separately from the static site, because a static export cannot receive webhook calls. The code uses the standard Request/Response API, so it can move to a Supabase Edge Function or Vercel later.
+
+What it does today: a customer messages the WhatsApp number, the agent reads the order, stores it as **pending** (the owner still confirms), and replies with a summary in Arabic or English. It asks for a missing collection time, applies changes such as "make it 35 not 20", and never replies twice to a retried delivery. Voice notes and images get an acknowledgement only; Gemini extraction comes later. Orders are kept in memory and are lost on restart.
+
+Settings in `.env.local` (never committed):
+
+| Name | Purpose |
+| --- | --- |
+| `WHATSAPP_TOKEN` | Access token from Meta (temporary tokens expire after about 24 hours) |
+| `WHATSAPP_PHONE_NUMBER_ID` | Sending phone number ID |
+| `WHATSAPP_VERIFY_TOKEN` | Any secret string; the same value goes in Meta's webhook settings |
+| `WHATSAPP_APP_SECRET` | App settings > Basic > App secret; enables signature checks |
+| `WHATSAPP_ALLOW_UNSIGNED` | `1` accepts unsigned calls when no app secret is set (testing only) |
+| `WHATSAPP_DRY_RUN` | `1` prints replies instead of sending them |
+
+Commands: `npm test` runs the tests; `npm run whatsapp:dev` starts the webhook on `http://localhost:8787/whatsapp/webhook`. Meta needs a public HTTPS address, so expose that port through a tunnel while testing.
