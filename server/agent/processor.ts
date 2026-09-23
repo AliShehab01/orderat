@@ -3,7 +3,7 @@
 import type { Product } from "../../src/lib/types.ts";
 import type { MediaInput, OpenOrderContext, OrderExtractor } from "../ai/gemini.ts";
 import type { IncomingMessage } from "../whatsapp/incoming.ts";
-import { handleCustomerMessage, type PreparedDraft } from "./reply.ts";
+import { handleCustomerMessage, type AgentOutcome, type PreparedDraft } from "./reply.ts";
 import type { Channel, OrderStore } from "./store.ts";
 
 export type SendText = (to: string, text: string) => Promise<void>;
@@ -67,7 +67,16 @@ export function createMessageProcessor(deps: ProcessorDeps): (msg: IncomingMessa
     } catch (err) {
       log(`AI reading failed for ${msg.id}, using the built-in path: ${err instanceof Error ? err.message : String(err)}`);
     }
-    const outcome = await handleCustomerMessage(msg, deps.store, deps.products, at, prepared);
+    let outcome: AgentOutcome;
+    try {
+      outcome = await handleCustomerMessage(msg, deps.store, deps.products, at, prepared);
+    } catch (err) {
+      // One message failing (e.g. a store outage) must not stop the rest of the batch: every id in
+      // this batch is already marked seen, so an uncaught error here would silently drop the
+      // remaining messages instead of just this one.
+      log(`Processing message ${msg.id} from ${msg.from} failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     const shown = msg.text ?? (prepared?.sourceText ? `<${msg.type}> ${prepared.sourceText}` : `<${msg.type}>`);
     log(`[${msg.channel} ${outcome.kind}${prepared ? ", ai" : ""}] ${msg.from}${msg.profileName ? ` (${msg.profileName})` : ""}: ${shown}`);
 
