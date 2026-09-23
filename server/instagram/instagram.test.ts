@@ -56,6 +56,27 @@ describe("Instagram sender", () => {
     expect(long.startsWith(fitted.replace(/\n…$/, ""))).toBe(true);
     expect(fitInstagramText("short")).toBe("short");
   });
+
+  it("hard-truncates a single line over the byte limit by bytes, without splitting a character", () => {
+    const line = "أ".repeat(600); // "أ" is 2 UTF-8 bytes, so 1200 bytes total, over the limit on its own.
+    const fitted = fitInstagramText(line);
+    const bytes = new TextEncoder().encode(fitted);
+    expect(bytes.length).toBeLessThanOrEqual(1000);
+    expect(fitted.endsWith("…")).toBe(true);
+    expect(fitted).not.toBe("\n…");
+    expect(fitted.length).toBeGreaterThan(1); // keeps real content, not just the ellipsis
+    // Decoding must succeed (fatal: true throws on a truncated multi-byte sequence).
+    expect(new TextDecoder("utf-8", { fatal: true }).decode(bytes)).toBe(fitted);
+  });
+
+  it("hard-truncates the oversized line even when earlier lines already fit", () => {
+    const long = `short line\n${"a".repeat(1200)}`;
+    const fitted = fitInstagramText(long);
+    const bytes = new TextEncoder().encode(fitted);
+    expect(bytes.length).toBeLessThanOrEqual(1000);
+    expect(fitted.startsWith("short line\n")).toBe(true);
+    expect(fitted.endsWith("…")).toBe(true);
+  });
 });
 
 describe("Instagram webhook", () => {
