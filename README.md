@@ -56,6 +56,7 @@ Commands:
 | --- | --- |
 | `npm test` | Runs the tests |
 | `npm run whatsapp:dev` | Starts the webhook on `http://localhost:8787/whatsapp/webhook` and the owner page on `http://localhost:8787/owner` (this computer only) |
+| `npm run whatsapp:live` | Starts the agent and a Cloudflare quick tunnel, then points the WhatsApp account's webhook at the new tunnel address (quick-tunnel addresses change on every start) |
 | `npm run whatsapp:simulate -- "message"` | Sends a customer message into the running agent, as if Meta delivered it |
 
 Meta needs a public HTTPS address for the webhook, so expose port 8787 through a tunnel while testing, for example `cloudflared tunnel --url http://localhost:8787`. While the Meta app is unpublished, Meta only delivers its own test webhooks, not messages from real phones; use the simulator to demo the flow.

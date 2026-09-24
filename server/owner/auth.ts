@@ -60,8 +60,9 @@ export function signInResponse(key: string, redirectTo: string): Response {
   return new Response(null, { status: 302, headers: { Location: redirectTo, "set-cookie": cookie } });
 }
 
-export const OWNER_KEY_NOT_CONFIGURED = new Response("Owner access is not configured (OWNER_KEY is not set).", { status: 500 });
-export const UNAUTHORIZED = new Response("Unauthorized", { status: 401 });
+// Functions, not shared constants: a Response body can be read only once, so every request needs its own.
+const ownerKeyNotConfigured = () => new Response("Owner access is not configured (OWNER_KEY is not set).", { status: 500 });
+const unauthorized = () => new Response("Unauthorized", { status: 401 });
 
 /**
  * Wraps an owner request handler with OWNER_KEY protection: `?key=...` signs in (sets the cookie
@@ -70,15 +71,15 @@ export const UNAUTHORIZED = new Response("Unauthorized", { status: 401 });
  */
 export function withOwnerAuth(ownerKey: string | undefined, handler: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   return async (req) => {
-    if (!ownerKey) return OWNER_KEY_NOT_CONFIGURED;
+    if (!ownerKey) return ownerKeyNotConfigured();
     const url = new URL(req.url);
     const keyParam = url.searchParams.get("key");
     if (req.method === "GET" && keyParam !== null) {
-      if (!isOwnerKey(keyParam, ownerKey)) return UNAUTHORIZED;
+      if (!isOwnerKey(keyParam, ownerKey)) return unauthorized();
       url.searchParams.delete("key");
       return signInResponse(keyParam, url.pathname + (url.search ? url.search : ""));
     }
-    if (!isAuthorized(req, ownerKey)) return UNAUTHORIZED;
+    if (!isAuthorized(req, ownerKey)) return unauthorized();
     return handler(req);
   };
 }

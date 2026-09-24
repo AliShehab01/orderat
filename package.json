@@ -16,7 +16,8 @@
     "supabase:secrets": "node scripts/supabase-secrets.mjs",
     "supabase:deploy": "node scripts/supabase-deploy.mjs",
     "supabase:migrate": "supabase db push",
-    "supabase:logs": "supabase functions logs"
+    "supabase:logs": "supabase functions logs",
+    "whatsapp:live": "tsx server/live.ts"
   },
   "dependencies": {
     "next": "16.3.5",

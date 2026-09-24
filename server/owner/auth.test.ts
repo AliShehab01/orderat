@@ -58,3 +58,23 @@ describe("owner auth", () => {
     expect(wrongCookie.status).toBe(401);
   });
 });
+
+describe("withOwnerAuth responses are fresh per request", () => {
+  it("can answer unauthorized many times (a Response body can only be read once)", async () => {
+    const guarded = withOwnerAuth("k", async () => new Response("ok"));
+    for (let i = 0; i < 3; i++) {
+      const res = await guarded(new Request("http://localhost/owner/api/orders"));
+      expect(res.status).toBe(401);
+      expect(await res.text()).toBe("Unauthorized");
+    }
+  });
+
+  it("can answer 'not configured' many times", async () => {
+    const guarded = withOwnerAuth(undefined, async () => new Response("ok"));
+    for (let i = 0; i < 2; i++) {
+      const res = await guarded(new Request("http://localhost/owner"));
+      expect(res.status).toBe(500);
+      expect(await res.text()).toContain("OWNER_KEY");
+    }
+  });
+});

@@ -93,11 +93,15 @@ createServer(async (req, res) => {
     }
     const request = await toRequest(req, `http://localhost:${port}`);
     const response = await (isOwner ? ownerHandler : isInstagram ? igHandler : handler)(request);
+    // Read the body before writing headers, so a failure here can still become a clean 500.
+    const body = await response.text();
     res.writeHead(response.status, Object.fromEntries(response.headers));
-    res.end(await response.text());
+    res.end(body);
   } catch (err) {
     console.error(err);
-    res.writeHead(500).end("Server error");
+    // Never let an error path crash the whole server (writing headers twice throws).
+    if (!res.headersSent) res.writeHead(500);
+    if (!res.writableEnded) res.end("Server error");
   }
 }).listen(port, () => {
   console.log(`WhatsApp webhook listening on http://localhost:${port}/whatsapp/webhook${dryRun ? " (dry run: replies are printed, not sent)" : ""}`);
