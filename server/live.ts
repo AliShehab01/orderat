@@ -40,7 +40,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function waitForHandshake(base: string): Promise<boolean> {
   const url = `${base}/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=${encodeURIComponent(verifyToken!)}&hub.challenge=live-check`;
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 10; i++) {
     try {
       const res = await fetch(url);
       if (res.ok && (await res.text()) === "live-check") return true;
@@ -50,6 +50,21 @@ async function waitForHandshake(base: string): Promise<boolean> {
     await sleep(2000);
   }
   return false;
+}
+
+/** Sets the webhook override, retrying while the new tunnel becomes reachable for Meta. */
+async function pointMetaAtTunnel(callbackUrl: string): Promise<void> {
+  const tries = 12;
+  for (let i = 1; i <= tries; i++) {
+    try {
+      await setWebhookOverride({ token: token!, wabaId: wabaId!, verifyToken: verifyToken! }, callbackUrl);
+      return;
+    } catch (err) {
+      if (i === tries) throw err;
+      console.log(`Meta could not verify the tunnel yet (try ${i}/${tries}): ${err instanceof Error ? err.message : String(err)}. Retrying in 10 s.`);
+      await sleep(10_000);
+    }
+  }
 }
 
 async function main() {
@@ -76,11 +91,12 @@ async function main() {
   }
   console.log(`Tunnel: ${base}`);
 
+  // This computer's DNS can take minutes to see a brand-new tunnel name, so a failed local check is
+  // only a warning. Meta verifies the address from its own servers when the override is set.
   if (!(await waitForHandshake(base))) {
-    console.error("The webhook did not answer through the tunnel.");
-    stopAll(1);
+    console.warn("This computer cannot reach the tunnel yet (often local DNS delay). Letting Meta check it directly.");
   }
-  await setWebhookOverride({ token: token!, wabaId: wabaId!, verifyToken: verifyToken! }, `${base}/whatsapp/webhook`);
+  await pointMetaAtTunnel(`${base}/whatsapp/webhook`);
   console.log(`Meta now sends WhatsApp webhooks to ${base}/whatsapp/webhook`);
   console.log("Instagram webhook (set it in Meta when Instagram is connected): " + `${base}/instagram/webhook`);
 }
