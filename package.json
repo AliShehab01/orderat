@@ -16,7 +16,6 @@
     "hosting:db-user": "node scripts/hosting-db-user.mjs",
     "hosting:secrets": "node scripts/hosting-secrets.mjs",
     "hosting:deploy": "node scripts/hosting-deploy.mjs",
-    "hosting:logs": "supabase functions logs",
     "whatsapp:live": "tsx server/live.ts"
   },
   "dependencies": {

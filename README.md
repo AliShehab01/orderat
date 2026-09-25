@@ -212,7 +212,12 @@ When it becomes a real constraint, that's the trigger for "Move to a dedicated p
    `https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-owner?key=<OWNER_KEY>`. It
    redirects back to the same page with the cookie set; bookmark the plain URL (without `?key=`)
    after that.
-9. **Tail logs** while testing: `npm run hosting:logs -- orderat-whatsapp --project-ref ckjmbdbvlbxfofjgqiuj`.
+9. **Watch logs** while testing: the pinned CLI (`supabase@2.117.0`) has no log-tailing subcommand —
+   `supabase functions` only has `list`/`delete`/`download`/`deploy`/`new`/`serve`, and there's no
+   top-level `logs` either (checked via `npx supabase functions --help` and `npx supabase --help`).
+   Use the dashboard instead: [Hayati's Logs
+   Explorer](https://supabase.com/dashboard/project/ckjmbdbvlbxfofjgqiuj/logs/edge-functions), or
+   filter to one function from its own page (Edge Functions > `orderat-whatsapp` > Logs).
 
 None of this was run as part of preparing the code — no migration was applied, no secret was
 pushed, and nothing was deployed.
