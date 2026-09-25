@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withOwnerAuth } from "./auth";
+import { withOwnerAuth, withOwnerBearerAuth } from "./auth";
 
 const KEY = "s3cret-owner-key";
 
@@ -76,5 +76,48 @@ describe("withOwnerAuth responses are fresh per request", () => {
       expect(res.status).toBe(500);
       expect(await res.text()).toContain("OWNER_KEY");
     }
+  });
+});
+
+describe("withOwnerBearerAuth (hosted, JSON-only)", () => {
+  it("refuses every request when OWNER_KEY is not configured, with a JSON body", async () => {
+    const handler = withOwnerBearerAuth(undefined, async () => new Response("ok"));
+    const res = await handler(new Request("https://x.supabase.co/functions/v1/orderat-owner"));
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect((await res.json()).error).toContain("OWNER_KEY");
+  });
+
+  it("rejects a request with no Authorization header, with a JSON body", async () => {
+    const handler = withOwnerBearerAuth(KEY, async () => new Response("ok"));
+    const res = await handler(new Request("https://x.supabase.co/functions/v1/orderat-owner/api/orders"));
+    expect(res.status).toBe(401);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
+  });
+
+  it("accepts the correct Authorization: Bearer header", async () => {
+    const handler = withOwnerBearerAuth(KEY, async () => new Response("ok"));
+    const res = await handler(new Request("https://x.supabase.co/functions/v1/orderat-owner/api/orders", { headers: { authorization: `Bearer ${KEY}` } }));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
+  });
+
+  it("rejects a wrong bearer token", async () => {
+    const handler = withOwnerBearerAuth(KEY, async () => new Response("ok"));
+    const res = await handler(new Request("https://x.supabase.co/functions/v1/orderat-owner/api/orders", { headers: { authorization: "Bearer nope" } }));
+    expect(res.status).toBe(401);
+  });
+
+  it("never accepts a cookie in place of the bearer header — no cross-origin cookie sign-in", async () => {
+    const handler = withOwnerBearerAuth(KEY, async () => new Response("ok"));
+    const res = await handler(new Request("https://x.supabase.co/functions/v1/orderat-owner/api/orders", { headers: { cookie: `orderat_owner=${KEY}` } }));
+    expect(res.status).toBe(401);
+  });
+
+  it("never signs in via a ?key= query parameter — that flow is cookie-only, for server/dev.ts", async () => {
+    const handler = withOwnerBearerAuth(KEY, async () => new Response("ok"));
+    const res = await handler(new Request(`https://x.supabase.co/functions/v1/orderat-owner?key=${KEY}`));
+    expect(res.status).toBe(401);
   });
 });

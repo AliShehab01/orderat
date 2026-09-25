@@ -47,6 +47,18 @@ export function isOwnerKey(candidate: string, ownerKey: string): boolean {
   return timingSafeEqual(candidate, ownerKey);
 }
 
+/**
+ * True only when the request carries `ownerKey` as an `Authorization: Bearer` header — no cookie
+ * fallback. Used for the hosted Edge Function (withOwnerBearerAuth below), which is reachable
+ * cross-origin: a cookie set from one origin (the static owner page) is never sent to another
+ * (*.supabase.co) without `Access-Control-Allow-Credentials`, which server/owner/cors.ts deliberately
+ * never sends, so cookie sign-in has no way to work there anyway.
+ */
+export function isBearerAuthorized(req: Request, ownerKey: string): boolean {
+  const auth = req.headers.get("authorization");
+  return auth?.startsWith("Bearer ") === true && timingSafeEqual(auth.slice("Bearer ".length), ownerKey);
+}
+
 /** Sets the sign-in cookie and redirects to `redirectTo` (the same path, without the key in it). */
 export function signInResponse(key: string, redirectTo: string): Response {
   const cookie = [
@@ -64,6 +76,13 @@ export function signInResponse(key: string, redirectTo: string): Response {
 const ownerKeyNotConfigured = () => new Response("Owner access is not configured (OWNER_KEY is not set).", { status: 500 });
 const unauthorized = () => new Response("Unauthorized", { status: 401 });
 
+// JSON counterparts for withOwnerBearerAuth: the hosted function is JSON-only (see README "Hosting"),
+// so its error responses stay JSON too, instead of the plain text withOwnerAuth above returns.
+const jsonError = (message: string, status: number) =>
+  new Response(JSON.stringify({ error: message }), { status, headers: { "content-type": "application/json; charset=utf-8" } });
+const ownerKeyNotConfiguredJson = () => jsonError("Owner access is not configured (OWNER_KEY is not set).", 500);
+const unauthorizedJson = () => jsonError("Unauthorized", 401);
+
 /**
  * Wraps an owner request handler with OWNER_KEY protection: `?key=...` signs in (sets the cookie
  * and redirects), everything else needs the cookie or a Bearer header, and requests are refused
@@ -80,6 +99,19 @@ export function withOwnerAuth(ownerKey: string | undefined, handler: (req: Reque
       return signInResponse(keyParam, url.pathname + (url.search ? url.search : ""));
     }
     if (!isAuthorized(req, ownerKey)) return unauthorized();
+    return handler(req);
+  };
+}
+
+/**
+ * Bearer-only counterpart to withOwnerAuth, for the hosted Edge Function: no `?key=` sign-in
+ * redirect, no cookie, every request needs `Authorization: Bearer <OWNER_KEY>`. withOwnerAuth above
+ * is untouched and still exactly what server/dev.ts uses for the local, cookie-based sign-in flow.
+ */
+export function withOwnerBearerAuth(ownerKey: string | undefined, handler: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
+  return async (req) => {
+    if (!ownerKey) return ownerKeyNotConfiguredJson();
+    if (!isBearerAuthorized(req, ownerKey)) return unauthorizedJson();
     return handler(req);
   };
 }
