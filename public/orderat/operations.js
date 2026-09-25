@@ -151,14 +151,14 @@ function stockEditor(productId) {
 
 function brandGuide() {
   const colours = [
-    ["Harbor", "#173142", tr("Sidebar, headings, primary buttons", "الشريط الجانبي والعناوين والأزرار الأساسية")],
-    ["Palm", "#2F6D62", tr("Links, useful insights, positive actions", "الروابط والرؤى والإجراءات الإيجابية")],
-    ["Citrus", "#D8EF63", tr("Active navigation and decisive highlights", "التنقل النشط والتمييز الحاسم")],
-    ["Sand", "#E9DDCA", tr("Warm labels and supporting emphasis", "الملصقات الدافئة والتأكيد المساند")],
-    ["Coral", "#C96B4B", tr("Capacity and low-stock warnings", "تنبيهات الطاقة والمخزون المنخفض")],
-    ["Canvas", "#F6F4EF", tr("App background", "خلفية التطبيق")],
+    ["Harbor", "#15171C", tr("Sidebar and dark panels", "الشريط الجانبي واللوحات الداكنة")],
+    ["Accent", "#4156D3", tr("Links, primary buttons, active states", "الروابط والأزرار الأساسية والحالات النشطة")],
+    ["Success", "#1F7A46", tr("Collected orders, healthy stock", "الطلبات المستلمة والمخزون الجيد")],
+    ["Warning", "#A86A17", tr("Capacity and low-stock warnings", "تنبيهات الطاقة والمخزون المنخفض")],
+    ["Danger", "#C0362C", tr("Destructive actions, cancelled orders", "الإجراءات الحساسة والطلبات الملغاة")],
+    ["Canvas", "#FAFAFB", tr("App background", "خلفية التطبيق")],
     ["Paper", "#FFFFFF", tr("Cards, panels and forms", "البطاقات واللوحات والنماذج")],
-    ["Slate", "#66747B", tr("Secondary text", "النص الثانوي")]
+    ["Slate", "#68707C", tr("Secondary text", "النص الثانوي")]
   ];
   modal(tr("Orderat brand guide", "دليل هوية اوردرات"), `<div class="brand-guide">
     <section><span class="guide-kicker">${tr("PROMISE", "الوعد")}</span><h3>${tr("Orders clear. Day calm.", "طلبات واضحة. يوم أهدأ.")}</h3><p>${tr("Orderat sounds like a reliable operations partner: clear, calm and accountable.", "تتحدث اوردرات كشريك تشغيل موثوق: واضحة وهادئة ومسؤولة.")}</p></section>
