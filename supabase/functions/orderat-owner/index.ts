@@ -1,26 +1,24 @@
 // Supabase Edge Function entry point for the owner page + API.
-// Deployed as: supabase functions deploy owner --use-api
-// URL: https://<project-ref>.supabase.co/functions/v1/owner
+// Deployed as: npm run hosting:deploy (supabase functions deploy orderat-owner --use-api)
+// URL: https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-owner
 //
 // Unlike server/dev.ts (which restricts /owner to loopback requests), this function is reachable
 // from the public internet — verify_jwt is off (supabase/config.toml) so Supabase's own gateway
 // does not block it either. server/owner/auth.ts is the access control here: OWNER_KEY, checked as
 // a cookie set by visiting /owner?key=<OWNER_KEY> once, or an Authorization: Bearer header for API
-// calls. See supabase/functions/whatsapp/index.ts for notes on the import layout.
+// calls. See supabase/functions/orderat-whatsapp/index.ts for notes on the import layout and the
+// orderat- / ORDERAT_ prefixing.
 
 import { createOwnerHandler } from "../../../server/owner/handler.ts";
 import { withOwnerAuth } from "../../../server/owner/auth.ts";
 import { createWhatsAppSender } from "../../../server/whatsapp/client.ts";
 import { createInstagramSender } from "../../../server/instagram/client.ts";
-import { SupabaseStore } from "../../../server/agent/supabase-store.ts";
+import { PostgresStore } from "../../../server/agent/postgres-store.ts";
 import { demoProducts } from "../../../src/lib/plan.ts";
+import { orderatEnv as env } from "../_shared/env.ts";
+import { getSqlClient } from "../_shared/db.ts";
 
-const env = (name: string) => Deno.env.get(name)?.trim() || undefined;
-
-const store = new SupabaseStore({
-  url: env("SUPABASE_URL") ?? "",
-  serviceRoleKey: env("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-});
+const store = new PostgresStore(getSqlClient(env("DATABASE_URL") ?? ""));
 const products = demoProducts();
 
 const token = env("WHATSAPP_TOKEN");

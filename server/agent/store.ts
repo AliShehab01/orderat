@@ -1,6 +1,7 @@
 // Order storage. MemoryStore is the in-process implementation used by tests and local dev
-// (server/dev.ts) — data is lost when the process restarts. SupabaseStore (supabase-store.ts)
-// persists to Postgres over PostgREST, for the Edge Function deployment, where each request may
+// (server/dev.ts) — data is lost when the process restarts. PostgresStore (postgres-store.ts)
+// persists to Postgres directly (as the least-privilege "orderat_app" role, never Hayati-wide
+// credentials — see README.md "Hosting"), for the Edge Function deployment, where each request may
 // hit a different, freshly-started isolate.
 //
 // The interface is async throughout, even for MemoryStore, so the agent and owner handler code

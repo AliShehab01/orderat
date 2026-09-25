@@ -12,19 +12,21 @@
     "whatsapp:simulate": "tsx server/simulate.ts",
     "ai:check": "tsx server/check-gemini.ts",
     "supabase:init": "supabase init",
-    "supabase:link": "supabase link",
-    "supabase:secrets": "node scripts/supabase-secrets.mjs",
-    "supabase:deploy": "node scripts/supabase-deploy.mjs",
-    "supabase:migrate": "supabase db push",
-    "supabase:logs": "supabase functions logs",
+    "hosting:migrate": "node scripts/hosting-migrate.mjs",
+    "hosting:db-user": "node scripts/hosting-db-user.mjs",
+    "hosting:secrets": "node scripts/hosting-secrets.mjs",
+    "hosting:deploy": "node scripts/hosting-deploy.mjs",
+    "hosting:logs": "supabase functions logs",
     "whatsapp:live": "tsx server/live.ts"
   },
   "dependencies": {
     "next": "16.3.5",
+    "postgres": "3.4.9",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

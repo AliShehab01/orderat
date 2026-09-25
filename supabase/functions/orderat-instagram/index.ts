@@ -1,23 +1,21 @@
 // Supabase Edge Function entry point for the Instagram messaging webhook.
-// Deployed as: supabase functions deploy instagram --use-api
-// Callback URL for Meta: https://<project-ref>.supabase.co/functions/v1/instagram
-// See supabase/functions/whatsapp/index.ts for notes on the import layout and --use-api.
+// Deployed as: npm run hosting:deploy (supabase functions deploy orderat-instagram --use-api)
+// Callback URL for Meta: https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-instagram
+// See supabase/functions/orderat-whatsapp/index.ts for notes on the import layout, --use-api and the
+// orderat- / ORDERAT_ prefixing.
 
 import { createInstagramWebhookHandler } from "../../../server/instagram/webhook.ts";
 import { createInstagramSender, createUrlReader } from "../../../server/instagram/client.ts";
 import { instagramAllowUnsigned } from "../../../server/instagram/config.ts";
 import { createGeminiExtractor } from "../../../server/ai/gemini.ts";
-import { SupabaseStore } from "../../../server/agent/supabase-store.ts";
+import { PostgresStore } from "../../../server/agent/postgres-store.ts";
 import { demoProducts } from "../../../src/lib/plan.ts";
+import { orderatEnv as env } from "../_shared/env.ts";
+import { getSqlClient } from "../_shared/db.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;
 
-const env = (name: string) => Deno.env.get(name)?.trim() || undefined;
-
-const store = new SupabaseStore({
-  url: env("SUPABASE_URL") ?? "",
-  serviceRoleKey: env("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-});
+const store = new PostgresStore(getSqlClient(env("DATABASE_URL") ?? ""));
 const products = demoProducts();
 
 const igToken = env("INSTAGRAM_ACCESS_TOKEN");

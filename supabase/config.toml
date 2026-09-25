@@ -1,6 +1,10 @@
-# Supabase project config. project_id is set for real by `supabase link --project-ref <ref>`
-# (see README.md "Hosting on Supabase") — this placeholder just lets the CLI recognise the project
-# locally before that.
+# Supabase project config, read locally by `deno check` / `supabase functions deploy --use-api
+# --project-ref <ref>` (see README.md "Hosting"). Orderat is hosted inside the founder's existing
+# "Hayati" project, not a project of its own, and hosting:* scripts always pass --project-ref
+# explicitly rather than relying on `supabase link` — a link would point the whole CLI, including
+# `supabase db push`, at Hayati, which is exactly what db/migrations (outside the CLI's managed
+# supabase/migrations folder) exists to avoid. This placeholder just lets the CLI recognise a project
+# locally without ever linking one.
 project_id = "orderat"
 
 # Meta's webhook POSTs (WhatsApp, Instagram) and the owner page's ?key= sign-in carry no Supabase
@@ -8,11 +12,14 @@ project_id = "orderat"
 # itself (server/meta/verify.ts, server/owner/auth.ts). verify_jwt=false only turns off Supabase's
 # own gateway-level "Authorization: Bearer <supabase jwt>" requirement; it does not mean the
 # function is otherwise unauthenticated.
-[functions.whatsapp]
+#
+# Functions are named with an "orderat-" prefix because this project (Hayati) hosts more than just
+# Orderat — see README.md "Hosting" for the isolation contract.
+[functions.orderat-whatsapp]
 verify_jwt = false
 
-[functions.instagram]
+[functions.orderat-instagram]
 verify_jwt = false
 
-[functions.owner]
+[functions.orderat-owner]
 verify_jwt = false
