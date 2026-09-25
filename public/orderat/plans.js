@@ -17,18 +17,6 @@ function orderatBrandPatch() {
   if (welcomeTitle) welcomeTitle.textContent = "مرحبًا في اوردرات";
 }
 
-function planNavPatch() {
-  const nav = document.querySelector(".sidebar nav");
-  if (!nav || nav.querySelector('[data-nav="plans"]')) return;
-  const button = document.createElement("button");
-  button.className = `nav-item ${view === "plans" ? "active" : ""}`;
-  button.dataset.nav = "plans";
-  if (view === "plans") button.setAttribute("aria-current", "page");
-  button.innerHTML = `${icon("plans")}<span>${tr("Plans", "الباقات")}</span><span class="pro-nav-badge">${tr("NEW", "جديد")}</span>`;
-  nav.appendChild(button);
-  button.onclick = () => navigate("plans");
-}
-
 function requirementRow(id, en, ar, noteEn, noteAr, required = true) {
   const checked = Boolean(state.proEligibility[id]);
   return `<label class="requirement-row ${checked ? "checked" : ""}">
@@ -147,11 +135,11 @@ render = function orderatRender() {
     view = "plans";
     document.querySelector("#main-content").innerHTML = pricingPage();
     document.querySelectorAll(".nav-item").forEach((item) => item.classList.remove("active"));
+    document.getElementById("nav-more")?.classList.add("active");
     bindPricing();
   } else {
     orderatBaseRender();
   }
-  planNavPatch();
   orderatBrandPatch();
 };
 
