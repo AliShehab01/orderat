@@ -89,7 +89,16 @@ alter table orderat.processed_messages enable row level security;
 -- orderat_app's privileges to current_user by default; SET TRUE is only what ALTER TABLE ... OWNER
 -- TO actually needs. A plain statement, not a DO/EXECUTE block: re-granting a membership the current
 -- user already holds is not an error, so this is already idempotent on both a real project and PGlite.
-grant orderat_app to current_user with set true, inherit false;
+-- INHERIT TRUE (not FALSE): later migrations also run as "postgres" and must be able to ALTER these
+-- tables, which Postgres only allows the owner or a role inheriting the owner's privileges.
+-- "postgres" is already the project admin, so inheriting orderat_app's narrow rights adds nothing.
+grant orderat_app to current_user with set true, inherit true;
+
+-- Postgres also requires the NEW owner to hold CREATE on the table's schema at the moment of
+-- ALTER ... OWNER TO ("permission denied for schema orderat" otherwise, seen on the real project).
+-- Granted just for the ownership change and revoked again right after, so orderat_app cannot
+-- create new objects at runtime.
+grant usage, create on schema orderat to orderat_app;
 
 -- Ownership, not policies, is how orderat_app reads/writes its two tables: Orderat has no PostgREST
 -- access path at all (it speaks the Postgres wire protocol directly over the pooler — see
@@ -103,6 +112,7 @@ grant orderat_app to current_user with set true, inherit false;
 -- public.processed_messages tables had.
 alter table orderat.orders owner to orderat_app;
 alter table orderat.processed_messages owner to orderat_app;
+revoke create on schema orderat from orderat_app;
 
 grant usage on schema orderat to orderat_app;
 grant select, insert, update, delete on orderat.orders, orderat.processed_messages to orderat_app;
