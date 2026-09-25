@@ -1,4 +1,4 @@
-const CACHE='orderat-prototype-v7';
+const CACHE='orderat-prototype-v10';
 const FILES=['./','./index.html','./style.css','./plans.css','./operations.css','./channels-theme.css','./core.js','./app.js','./ui.js','./flows.js','./operations.js','./plans.js','./channels-theme.js','./webmcp.js','./favicon.svg'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('orderat-prototype-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});

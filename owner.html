@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#173142">
+<meta name="robots" content="noindex">
+<title>لوحة المالك | اوردرات</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;700&family=IBM+Plex+Sans:wght@400;700&display=swap">
+<style>
+  :root {
+    --harbor:#173142; --palm:#2F6D62; --citrus:#D8EF63; --coral:#C96B4B; --canvas:#F6F4EF;
+    --paper:#fff; --slate:#66747B; --line:#D9E0DD; color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --canvas:#0D202A; --paper:#172F3A; --slate:#AFBEC0; --line:#31505A; --harbor:#F4F6F2; --palm:#8FD3C4; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--canvas); color: var(--harbor);
+    font-family: "IBM Plex Sans Arabic","IBM Plex Sans",system-ui,sans-serif; line-height: 1.6;
+  }
+  html[lang="en"] body { font-family: "IBM Plex Sans","IBM Plex Sans Arabic",system-ui,sans-serif; }
+  header { background: var(--harbor); color: #fff; padding: 14px 16px; }
+  header .inner, main { max-width: 720px; margin: 0 auto; }
+  header .inner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 1.2rem; font-weight: 700; }
+  header p { margin: 2px 0 0; color: #b9c7ce; font-size: .82rem; }
+  header .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  header button { font: inherit; font-weight: 700; font-size: .78rem; border: 1px solid rgba(255,255,255,.4); background: transparent; color: #fff; border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+  header button:hover, header button:focus-visible { background: var(--citrus); color: var(--harbor); border-color: var(--citrus); }
+  main { padding: 16px; display: grid; gap: 16px; }
+  .card { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .signin h2 { margin: 0 0 6px; font-size: 1.1rem; }
+  .signin p { color: var(--slate); font-size: .88rem; margin: 0 0 14px; line-height: 1.7; }
+  label { display: block; font-weight: 700; font-size: .85rem; margin-bottom: 6px; }
+  input[type="password"], input[type="text"] { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--harbor); padding: 10px 12px; font: inherit; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: .85rem; color: var(--slate); }
+  .checkbox-row input { width: 16px; height: 16px; accent-color: var(--palm); }
+  .error { color: var(--coral); font-size: .85rem; margin-top: 10px; min-height: 1.2em; }
+  button.primary { font: inherit; font-weight: 700; border: 0; border-radius: 10px; padding: 11px 18px; background: var(--harbor); color: #fff; cursor: pointer; width: 100%; }
+  button.primary:disabled { opacity: .55; cursor: default; }
+  .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 4px 2px; }
+  .section-title h2 { margin: 0; font-size: 1rem; }
+  .section-title span { color: var(--slate); font-size: .8rem; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .name { font-weight: 700; }
+  .contact { color: var(--slate); font-size: .85rem; direction: ltr; unicode-bidi: embed; }
+  .badge { font-size: .75rem; font-weight: 700; border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
+  .badge.pending { background: var(--citrus); color: var(--harbor); }
+  .badge.confirmed { background: #E3EFEA; color: var(--palm); }
+  ul.items { margin: 8px 0; padding-inline-start: 20px; }
+  .meta { color: var(--slate); font-size: .9rem; margin: 2px 0; }
+  .warn { color: var(--coral); }
+  .order-card button.confirm { font: inherit; font-weight: 700; border: 0; border-radius: 10px; padding: 9px 16px; background: var(--harbor); color: #fff; cursor: pointer; margin-top: 10px; }
+  .order-card button.confirm:disabled { opacity: .5; cursor: default; }
+  .empty { text-align: center; color: var(--slate); padding: 28px 16px; font-size: .9rem; }
+  #toast { position: fixed; inset-inline: 16px; bottom: 16px; max-width: 680px; margin: 0 auto; background: var(--harbor); color: #fff; padding: 12px 16px; border-radius: 12px; display: none; font-size: .9rem; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="inner">
+    <div>
+      <h1 data-t="title">اوردرات · لوحة المالك</h1>
+      <p data-t="subtitle">راجع طلبات واتساب وإنستغرام وأكّدها من أي جهاز.</p>
+    </div>
+    <div class="actions">
+      <button type="button" id="lang-toggle" data-t="langToggle">English</button>
+      <button type="button" id="sign-out" hidden data-t="signOut">تسجيل الخروج</button>
+    </div>
+  </div>
+</header>
+<main>
+  <section class="card signin" id="signin-card">
+    <h2 data-t="signinTitle">تسجيل الدخول</h2>
+    <p data-t="signinBody">أدخل مفتاح المالك (OWNER_KEY) مرة واحدة. يبقى محفوظاً في هذا المتصفح فقط.</p>
+    <form id="signin-form">
+      <label for="owner-key" data-t="keyLabel">مفتاح المالك</label>
+      <input type="password" id="owner-key" name="owner-key" autocomplete="off" required>
+      <div class="checkbox-row">
+        <input type="checkbox" id="remember">
+        <label for="remember" data-t="remember" style="margin:0;font-weight:400;">تذكرني على هذا الجهاز</label>
+      </div>
+      <button type="submit" class="primary" id="signin-submit" data-t="signinSubmit">دخول</button>
+      <p class="error" id="signin-error" role="alert"></p>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+    <section>
+      <div class="section-title"><h2 data-t="openTitle">الطلبات المفتوحة</h2><span data-t="openHint">بانتظار تأكيدك</span></div>
+      <div id="open-list"></div>
+    </section>
+    <section>
+      <div class="section-title"><h2 data-t="todayTitle">طلبات اليوم</h2><span data-t="todayHint">حسب وقت الاستلام</span></div>
+      <div id="today-list"></div>
+    </section>
+  </div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="owner.js"></script>
+</body>
+</html>

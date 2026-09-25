@@ -1,6 +1,13 @@
 /* Ready-stock automation, sales analysis and brand guidance. */
 let salesRange = "30";
 
+function periodOrdersText(n) {
+  return state.lang === "en" ? `${n} order${n === 1 ? "" : "s"} in this period` : arPlural(n, "طلب واحد في هذه الفترة", "طلبان في هذه الفترة", "طلبات في هذه الفترة", "طلب في هذه الفترة");
+}
+function collectedOrdersText(n) {
+  return state.lang === "en" ? `${n} order${n === 1 ? "" : "s"} collected` : arPlural(n, "طلب واحد مستلم", "طلبان مستلمان", "طلبات مستلمة", "طلب مستلم");
+}
+
 function ensureCommerceState() {
   const samplePrices = { cheese: 1.5, brownie: 4.5, velvet: 1.75 };
   const sampleStock = { cheese: 42, brownie: 18, velvet: 30 };
@@ -115,8 +122,8 @@ function analyticsPage() {
     tr("SALES VIEW", "نظرة المبيعات")
   ) + sampleBanner() + (orders.length ? `<section class="stats analytics-stats">
     <article class="stat"><div><span>${tr("Booked sales", "مبيعات محجوزة")}</span>${icon("analytics")}</div><strong class="money-value">${money(revenue)}</strong><p>${tr("Using current product prices", "بحسب أسعار المنتجات الحالية")}</p></article>
-    <article class="stat"><div><span>${tr("Average order", "متوسط الطلب")}</span>${icon("orders")}</div><strong class="money-value">${money(average)}</strong><p>${orders.length} ${tr("orders in this period", "طلبات في هذه الفترة")}</p></article>
-    <article class="stat"><div><span>${tr("Units booked", "القطع المحجوزة")}</span>${icon("box")}</div><strong>${units}<small>${tr("units", "قطعة")}</small></strong><p>${collected} ${tr("orders collected", "طلبات مستلمة")}</p></article>
+    <article class="stat"><div><span>${tr("Average order", "متوسط الطلب")}</span>${icon("orders")}</div><strong class="money-value">${money(average)}</strong><p>${periodOrdersText(orders.length)}</p></article>
+    <article class="stat"><div><span>${tr("Units booked", "القطع المحجوزة")}</span>${icon("box")}</div><strong>${units}<small>${tr("units", "قطعة")}</small></strong><p>${collectedOrdersText(collected)}</p></article>
   </section>
   <section class="insight-card">${icon("analytics")}<div><span>${tr("WHAT THE DATA SAYS", "ماذا تقول البيانات")}</span><strong>${esc(insight)}</strong></div></section>
   <div class="analytics-grid">
@@ -151,14 +158,14 @@ function stockEditor(productId) {
 
 function brandGuide() {
   const colours = [
-    ["Harbor", "#173142", tr("Sidebar, headings, primary buttons", "الشريط الجانبي والعناوين والأزرار الأساسية")],
-    ["Palm", "#2F6D62", tr("Links, useful insights, positive actions", "الروابط والرؤى والإجراءات الإيجابية")],
-    ["Citrus", "#D8EF63", tr("Active navigation and decisive highlights", "التنقل النشط والتمييز الحاسم")],
-    ["Sand", "#E9DDCA", tr("Warm labels and supporting emphasis", "الملصقات الدافئة والتأكيد المساند")],
-    ["Coral", "#C96B4B", tr("Capacity and low-stock warnings", "تنبيهات الطاقة والمخزون المنخفض")],
-    ["Canvas", "#F6F4EF", tr("App background", "خلفية التطبيق")],
+    ["Harbor", "#15171C", tr("Sidebar and dark panels", "الشريط الجانبي واللوحات الداكنة")],
+    ["Accent", "#4156D3", tr("Links, primary buttons, active states", "الروابط والأزرار الأساسية والحالات النشطة")],
+    ["Success", "#1F7A46", tr("Collected orders, healthy stock", "الطلبات المستلمة والمخزون الجيد")],
+    ["Warning", "#A86A17", tr("Capacity and low-stock warnings", "تنبيهات الطاقة والمخزون المنخفض")],
+    ["Danger", "#C0362C", tr("Destructive actions, cancelled orders", "الإجراءات الحساسة والطلبات الملغاة")],
+    ["Canvas", "#FAFAFB", tr("App background", "خلفية التطبيق")],
     ["Paper", "#FFFFFF", tr("Cards, panels and forms", "البطاقات واللوحات والنماذج")],
-    ["Slate", "#66747B", tr("Secondary text", "النص الثانوي")]
+    ["Slate", "#68707C", tr("Secondary text", "النص الثانوي")]
   ];
   modal(tr("Orderat brand guide", "دليل هوية اوردرات"), `<div class="brand-guide">
     <section><span class="guide-kicker">${tr("PROMISE", "الوعد")}</span><h3>${tr("Orders clear. Day calm.", "طلبات واضحة. يوم أهدأ.")}</h3><p>${tr("Orderat sounds like a reliable operations partner: clear, calm and accountable.", "تتحدث اوردرات كشريك تشغيل موثوق: واضحة وهادئة ومسؤولة.")}</p></section>
