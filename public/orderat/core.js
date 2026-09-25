@@ -41,12 +41,12 @@ Object.assign(OA, (()=>{
   }
   if(changes)out.flags.push('unmatched-change');
   let consumed=[];
-  for(const p of s.products){const aliases=[...new Set([p.en,p.ar,...p.aliases||[]].filter(Boolean).map(clean))].sort((a,b)=>b.length-a.length);let found=false;for(const a of aliases){const m=str.match(new RegExp('(?:^|[\\s,:،;و])([0-9]+)\\s*(?:x|×)?\\s*'+rx(a)+'(?=$|[\\s,.،;])','i'));if(m){out.items.push({productId:p.id,quantity:Number(m[1]),note:''});consumed.push(m[0]);found=true;break}}if(!found&&aliases.some(a=>str.includes(a))){out.items.push({productId:p.id,quantity:'',note:''});out.flags.push('quantity');const hit=aliases.find(a=>str.includes(a));if(hit)consumed.push(hit)}}
+  const unitWords='علبة|بوكس|كيس|قطعة|حبة|كوب|box|cup|pcs?|pc';
+  for(const p of s.products){const aliases=[...new Set([p.en,p.ar,...p.aliases||[]].filter(Boolean).map(clean))].sort((a,b)=>b.length-a.length);let found=false;for(const a of aliases){const m=str.match(new RegExp('(?:^|[\\s,:،;و])([0-9]+)\\s*(?:x|×)?\\s*(?:(?:'+unitWords+')\\s*)?'+rx(a)+'(?=$|[\\s,.،;])','i'));if(m){out.items.push({productId:p.id,quantity:Number(m[1]),note:''});consumed.push(m[0]);found=true;break}}if(!found&&aliases.some(a=>str.includes(a))){out.items.push({productId:p.id,quantity:'',note:''});out.flags.push('quantity');const hit=aliases.find(a=>str.includes(a));if(hit)consumed.push(hit)}}
   let residual=str;for(const c of consumed)residual=residual.replace(c,' ');
   if(tm)residual=residual.replace(tm[0],' ');
   if(iso)residual=residual.replace(iso[0],' ');
   residual=residual.replace(/tomorrow|بكره|بكرة|غدا|غداً|today|اليوم|الساعة|الساعه|@|\bat\b|am|pm|a\.m\.|p\.m\.|صباحا|صباحًا|صباح|الصبح|مساء|مساءً|مسا|العصر|المغرب|الظهر|الليل|بالليل|\bnext\b|القادم|الجاي/gi,' ');
-  const unitWords='علبة|بوكس|كيس|قطعة|حبة|كوب|box|cup|pcs?|pc';
   const itemRx=new RegExp('(\\d+)\\s*(?:x|×)?\\s*(?:'+unitWords+')?\\s*([\\u0600-\\u06FFa-zA-Z][\\u0600-\\u06FFa-zA-Z\\s]{1,20})','gi');
   let im,addedUnknown=false;
   if(!changes)while((im=itemRx.exec(residual))){let name=im[2].replace(/\s+(و|and|,|،)\s*$/i,'').trim().replace(/\s+/g,' ');if(name.length<2)continue;name=name.split(' ').slice(0,3).join(' ');out.items.push({productId:'',quantity:Number(im[1]),note:'',raw:name});addedUnknown=true}
