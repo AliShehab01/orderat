@@ -30,7 +30,8 @@ function main() {
 
   for (const name of targets) {
     console.log(`\nDeploying ${name} to project ${projectRef}...`);
-    const result = spawnSync("npx", ["supabase", "functions", "deploy", name, "--project-ref", projectRef, "--use-api", "--no-verify-jwt"], { stdio: "inherit" });
+    // shell: true — see scripts/lib/hosting-env.mjs's runDbQueryFile for why (npx.cmd on Windows).
+    const result = spawnSync("npx", ["supabase", "functions", "deploy", name, "--project-ref", projectRef, "--use-api", "--no-verify-jwt"], { stdio: "inherit", shell: true });
     if (result.status !== 0) {
       console.error(`Deploy of ${name} failed (exit ${result.status}).`);
       process.exit(result.status ?? 1);

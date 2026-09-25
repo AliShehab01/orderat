@@ -71,7 +71,11 @@ export function resolveProjectRef(argv) {
 export function runDbQueryFile(projectRef, sqlFilePath, { json = false } = {}) {
   const args = ["supabase", "db", "query", "--linked", "--project-ref", projectRef, "--file", sqlFilePath];
   if (json) args.push("--output-format", "json");
-  const result = spawnSync("npx", args, { encoding: "utf8", stdio: json ? ["inherit", "pipe", "inherit"] : "inherit" });
+  // shell: true — on Windows, `npx` on PATH is npx.cmd, and spawnSync can't launch a .cmd directly
+  // without a shell (it throws ENOENT even though `npx --version` works fine from an actual shell).
+  // Every arg here is either a fixed literal or one this script generated itself (project ref, our
+  // own temp file path), never anything from outside input, so shell interpretation of them is safe.
+  const result = spawnSync("npx", args, { encoding: "utf8", stdio: json ? ["inherit", "pipe", "inherit"] : "inherit", shell: true });
   if (result.status !== 0) {
     throw new Error(`supabase db query failed (exit ${result.status ?? "?"})`);
   }
