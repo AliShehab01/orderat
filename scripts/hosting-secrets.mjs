@@ -33,6 +33,7 @@ export const ALLOWLIST = [
   "INSTAGRAM_API_VERSION",
   "INSTAGRAM_REPLY_TO",
   "OWNER_KEY",
+  "OWNER_ALLOWED_ORIGINS",
 ];
 
 // Local-only convenience flags (server/dev.ts, server/whatsapp/webhook.ts, server/instagram/config.ts)

@@ -27,12 +27,15 @@ What it does today:
 - With a `GEMINI_API_KEY`, Gemini reads text, voice notes and screenshots. If Gemini fails, text falls back to the built-in parser and media gets an acknowledgement. Without a key, only text is read.
 - The owner page lists the agent's orders. Confirming an order sends the customer a WhatsApp confirmation.
 - Orders are kept in memory and are lost on restart.
-- The owner routes (`/owner`, `/owner/api/...`) require `OWNER_KEY` auth (`server/owner/auth.ts`), the
-  same mechanism the hosted Supabase owner function uses — visiting `/owner?key=<OWNER_KEY>` once sets
-  a sign-in cookie. This is on top of, not instead of, the existing "this computer only" check: if
-  `OWNER_KEY` is not set in `.env.local`, `npm run whatsapp:dev` generates a random one for that run
-  and prints the one-time sign-in URL (`http://localhost:8787/owner?key=...`) to the console — open it
-  once per restart, or set `OWNER_KEY` yourself to keep the same URL across restarts.
+- The owner routes (`/owner`, `/owner/api/...`) require `OWNER_KEY` auth (`server/owner/auth.ts`):
+  visiting `/owner?key=<OWNER_KEY>` once sets a sign-in cookie, and every later request (page load or
+  API call) is authorized by that cookie or by an `Authorization: Bearer <OWNER_KEY>` header. This is
+  on top of, not instead of, the existing "this computer only" check: if `OWNER_KEY` is not set in
+  `.env.local`, `npm run whatsapp:dev` generates a random one for that run and prints the one-time
+  sign-in URL (`http://localhost:8787/owner?key=...`) to the console — open it once per restart, or
+  set `OWNER_KEY` yourself to keep the same URL across restarts. The hosted Supabase owner function
+  (see "Hosting" below) uses `OWNER_KEY` too, but never the cookie: it's Bearer-only and reachable
+  cross-origin, served by a separate static page instead of this cookie-based flow.
 
 Settings in `.env.local` (never committed):
 
@@ -120,6 +123,38 @@ adapter) — **if a deploy ever fails to bundle the outside imports**, the fallb
 the three `index.ts` files and `server/dev.ts` at that copy instead — a single source of truth
 either way, just relocated.
 
+### The owner page, hosted
+
+Supabase Edge Functions on `*.supabase.co` rewrite `text/html` responses to `text/plain` unless the
+project has a custom domain (Supabase's own limits doc: "Serving of HTML content is only supported
+with custom domains"), which this shared, free-tier project doesn't have. So `orderat-owner` never
+serves the HTML page `server/owner/page.ts` returns locally — the owner UI for the hosted deployment
+is a separate static page instead:
+
+- **`orderat-owner` is JSON-only.** `server/owner/json-only.ts` strips the `GET /owner` HTML route
+  (turning it into a JSON 404); every other route (list orders, confirm) is unchanged. Auth is
+  `server/owner/auth.ts`'s `withOwnerBearerAuth` — `Authorization: Bearer <OWNER_KEY>` only, no
+  cookie, since a cookie set by one origin can't be sent to another without
+  `Access-Control-Allow-Credentials`, which is never set (see next point). `server/dev.ts`'s local
+  flow is untouched: it still uses `withOwnerAuth` (cookie sign-in) and still serves the HTML page.
+- **Strict CORS**, `server/owner/cors.ts`: only origins listed in `ORDERAT_OWNER_ALLOWED_ORIGINS` (a
+  comma list, default `https://alishehab01.github.io`) are ever reflected in
+  `Access-Control-Allow-Origin`; every other `Origin` gets no CORS headers at all, and
+  `Access-Control-Allow-Credentials` is never sent.
+- **`public/orderat/owner.html` + `owner.js`**, published the same way as the legal pages (GitHub
+  Pages, `gh-pages` branch — see "Legal pages" below): asks for `OWNER_KEY` once, keeps it in
+  `sessionStorage` (or `localStorage` if "Remember on this device" is ticked), and calls
+  `https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-owner` with the Bearer header. Arabic
+  first (RTL) with an English toggle, Latin digits throughout.
+- **`server/owner/hosted-path.ts`** rewrites the Edge Function's own
+  `/functions/v1/orderat-owner` path prefix (which Supabase does not strip — see its routing docs)
+  onto the `/owner`-rooted paths `server/owner/handler.ts` matches, so that one shared handler needs
+  no host-specific routes.
+
+If the static page is ever published somewhere other than the default GitHub Pages origin, set
+`ORDERAT_OWNER_ALLOWED_ORIGINS` (pushed by `npm run hosting:secrets`, see `.env.example`) to match —
+otherwise the browser will refuse to let `owner.js` read the API's responses.
+
 ### Move to a dedicated project later
 
 Everything above is what makes this cheap: a new project is a new `ORDERAT_DATABASE_URL` (plus the
@@ -193,9 +228,10 @@ When it becomes a real constraint, that's the trigger for "Move to a dedicated p
    ```
    npm run hosting:db-user
    ```
-5. **Add the WhatsApp/Instagram/Gemini/`OWNER_KEY` settings to `.env.local`** (unprefixed — same
-   names `server/dev.ts` already reads; see `.env.example`), then **push them as hosted secrets**
-   (renamed with the `ORDERAT_` prefix, never printed):
+5. **Add the WhatsApp/Instagram/Gemini/`OWNER_KEY`/`OWNER_ALLOWED_ORIGINS` settings to `.env.local`**
+   (unprefixed — same names `server/dev.ts` already reads, plus `OWNER_ALLOWED_ORIGINS` which only
+   the hosted function reads; see `.env.example`), then **push them as hosted secrets** (renamed with
+   the `ORDERAT_` prefix, never printed):
    ```
    npm run hosting:secrets
    ```
@@ -208,10 +244,13 @@ When it becomes a real constraint, that's the trigger for "Move to a dedicated p
    Webhooks), then click Verify and Save:
    - WhatsApp: `https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-whatsapp`
    - Instagram: `https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-instagram`
-8. **Sign in to the hosted owner page** once, in a browser: visit
-   `https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-owner?key=<OWNER_KEY>`. It
-   redirects back to the same page with the cookie set; bookmark the plain URL (without `?key=`)
-   after that.
+8. **Open the hosted owner page** — `public/orderat/owner.html`, published on GitHub Pages the same
+   way as the legal pages (see "Legal pages" below, and check the `gh-pages` branch / repo settings
+   for the exact published URL — `owner.html` next to `privacy.html`). Enter `OWNER_KEY` once; the
+   page calls `orderat-owner` with it as a Bearer header and keeps it in this browser only (see "The
+   owner page, hosted" above). The default `ORDERAT_OWNER_ALLOWED_ORIGINS` (step 5) only allows
+   `https://alishehab01.github.io` — if the page is published under a different origin, set that
+   variable to match first, or the browser will refuse to let the page read the API's responses.
 9. **Watch logs** while testing: the pinned CLI (`supabase@2.117.0`) has no log-tailing subcommand —
    `supabase functions` only has `list`/`delete`/`download`/`deploy`/`new`/`serve`, and there's no
    top-level `logs` either (checked via `npx supabase functions --help` and `npx supabase --help`).
@@ -225,3 +264,5 @@ pushed, and nothing was deployed.
 ## Legal pages
 
 `public/orderat/privacy.html`, `terms.html` and `data-deletion.html` are published on GitHub Pages and set in the Meta app settings. The `gh-pages` branch is a copy of `public/orderat`.
+
+`public/orderat/owner.html` and `owner.js` are published the same way — see "The owner page, hosted" under "Hosting" above.
