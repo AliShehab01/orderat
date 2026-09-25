@@ -45,7 +45,7 @@ const igSend = igToken ? createInstagramSender({ token: igToken, apiVersion: env
 
 const rawOwnerHandler = createOwnerHandler({ store, products, senders: { whatsapp: send, instagram: igSend } });
 const apiOnly = withOwnerApiOnly(rawOwnerHandler);
-const pathAdjusted = withHostedOwnerPath("/functions/v1/orderat-owner", apiOnly);
+const pathAdjusted = withHostedOwnerPath(["/functions/v1/orderat-owner", "/orderat-owner"], apiOnly);
 const authed = withOwnerBearerAuth(env("OWNER_KEY"), pathAdjusted);
 const handler = withOwnerCors(parseAllowedOrigins(env("OWNER_ALLOWED_ORIGINS")), authed);
 

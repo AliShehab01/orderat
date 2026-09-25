@@ -16,6 +16,13 @@ function echo() {
 }
 
 describe("withHostedOwnerPath", () => {
+  it("also strips the short /<function-name> prefix the deployed function really sees", async () => {
+    const handler = withHostedOwnerPath(["/functions/v1/orderat-owner", "/orderat-owner"], async (req) => new Response(new URL(req.url).pathname));
+    expect(await (await handler(new Request("https://x.supabase.co/orderat-owner/api/orders"))).text()).toBe("/owner/api/orders");
+    expect(await (await handler(new Request("https://x.supabase.co/functions/v1/orderat-owner/api/orders"))).text()).toBe("/owner/api/orders");
+    expect(await (await handler(new Request("https://x.supabase.co/orderat-owner"))).text()).toBe("/owner");
+  });
+
   it("rewrites the bare function URL to /owner", async () => {
     const res = await echo()(new Request(`https://x.supabase.co${PREFIX}`));
     expect(await res.json()).toMatchObject({ pathname: "/owner" });
