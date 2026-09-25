@@ -7,7 +7,6 @@ function ensureOrderSources() {
     "sample-ali": { intake: "manual", channel: "other", sourceRef: "Phone order" }
   };
   let changed = false;
-  state.theme ||= "light";
   [...state.orders, ...state.drafts].forEach((order) => {
     const sample = samples[order.id];
     if (!order.intake) { order.intake = sample?.intake || "manual"; changed = true; }
@@ -28,6 +27,17 @@ const channelNames = {
 const intakeNames = { auto: ["Automatic", "تلقائي"], manual: ["Manual", "يدوي"] };
 const channelName = (channel) => tr(...(channelNames[channel] || channelNames.other));
 const intakeName = (intake) => tr(...(intakeNames[intake] || intakeNames.manual));
+
+// Orderat follows the device's light/dark setting until the seller picks one explicitly in Settings.
+function isDarkTheme() {
+  if (state.theme === "dark") return true;
+  if (state.theme === "light") return false;
+  return Boolean(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+}
+function applyThemeAttribute() {
+  if (state.theme) document.documentElement.dataset.theme = state.theme;
+  else delete document.documentElement.dataset.theme;
+}
 
 function sourceCaption(order, includeReference = true) {
   const reference = order.sourceRef?.trim() || tr("Reference not recorded", "المرجع غير مسجل");
@@ -108,35 +118,36 @@ exportCsv = function sourcedExportCsv() {
 
 function mobileMoreMenu() {
   const destinations = [
-    ["plan", "plan"], ["analytics", "analytics"], ["products", "products"], ["plans", "plans"], ["settings", "settings"]
+    ["inventory", "inventory"], ["analytics", "analytics"], ["products", "products"], ["plans", "plans"], ["settings", "settings"]
   ];
-  modal(tr("More tools", "المزيد من الأدوات"), `<div class="more-menu">${destinations.map(([destination, iconName]) => `<button data-more-nav="${destination}" class="more-menu-item ${view === destination ? "active" : ""}">${icon(iconName)}<span><strong>${tr(...labels[destination])}</strong><small>${({ plan: tr("Preparation and packing", "التحضير والتغليف"), analytics: tr("Sales and demand", "المبيعات والطلب"), products: tr("Menu and batch setup", "المنتجات والدفعات"), plans: tr("Basic and Pro", "بيسك وبرو"), settings: tr("Workspace and brand", "المساحة والهوية") })[destination]}</small></span>${icon("arrow")}</button>`).join("")}</div>`, tr("Everything else, one tap away.", "كل الأدوات الأخرى على بُعد نقرة."));
+  modal(tr("More tools", "المزيد من الأدوات"), `<div class="more-menu">${destinations.map(([destination, iconName]) => `<button data-more-nav="${destination}" class="more-menu-item ${view === destination ? "active" : ""}">${icon(iconName)}<span><strong>${tr(...labels[destination])}</strong><small>${({ inventory: tr("Finished stock and reservations", "المخزون الجاهز والحجوزات"), analytics: tr("Sales and demand", "المبيعات والطلب"), products: tr("Menu and batch setup", "المنتجات والدفعات"), plans: tr("Basic and Pro", "بيسك وبرو"), settings: tr("Workspace and brand", "المساحة والهوية") })[destination]}</small></span>${icon("arrow")}</button>`).join("")}</div>`, tr("Everything else, one tap away.", "كل الأدوات الأخرى على بُعد نقرة."));
   modalEl.querySelectorAll("[data-more-nav]").forEach((button) => button.onclick = () => { closeModal(); navigate(button.dataset.moreNav); });
 }
 
 const sourceBaseSettings = settingsPage;
 settingsPage = function sourcedSettings() {
-  return sourceBaseSettings() + `<section class="panel settings-panel spaced"><div class="settings-section"><h2>${tr("Appearance", "المظهر")}</h2><p>${tr("Use the light or dark Orderat palette. Your choice is saved on this device.", "استخدم لوحة اوردرات الفاتحة أو الداكنة. يُحفظ اختيارك على هذا الجهاز.")}</p><label for="theme-setting">${tr("Colour mode", "نمط الألوان")}</label><select id="theme-setting"><option value="light" ${state.theme !== "dark" ? "selected" : ""}>${tr("Light", "فاتح")}</option><option value="dark" ${state.theme === "dark" ? "selected" : ""}>${tr("Dark", "داكن")}</option></select></div></section>`;
+  return sourceBaseSettings() + `<section class="panel settings-panel spaced"><div class="settings-section"><h2>${tr("Appearance", "المظهر")}</h2><p>${tr("Follows your device by default. Choose a palette to override it on this device.", "تتبع إعداد جهازك افتراضيًا. اختر لوحة ألوان لتجاوزه على هذا الجهاز.")}</p><label for="theme-setting">${tr("Colour mode", "نمط الألوان")}</label><select id="theme-setting"><option value="light" ${!isDarkTheme() ? "selected" : ""}>${tr("Light", "فاتح")}</option><option value="dark" ${isDarkTheme() ? "selected" : ""}>${tr("Dark", "داكن")}</option></select></div></section>`;
 };
 
 function patchShell() {
-  document.documentElement.dataset.theme = state.theme || "light";
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", state.theme === "dark" ? "#0D202A" : "#173142");
+  applyThemeAttribute();
+  const dark = isDarkTheme();
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#0B0C0F" : "#15171C");
   const topActions = document.querySelector(".top-actions");
   if (topActions && !document.getElementById("theme-toggle")) {
     const themeButton = document.createElement("button");
     themeButton.id = "theme-toggle";
     themeButton.className = "icon-button theme-toggle";
-    themeButton.setAttribute("aria-label", state.theme === "dark" ? tr("Use light mode", "استخدم الوضع الفاتح") : tr("Use dark mode", "استخدم الوضع الداكن"));
-    themeButton.innerHTML = `${icon("theme")}<span>${state.theme === "dark" ? tr("Light", "فاتح") : tr("Dark", "داكن")}</span>`;
+    themeButton.setAttribute("aria-label", dark ? tr("Use light mode", "استخدم الوضع الفاتح") : tr("Use dark mode", "استخدم الوضع الداكن"));
+    themeButton.innerHTML = `${icon("theme")}<span>${dark ? tr("Light", "فاتح") : tr("Dark", "داكن")}</span>`;
     topActions.insertBefore(themeButton, document.getElementById("language"));
-    themeButton.onclick = () => { state.theme = state.theme === "dark" ? "light" : "dark"; persist(); render(); };
+    themeButton.onclick = () => { state.theme = dark ? "light" : "dark"; persist(); render(); };
   }
   const nav = document.querySelector(".sidebar nav");
   if (nav && !document.getElementById("mobile-more")) {
     const more = document.createElement("button");
     more.id = "mobile-more";
-    more.className = `nav-item mobile-more ${["plan", "analytics", "products", "plans", "settings"].includes(view) ? "active" : ""}`;
+    more.className = `nav-item mobile-more ${["inventory", "analytics", "products", "plans", "settings"].includes(view) ? "active" : ""}`;
     more.innerHTML = `${icon("more")}<span>${tr("More", "المزيد")}</span>`;
     more.onclick = mobileMoreMenu;
     nav.appendChild(more);
@@ -148,7 +159,7 @@ function patchShell() {
 const sourceBaseRender = render;
 render = function sourcedRender() {
   ensureOrderSources();
-  document.documentElement.dataset.theme = state.theme || "light";
+  applyThemeAttribute();
   sourceBaseRender();
   patchShell();
 };
