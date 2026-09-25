@@ -1,6 +1,13 @@
 /* Ready-stock automation, sales analysis and brand guidance. */
 let salesRange = "30";
 
+function periodOrdersText(n) {
+  return state.lang === "en" ? `${n} order${n === 1 ? "" : "s"} in this period` : arPlural(n, "طلب واحد في هذه الفترة", "طلبان في هذه الفترة", "طلبات في هذه الفترة", "طلب في هذه الفترة");
+}
+function collectedOrdersText(n) {
+  return state.lang === "en" ? `${n} order${n === 1 ? "" : "s"} collected` : arPlural(n, "طلب واحد مستلم", "طلبان مستلمان", "طلبات مستلمة", "طلب مستلم");
+}
+
 function ensureCommerceState() {
   const samplePrices = { cheese: 1.5, brownie: 4.5, velvet: 1.75 };
   const sampleStock = { cheese: 42, brownie: 18, velvet: 30 };
@@ -115,8 +122,8 @@ function analyticsPage() {
     tr("SALES VIEW", "نظرة المبيعات")
   ) + sampleBanner() + (orders.length ? `<section class="stats analytics-stats">
     <article class="stat"><div><span>${tr("Booked sales", "مبيعات محجوزة")}</span>${icon("analytics")}</div><strong class="money-value">${money(revenue)}</strong><p>${tr("Using current product prices", "بحسب أسعار المنتجات الحالية")}</p></article>
-    <article class="stat"><div><span>${tr("Average order", "متوسط الطلب")}</span>${icon("orders")}</div><strong class="money-value">${money(average)}</strong><p>${orders.length} ${tr("orders in this period", "طلبات في هذه الفترة")}</p></article>
-    <article class="stat"><div><span>${tr("Units booked", "القطع المحجوزة")}</span>${icon("box")}</div><strong>${units}<small>${tr("units", "قطعة")}</small></strong><p>${collected} ${tr("orders collected", "طلبات مستلمة")}</p></article>
+    <article class="stat"><div><span>${tr("Average order", "متوسط الطلب")}</span>${icon("orders")}</div><strong class="money-value">${money(average)}</strong><p>${periodOrdersText(orders.length)}</p></article>
+    <article class="stat"><div><span>${tr("Units booked", "القطع المحجوزة")}</span>${icon("box")}</div><strong>${units}<small>${tr("units", "قطعة")}</small></strong><p>${collectedOrdersText(collected)}</p></article>
   </section>
   <section class="insight-card">${icon("analytics")}<div><span>${tr("WHAT THE DATA SAYS", "ماذا تقول البيانات")}</span><strong>${esc(insight)}</strong></div></section>
   <div class="analytics-grid">
