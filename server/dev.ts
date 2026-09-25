@@ -3,7 +3,9 @@
 
 import { createServer, type IncomingMessage } from "node:http";
 import { existsSync } from "node:fs";
-import { MemoryStore } from "./agent/store.ts";
+import { MemoryStore, type OrderStore } from "./agent/store.ts";
+import { PostgresStore } from "./agent/postgres-store.ts";
+import { createPostgresSqlClient } from "./agent/postgres-client.ts";
 import { createWhatsAppSender } from "./whatsapp/client.ts";
 import { createWebhookHandler } from "./whatsapp/webhook.ts";
 import { createOwnerHandler } from "./owner/handler.ts";
@@ -36,7 +38,11 @@ const appSecret = env("WHATSAPP_APP_SECRET");
 const allowUnsigned = env("WHATSAPP_ALLOW_UNSIGNED") === "1";
 if (!appSecret) console.warn(allowUnsigned ? "Warning: no WHATSAPP_APP_SECRET, accepting unsigned webhook calls (testing only)." : "No WHATSAPP_APP_SECRET: unsigned webhook calls will be rejected.");
 
-const store = new MemoryStore();
+// ORDERAT_DATABASE_URL points at Hayati's pooler as the least-privilege "orderat_app" role (see
+// README.md "Hosting"); without it, orders live only in this process's memory, same as always.
+const databaseUrl = env("ORDERAT_DATABASE_URL");
+const store: OrderStore = databaseUrl ? new PostgresStore(createPostgresSqlClient(databaseUrl)) : new MemoryStore();
+console.log(databaseUrl ? "Orders: Postgres (ORDERAT_DATABASE_URL set)." : "Orders: in-memory only (no ORDERAT_DATABASE_URL) — lost on restart.");
 const products = demoProducts();
 const send = createWhatsAppSender({ token: token ?? "", phoneNumberId: phoneNumberId ?? "", apiVersion: env("WHATSAPP_API_VERSION"), dryRun });
 const geminiKey = env("GEMINI_API_KEY");
