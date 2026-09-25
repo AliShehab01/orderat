@@ -143,14 +143,10 @@ function patchShell() {
     topActions.insertBefore(themeButton, document.getElementById("language"));
     themeButton.onclick = () => { state.theme = dark ? "light" : "dark"; persist(); render(); };
   }
-  const nav = document.querySelector(".sidebar nav");
-  if (nav && !document.getElementById("mobile-more")) {
-    const more = document.createElement("button");
-    more.id = "mobile-more";
-    more.className = `nav-item mobile-more ${["inventory", "analytics", "products", "plans", "settings"].includes(view) ? "active" : ""}`;
-    more.innerHTML = `${icon("more")}<span>${tr("More", "المزيد")}</span>`;
+  const more = document.getElementById("nav-more");
+  if (more) {
+    more.classList.toggle("active", ["inventory", "analytics", "products", "plans", "settings"].includes(view));
     more.onclick = mobileMoreMenu;
-    nav.appendChild(more);
   }
   const themeSetting = document.getElementById("theme-setting");
   if (themeSetting) themeSetting.onchange = () => { state.theme = themeSetting.value; persist(); render(); };
