@@ -78,6 +78,19 @@ create table if not exists orderat.schema_migrations (
 alter table orderat.orders enable row level security;
 alter table orderat.processed_messages enable row level security;
 
+-- ALTER TABLE ... OWNER TO orderat_app below requires the connecting role to either be a superuser
+-- or hold orderat_app membership with the SET option (Postgres's rule for changing an object's
+-- owner). Supabase's own "postgres" role — which is what actually runs this migration against the
+-- real project, via hosting-migrate.mjs's admin connection — is not a superuser there, so without
+-- this grant the ALTER TABLE statements fail with "must be able to SET ROLE \"orderat_app\""
+-- (42501); verified against the real Hayati project (ref ckjmbdbvlbxfofjgqiuj) in a rolled-back
+-- transaction. PGlite (server/agent/postgres-store.test.ts) runs as a superuser, which is why that
+-- suite alone never caught this. INHERIT FALSE keeps this membership from silently handing
+-- orderat_app's privileges to current_user by default; SET TRUE is only what ALTER TABLE ... OWNER
+-- TO actually needs. A plain statement, not a DO/EXECUTE block: re-granting a membership the current
+-- user already holds is not an error, so this is already idempotent on both a real project and PGlite.
+grant orderat_app to current_user with set true, inherit false;
+
 -- Ownership, not policies, is how orderat_app reads/writes its two tables: Orderat has no PostgREST
 -- access path at all (it speaks the Postgres wire protocol directly over the pooler — see
 -- server/agent/postgres-store.ts), so there is no anon/authenticated request to write an RLS policy
