@@ -5,3 +5,4 @@ const icons={today:'<rect x="3" y="4" width="18" height="17" rx="3"/><path d="M7
 const icon=n=>`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[n]||icons.orders}</svg>`;
 const pname=p=>state.lang==='en'?p?.en:p?.ar||p?.en;
 const timeLabel=s=>s?new Date(`2000-01-01T${s}`).toLocaleTimeString(state.lang==='en'?'en-US':'ar-BH-u-nu-latn',{hour:'numeric',minute:'2-digit'}):tr('Time missing','الوقت غير محدد');
+function localizeValidity(scope){(scope||document).querySelectorAll('input,select,textarea').forEach(el=>{if(el._localizedValidity)return;el._localizedValidity=true;el.addEventListener('invalid',()=>el.setCustomValidity(tr('Please complete this field.','يرجى تعبئة هذا الحقل.')));el.addEventListener('input',()=>el.setCustomValidity(''));el.addEventListener('change',()=>el.setCustomValidity(''))})}
