@@ -42,8 +42,28 @@ Object.assign(OA, (()=>{
   if(changes)out.flags.push('unmatched-change');
   let consumed=[];
   const unitWords='علبة|بوكس|كيس|قطعة|حبة|كوب|box|cup|pcs?|pc';
-  for(const p of s.products){const aliases=[...new Set([p.en,p.ar,...p.aliases||[]].filter(Boolean).map(clean))].sort((a,b)=>b.length-a.length);let found=false;for(const a of aliases){const m=str.match(new RegExp('(?:^|[\\s,:،;و])([0-9]+)\\s*(?:x|×)?\\s*(?:(?:'+unitWords+')\\s*)?'+rx(a)+'(?=$|[\\s,.،;])','i'));if(m){out.items.push({productId:p.id,quantity:Number(m[1]),note:''});consumed.push(m[0]);found=true;break}}if(!found&&aliases.some(a=>str.includes(a))){out.items.push({productId:p.id,quantity:'',note:''});out.flags.push('quantity');const hit=aliases.find(a=>str.includes(a));if(hit)consumed.push(hit)}}
+  for(const p of s.products){
+   const aliases=[...new Set([p.en,p.ar,...p.aliases||[]].filter(Boolean).map(clean))].sort((a,b)=>b.length-a.length);
+   let found=false;
+   for(const a of aliases){
+    const before=str.match(new RegExp('(?:^|[\\s,:،;و])([0-9]+)\\s*(?:x|×)?\\s*(?:(?:'+unitWords+')\\s*)?'+rx(a)+'(?=$|[\\s,.،;])','i'));
+    if(before){out.items.push({productId:p.id,quantity:Number(before[1]),note:''});consumed.push(before[0]);found=true;break}
+    const after=str.match(new RegExp('(?:^|[\\s,:،;و])'+rx(a)+'\\s*(?:x|×)?\\s*(?:'+unitWords+')?\\s*([0-9]+)(?=$|[\\s,.،;])','i'));
+    if(after){out.items.push({productId:p.id,quantity:Number(after[1]),note:''});consumed.push(after[0]);found=true;break}
+    const parts=a.split(' ');
+    if(/^[؀-ۿ]+$/.test(parts[0])){
+     const dualPattern='(?:^|[\\s,:،;و])'+rx(parts[0])+'ين'+(parts.length>1?'\\s+'+parts.slice(1).map(rx).join('\\s+'):'')+'(?=$|[\\s,.،;])';
+     const dual=str.match(new RegExp(dualPattern,'i'));
+     if(dual){out.items.push({productId:p.id,quantity:2,note:''});consumed.push(dual[0]);found=true;break}
+    }
+   }
+   if(!found&&aliases.some(a=>str.includes(a))){out.items.push({productId:p.id,quantity:'',note:''});out.flags.push('quantity');const hit=aliases.find(a=>str.includes(a));if(hit)consumed.push(hit)}
+  }
+  const phoneMatch=raw.match(/(?:\+973[\s-]?|00973[\s-]?|973[\s-]?)?\b([3679]\d{7})\b/);
+  if(phoneMatch)out.sourceRef=(/973/.test(phoneMatch[0])?'+973 ':'')+phoneMatch[1];
   let residual=str;for(const c of consumed)residual=residual.replace(c,' ');
+  if(named)residual=residual.replace(clean(named[0]),' ');
+  if(phoneMatch)residual=residual.replace(phoneMatch[1],' ');
   if(tm)residual=residual.replace(tm[0],' ');
   if(iso)residual=residual.replace(iso[0],' ');
   residual=residual.replace(/tomorrow|بكره|بكرة|غدا|غداً|today|اليوم|الساعة|الساعه|@|\bat\b|am|pm|a\.m\.|p\.m\.|صباحا|صباحًا|صباح|الصبح|مساء|مساءً|مسا|العصر|المغرب|الظهر|الليل|بالليل|\bnext\b|القادم|الجاي/gi,' ');
