@@ -61,100 +61,161 @@ Commands:
 
 Meta needs a public HTTPS address for the webhook, so expose port 8787 through a tunnel while testing, for example `cloudflared tunnel --url http://localhost:8787`. While the Meta app is unpublished, Meta only delivers its own test webhooks, not messages from real phones; use the simulator to demo the flow.
 
-## Hosting on Supabase
+## Hosting
 
 `server/` and `src/lib/` run unchanged under Deno as three Supabase Edge Functions — the same
 webhook handlers, agent, parser and day-plan logic as `npm run whatsapp:dev`, just deployed instead
 of run on your machine, and backed by Postgres instead of an in-memory array. Nothing here is
 required for local development; `npm run whatsapp:dev` keeps working exactly as before.
 
-**What changed to make this possible:**
+### Why Hayati
 
-- **Storage.** `OrderStore` (`server/agent/store.ts`) is now an async interface. `MemoryStore`
-  (used locally) and `SupabaseStore` (`server/agent/supabase-store.ts`, Postgres over PostgREST,
-  no extra dependency) both implement it, and the agent persists every change explicitly through
-  `store.update()`/`store.add()` — required once a store might be a network round-trip, since an
-  Edge Function isolate can be recycled between requests the way a long-lived Node process isn't.
-- **Time zone.** Bahrain has a fixed UTC+3 offset (no DST). Edge Functions run in UTC, so
-  `src/lib/parser.ts` and `src/lib/plan.ts` compute Bahrain dates directly from the instant
-  (`src/lib/bahrain-time.ts`) instead of through local `Date` methods, which used to depend on
-  `server/dev.ts` forcing `process.env.TZ = "Asia/Bahrain"`. `src/lib/parser.timezone.test.ts`
-  proves this with the process forced to UTC.
-- **Deno compatibility.** Relative imports in `server/` and `src/lib/` carry explicit `.ts`
-  extensions, which Deno 2 requires and which `tsc`/`tsx`/`vitest` also resolve fine
-  (`allowImportingTsExtensions` in `tsconfig.json`, which excludes `supabase/` — that folder has
-  its own `supabase/functions/deno.json` and is Deno's project, not Next's).
-- **Owner access.** Both the local runner and the hosted function require `OWNER_KEY` auth
-  (`server/owner/auth.ts`): an `HttpOnly; Secure; SameSite=Strict` cookie (set once by visiting
-  `/owner?key=<OWNER_KEY>`) or an `Authorization: Bearer <OWNER_KEY>` header, compared in constant
-  time. `supabase/functions/owner/index.ts` wraps the hosted function with it directly; `server/dev.ts`
-  wraps the local one the same way (generating a key for the run when `.env.local` has none) and
-  additionally checks "this computer only" (`isLocalRequest` in `server/owner/local-guard.ts`) as a
-  second, non-substitute layer — the IP check alone fails open behind a non-Cloudflare tunnel.
+Supabase's free plan allows two projects. The founder's other project, **Hayati**, is a live iOS
+game with real players; rather than spend Orderat's slot on a project of its own (or crowd Hayati
+out with a second free project that doesn't exist), Orderat is hosted *inside* Hayati's existing
+project (ref `ckjmbdbvlbxfofjgqiuj`, region `ap-south-1`, Postgres 17) as an isolated tenant. Orderat
+is small (a handful of tables, low traffic) and Hayati doesn't need the Postgres headroom Orderat
+would otherwise sit idle on its own project for — a reasonable trade as long as Orderat can never
+read Hayati's data, degrade its database, or get in the way of moving off this arrangement later.
 
-**Layout:** three thin `Deno.serve` entry points, `supabase/functions/{whatsapp,instagram,owner}/index.ts`,
+### The isolation contract
+
+- **Its own schema, nothing in `public`.** Every Orderat table lives in schema `orderat`
+  (`orderat.orders`, `orderat.processed_messages`, `orderat.schema_migrations`) —
+  `db/migrations/0001_orderat_isolation.sql`. Hayati's own tables (`public` or wherever its game
+  keeps them) are never touched, queried, or even visible to Orderat's connection.
+- **A least-privilege role, not Hayati-wide credentials.** Orderat's code — Edge Functions and
+  `server/dev.ts` alike — connects to Postgres directly as `orderat_app`
+  (`server/agent/postgres-store.ts`, `server/agent/postgres-client.ts`,
+  `supabase/functions/_shared/db.ts`), never with a Supabase service role key or an admin DB URL.
+  `orderat_app` can only reach schema `orderat` (`search_path` pinned to it, `USAGE` +
+  `SELECT`/`INSERT`/`UPDATE`/`DELETE` on its two tables, nothing else granted, everything revoked
+  from `PUBLIC`/`anon`/`authenticated`), has a `statement_timeout` of 10s so one slow query can't
+  hold a connection open, and a hard `CONNECTION LIMIT 10` so a bug or a traffic spike in Orderat
+  can never crowd Hayati out of the pooler's connection budget. It owns its two tables outright
+  (simpler and just as safe here as writing RLS policies would be, since Orderat has no separate
+  PostgREST/anon access path at all — see the migration file's comments for the full reasoning);
+  RLS is still enabled on both as defense in depth, in case either table is ever exposed through
+  PostgREST later.
+- **Prefixed everywhere it's visible in the shared project.** Edge Functions are named
+  `orderat-whatsapp`, `orderat-instagram`, `orderat-owner` (not `whatsapp`/`instagram`/`owner`);
+  every hosted secret carries an `ORDERAT_` prefix and is read only through that prefix
+  (`supabase/functions/_shared/env.ts`). Nothing Orderat does can accidentally read, overwrite, or
+  even collide in name with something that belongs to Hayati.
+- **Migrations outside the Supabase CLI's managed folder.** `db/migrations/` (not
+  `supabase/migrations/`), applied by `npm run hosting:migrate`, never `supabase db push` — so
+  nobody ever points the CLI's own migration history at Hayati's project and risks it trying to
+  reconcile against Hayati's own (unrelated) migrations.
+
+**Layout:** three thin `Deno.serve` entry points, `supabase/functions/orderat-{whatsapp,instagram,owner}/index.ts`,
 import `server/` and `src/lib/` by relative path and are deployed with `--use-api` (server-side
 bundling, no local Docker daemon needed). Supabase's own docs show `--use-api` bundling a sibling
 folder outside `supabase/` for exactly this kind of monorepo case, but it's a newer path than the
 Docker-based deploy and has had reported bundler rough edges with outside imports on some layouts,
 and local `supabase functions serve` still needs Docker regardless of `--use-api` (that flag only
-changes how a real deploy bundles). **If a deploy ever fails to bundle the outside imports**, the
-fallback is to physically copy `server/` and `src/lib/` into `supabase/functions/_shared/` (the
-officially-supported, Docker-bundled pattern) and re-point the three `index.ts` files and
-`server/dev.ts` at that copy instead — a single source of truth either way, just relocated.
+changes how a real deploy bundles). `supabase/functions/_shared/` already holds two small files
+every function imports (`env.ts`, the `ORDERAT_` env prefix helper; `db.ts`, the Deno Postgres
+adapter) — **if a deploy ever fails to bundle the outside imports**, the fallback is to also copy
+`server/` and `src/lib/` in there (the officially-supported, Docker-bundled pattern) and re-point
+the three `index.ts` files and `server/dev.ts` at that copy instead — a single source of truth
+either way, just relocated.
 
-### What the founder needs to do (none of this has been done for you)
+### Move to a dedicated project later
 
-1. **Sign up at [supabase.com](https://supabase.com) and create a project.** Supabase has no
-   Middle East region; Mumbai (`ap-south-1`) and Frankfurt (`eu-central-1`) are the two candidates
-   nearest Bahrain, and which is actually faster from Bahrain depends on real network routing —
-   worth an empirical check, since a project's region can't be changed later without recreating it.
-2. **Get the CLI and sign in** (already added as a dev dependency, so no global/Scoop install):
+Everything above is what makes this cheap: a new project is a new `ORDERAT_DATABASE_URL` (plus the
+other `ORDERAT_*` secrets) and a redeploy, not a rewrite.
+
+1. **Create the new Supabase project**, note its ref and pooler host.
+2. `npm run hosting:migrate -- --project-ref <new-ref>` — creates schema `orderat`, `orderat_app`
+   and both tables there, from the same `db/migrations/` files, unmodified.
+3. **Copy the data across** (Hayati's `orderat` schema → the new project):
+   ```
+   pg_dump --data-only --schema=orderat --exclude-table=orderat.schema_migrations \
+     "<Hayati admin connection string>" | psql "<new project admin connection string>"
+   ```
+   (`schema_migrations` is excluded/reconciled separately — it's bookkeeping for
+   `hosting:migrate`, not Orderat's data; step 2 already populated it correctly for the new project.)
+4. `npm run hosting:db-user -- --project-ref <new-ref> --pooler-host <new-pooler-host>`, then
+   `npm run hosting:secrets -- --project-ref <new-ref>`, then
+   `npm run hosting:deploy -- --project-ref <new-ref>`.
+5. **Re-point Meta's webhooks** (App Dashboard > WhatsApp/Instagram > Configuration > Webhooks) at
+   the new project's function URLs, Verify and Save.
+6. **Clean up Hayati** once the new project is confirmed working (see "Undo" below).
+
+**Undo / clean up Hayati** (after a successful move, or to abandon hosting Orderat there entirely):
+
+```
+npx supabase functions delete orderat-whatsapp --project-ref ckjmbdbvlbxfofjgqiuj
+npx supabase functions delete orderat-instagram --project-ref ckjmbdbvlbxfofjgqiuj
+npx supabase functions delete orderat-owner --project-ref ckjmbdbvlbxfofjgqiuj
+# Unset every ORDERAT_* secret in the dashboard (Edge Functions > Secrets), or via the CLI.
+```
+```sql
+-- Run against Hayati (e.g. via the dashboard's SQL editor, or supabase db query --linked):
+drop schema orderat cascade;
+drop role orderat_app;
+```
+
+### Shared free-tier quotas to watch
+
+Because this is Hayati's project, not Orderat's own, these are shared with the game, not
+Orderat-exclusive budgets:
+
+- **500 MB database.** Orderat's two tables are small, but they're 500 MB shared with Hayati's own
+  data, not 500 MB just for Orderat.
+- **Edge Function invocations** (free tier: 500K/month) — shared across every function in the
+  project, Hayati's and Orderat's `orderat-*` three alike.
+- **Egress** — same pool, same reasoning.
+
+None of this is enforced in code; it's watched by keeping an eye on the dashboard's usage page.
+When it becomes a real constraint, that's the trigger for "Move to a dedicated project" above.
+
+### First-time setup (none of this has been done for you)
+
+1. **Get the CLI and sign in** (already a dev dependency, so no global/Scoop install):
    ```
    npm install
    npx supabase login
    ```
    This opens a browser once to create an access token. In a non-interactive/CI context, use
-   `npx supabase login --no-browser` or set `SUPABASE_ACCESS_TOKEN` instead.
-3. **Link this repo to the project** (the project ref is in its dashboard URL):
+   `npx supabase login --no-browser` or set `SUPABASE_ACCESS_TOKEN` instead. There is no `supabase
+   link` step — every `hosting:*` script below takes `--project-ref` explicitly instead, precisely
+   so nothing here ever points the CLI's own linked-project state at Hayati.
+2. **Set `ORDERAT_SUPABASE_PROJECT_REF` and `ORDERAT_DB_POOLER_HOST` in `.env.local`** (or pass
+   `--project-ref`/`--pooler-host` to each command below) — Hayati's ref (`ckjmbdbvlbxfofjgqiuj`)
+   and its Supavisor transaction pooler host (Settings > Database > Connection pooling in the
+   dashboard; currently `aws-0-ap-south-1.pooler.supabase.com`).
+3. **Apply the isolation-contract migration:**
    ```
-   npx supabase link --project-ref <project-ref>
+   npm run hosting:migrate
    ```
-4. **Run the migration** (creates `orders` and `processed_messages`, RLS on, no public policies):
+4. **Create `orderat_app`'s login and write `ORDERAT_DATABASE_URL` to `.env.local`** (never printed):
    ```
-   npm run supabase:migrate
+   npm run hosting:db-user
    ```
-5. **Add the new settings to `.env.local`**, alongside the existing WhatsApp/Gemini ones — get
-   `SUPABASE_URL` and the service role key from Settings > API in the dashboard, and make up a long
-   random string for `OWNER_KEY`:
-
-   | Name | Purpose |
-   | --- | --- |
-   | `SUPABASE_URL` | Project URL, `https://<project-ref>.supabase.co` |
-   | `SUPABASE_SERVICE_ROLE_KEY` | Service role key from Settings > API — bypasses RLS, server-side only |
-   | `OWNER_KEY` | Long random string protecting the hosted `/owner` page |
-
-6. **Push secrets and deploy** (never prints a secret value):
+5. **Add the WhatsApp/Instagram/Gemini/`OWNER_KEY` settings to `.env.local`** (unprefixed — same
+   names `server/dev.ts` already reads; see `.env.example`), then **push them as hosted secrets**
+   (renamed with the `ORDERAT_` prefix, never printed):
    ```
-   npm run supabase:secrets
-   npm run supabase:deploy
+   npm run hosting:secrets
    ```
-   Deploy one function at a time with `npm run supabase:deploy -- whatsapp`.
+6. **Deploy the three functions:**
+   ```
+   npm run hosting:deploy
+   ```
+   Deploy one function at a time with `npm run hosting:deploy -- orderat-whatsapp`.
 7. **Point Meta at the deployed webhooks** (App Dashboard > WhatsApp/Instagram > Configuration >
    Webhooks), then click Verify and Save:
-   - WhatsApp: `https://<project-ref>.supabase.co/functions/v1/whatsapp`
-   - Instagram: `https://<project-ref>.supabase.co/functions/v1/instagram`
-8. **Check `verify_jwt` in the dashboard** (Edge Functions > function > Details) for all three
-   functions. `supabase/config.toml` sets it to `false`, but the CLI has been reported to not
-   always apply that on a redeploy — Meta's verification GET will fail with a 401 from Supabase
-   itself (not from this code) if it's stuck on.
-9. **Sign in to the hosted owner page** once, in a browser: visit
-   `https://<project-ref>.supabase.co/functions/v1/owner?key=<OWNER_KEY>`. It redirects back to the
-   same page with the cookie set; bookmark the plain URL (without `?key=`) after that.
-10. **Tail logs** while testing: `npm run supabase:logs -- whatsapp`.
+   - WhatsApp: `https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-whatsapp`
+   - Instagram: `https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-instagram`
+8. **Sign in to the hosted owner page** once, in a browser: visit
+   `https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-owner?key=<OWNER_KEY>`. It
+   redirects back to the same page with the cookie set; bookmark the plain URL (without `?key=`)
+   after that.
+9. **Tail logs** while testing: `npm run hosting:logs -- orderat-whatsapp --project-ref ckjmbdbvlbxfofjgqiuj`.
 
-None of this was run as part of preparing the code — no Supabase account was created, and nothing
-was deployed or pushed.
+None of this was run as part of preparing the code — no migration was applied, no secret was
+pushed, and nothing was deployed.
 
 ## Legal pages
 
