@@ -81,7 +81,7 @@ export function runDbQueryFile(projectRef, sqlFilePath, { json = false } = {}) {
   }
   if (!json) return undefined;
   try {
-    return JSON.parse(result.stdout);
+    return extractRows(JSON.parse(result.stdout));
   } catch (err) {
     throw new Error(`Could not parse JSON from supabase db query: ${(err instanceof Error ? err.message : String(err))}\nOutput: ${result.stdout.slice(0, 500)}`);
   }
@@ -95,4 +95,13 @@ export function withTempFile(prefix, contents, extension = ".sql") {
   const path = join(dir, `file${extension}`);
   writeFileSync(path, contents);
   return { path, cleanup: () => { try { unlinkSync(path); } catch { /* best effort */ } } };
+}
+
+/** `supabase db query --output-format json` prints an object ({ boundary, rows, warning }), not a bare
+ * array. Reading it as an array made "which migrations are applied?" always answer "none", so every
+ * migration re-ran on each hosting:migrate (harmless only because they are idempotent). */
+export function extractRows(parsed) {
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && Array.isArray(parsed.rows)) return parsed.rows;
+  throw new Error("Unexpected supabase db query JSON shape (no rows array).");
 }
