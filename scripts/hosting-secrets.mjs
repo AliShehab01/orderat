@@ -79,12 +79,19 @@ function main() {
 
   const file = withTempFile("orderat-secrets-", content);
   console.log(`Pushing ${pushed.length} secret(s) to project ${projectRef}: ${pushed.join(", ")}`);
+  // exitCode (not process.exit() inside the try) so the finally below — which deletes the temp file
+  // holding every pushed secret's plaintext value, including ORDERAT_DATABASE_URL's DB password —
+  // always runs, success or failure. process.exit() terminates immediately without unwinding the
+  // stack, so a finally that hasn't run yet never would, leaking the temp file on any CLI failure.
+  let exitCode = 0;
   try {
-    const result = spawnSync("npx", ["supabase", "secrets", "set", "--env-file", file.path, "--project-ref", projectRef], { stdio: "inherit" });
-    if (result.status !== 0) process.exit(result.status ?? 1);
+    // shell: true — see scripts/lib/hosting-env.mjs's runDbQueryFile for why (npx.cmd on Windows).
+    const result = spawnSync("npx", ["supabase", "secrets", "set", "--env-file", file.path, "--project-ref", projectRef], { stdio: "inherit", shell: true });
+    if (result.status !== 0) exitCode = result.status ?? 1;
   } finally {
     file.cleanup();
   }
+  if (exitCode !== 0) process.exit(exitCode);
   console.log("Done.");
 }
 

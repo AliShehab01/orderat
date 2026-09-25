@@ -48,14 +48,20 @@ function main() {
   const file = withTempFile("orderat-db-user-", sql);
 
   console.log(`Setting orderat_app's password on project ${projectRef}...`);
+  // failed (not process.exit() inside the catch) so the finally below — which deletes the temp file
+  // holding the freshly generated SCRAM verifier — always runs, success or failure. process.exit()
+  // terminates immediately without unwinding the stack, so a finally that hasn't run yet never
+  // would, leaking the temp file on any CLI failure (wrong ref, expired login, network error).
+  let failed = false;
   try {
     runDbQueryFile(projectRef, file.path);
   } catch (err) {
     console.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
+    failed = true;
   } finally {
     file.cleanup();
   }
+  if (failed) process.exit(1);
 
   const url = `postgresql://orderat_app.${projectRef}:${encodeURIComponent(password)}@${poolerHost}:${POOLER_PORT}/postgres`;
   writeEnvLocalVar("ORDERAT_DATABASE_URL", url);
