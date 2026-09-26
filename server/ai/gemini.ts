@@ -168,16 +168,26 @@ export interface GeminiCallResult {
   text: string;
 }
 
+export interface GeminiAttempt {
+  /** The last response received, whether it succeeded or failed with a non-retryable status —
+   * undefined only when every attempt either threw (non-abort) or timed out with nothing to show. */
+  res: Response | undefined;
+  /** The model that produced `res` when `res.ok` — undefined when no model succeeded. */
+  okModel: string | undefined;
+  /** One line per model that didn't produce the final `res`, e.g. "model-a: 429" or "model-a: timed
+   * out after 25000ms" — folded into both callGemini's and callGeminiImage's own error messages. */
+  failures: string[];
+}
+
 /**
  * POSTs a Gemini `generateContent` body to `models` in order, trying the next one when the previous
  * is busy (429/5xx), retired (404), or hangs past `timeoutMs` (treated like a 5xx) — the model
- * fallback + timeout machinery createGeminiExtractor below has always used, extracted so a second,
- * separate Gemini caller (server/ai/ask.ts, for "Ask Orderat") can reuse it instead of
- * reimplementing the same loop. Throws when every model fails, when the response isn't JSON, or when
- * Gemini returns no content (blocked, or finished without output) — the same error messages
- * createGeminiExtractor has always thrown, preserved here so its own tests needed no changes.
+ * fallback + timeout loop createGeminiExtractor has always used, extracted so both callGemini (text)
+ * below and callGeminiImage (server/ai/image.ts, for the photo studio's image model) can reuse
+ * exactly the same retry/timeout behavior instead of each reimplementing it. Never throws for a model
+ * simply failing (that's `failures`); only rethrows a genuinely unexpected (non-abort) fetch error.
  */
-export async function callGemini(models: string[], apiKey: string, body: string, timeoutMs: number, fetchImpl: typeof fetch = fetch): Promise<GeminiCallResult> {
+export async function requestGemini(models: string[], apiKey: string, body: string, timeoutMs: number, fetchImpl: typeof fetch = fetch): Promise<GeminiAttempt> {
   let res: Response | undefined;
   let okModel: string | undefined;
   const failures: string[] = [];
@@ -206,6 +216,17 @@ export async function callGemini(models: string[], apiKey: string, body: string,
     failures.push(`${model}: ${res.status}`);
     if (!TRY_NEXT_MODEL.has(res.status)) break;
   }
+  return { res, okModel, failures };
+}
+
+/**
+ * Calls requestGemini and extracts its text answer. Throws when every model fails, when the response
+ * isn't JSON, or when Gemini returns no content (blocked, or finished without output) — the same
+ * error messages createGeminiExtractor has always thrown, preserved here so its own tests needed no
+ * changes even though the retry loop itself moved into requestGemini above.
+ */
+export async function callGemini(models: string[], apiKey: string, body: string, timeoutMs: number, fetchImpl: typeof fetch = fetch): Promise<GeminiCallResult> {
+  const { res, okModel, failures } = await requestGemini(models, apiKey, body, timeoutMs, fetchImpl);
   if (!res || !res.ok) {
     const detail = res ? (await res.text()).slice(0, 300) : "";
     throw new Error(`Gemini request failed (${failures.join(", ")}): ${detail}`);
