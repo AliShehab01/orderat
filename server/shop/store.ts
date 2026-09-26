@@ -5,6 +5,7 @@
 // (orderat.shop_orders) are server/shop/orders.ts's own concern, kept separate from this file.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
+import { constantTimeEqualHex, sha256HexOfString } from "../shared/crypto.ts";
 import type { ShopDocPublic } from "./doc.ts";
 
 export interface ShopRow {
@@ -43,6 +44,24 @@ export async function findShopBySlug(sql: SqlClient, slug: string): Promise<Shop
 export async function findShopByTokenHash(sql: SqlClient, tokenHash: string): Promise<ShopRow | undefined> {
   const rows = await sql.query<Record<string, unknown>>(`select ${SHOP_COLUMNS} from orderat.shops where token_hash = $1`, [tokenHash]);
   return rows[0] ? toShopRow(rows[0]) : undefined;
+}
+
+/**
+ * Finds the shop for a raw edit token: hashes it, looks the hash up (necessarily an equality lookup —
+ * there is no other way to find "which shop does this token belong to"), then re-checks the found
+ * row's own tokenHash against the computed hash with a constant-time comparison before trusting it
+ * — docs/marketing-tools.md: "compare with a constant-time comparison." Belt and suspenders: the
+ * lookup above already matched on equality, so this can only ever agree with it, but it's the one
+ * place that guarantees a plain, potentially-short-circuiting `===` never decides authentication,
+ * even if a future change to the query above ever fetched by something broader than an exact hash
+ * match. Every caller that authenticates a shop by token goes through this, never
+ * findShopByTokenHash directly.
+ */
+export async function findShopByToken(sql: SqlClient, token: string): Promise<ShopRow | undefined> {
+  const tokenHash = await sha256HexOfString(token);
+  const shop = await findShopByTokenHash(sql, tokenHash);
+  if (!shop || !constantTimeEqualHex(shop.tokenHash, tokenHash)) return undefined;
+  return shop;
 }
 
 export interface CreateShopInput {

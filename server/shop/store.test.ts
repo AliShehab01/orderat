@@ -6,6 +6,7 @@ import {
   bumpPublishCounter,
   createShop,
   findShopBySlug,
+  findShopByToken,
   findShopByTokenHash,
   getShopPhotoMap,
   getShopStats,
@@ -14,6 +15,7 @@ import {
   setShopPublished,
   updateShopDoc,
 } from "./store";
+import { newEditToken } from "../shared/crypto";
 
 let sql: SqlClient;
 
@@ -53,6 +55,31 @@ describe("createShop / findShopBySlug / findShopByTokenHash", () => {
     await seed();
     await createShop(sql, { id: "22222222-2222-2222-2222-222222222222", slug: "other-shop", tokenHash: "hash-2", installId: "install-2", doc: { ...DOC, slug: "other-shop" }, day: "2026-09-26" });
     expect((await findShopByTokenHash(sql, "hash-2"))?.id).toBe("22222222-2222-2222-2222-222222222222");
+  });
+});
+
+describe("findShopByToken", () => {
+  it("finds the shop for the raw token that created it", async () => {
+    const { token, tokenHash } = await newEditToken();
+    await createShop(sql, { id: SHOP_ID, slug: "sweetstudio", tokenHash, installId: "install-1", doc: DOC, day: "2026-09-26" });
+    const shop = await findShopByToken(sql, token);
+    expect(shop?.id).toBe(SHOP_ID);
+  });
+
+  it("returns undefined for a token that doesn't match any shop", async () => {
+    const { tokenHash } = await newEditToken();
+    await createShop(sql, { id: SHOP_ID, slug: "sweetstudio", tokenHash, installId: "install-1", doc: DOC, day: "2026-09-26" });
+    const { token: otherToken } = await newEditToken();
+    expect(await findShopByToken(sql, otherToken)).toBeUndefined();
+  });
+
+  it("never confuses one shop's token with another's", async () => {
+    const a = await newEditToken();
+    const b = await newEditToken();
+    await createShop(sql, { id: "11111111-1111-1111-1111-111111111111", slug: "shop-a", tokenHash: a.tokenHash, installId: "install-a", doc: { ...DOC, slug: "shop-a" }, day: "2026-09-26" });
+    await createShop(sql, { id: "22222222-2222-2222-2222-222222222222", slug: "shop-b", tokenHash: b.tokenHash, installId: "install-b", doc: { ...DOC, slug: "shop-b" }, day: "2026-09-26" });
+    expect((await findShopByToken(sql, a.token))?.slug).toBe("shop-a");
+    expect((await findShopByToken(sql, b.token))?.slug).toBe("shop-b");
   });
 });
 

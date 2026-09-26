@@ -34,7 +34,7 @@ import {
   bumpPublishCounter,
   createShop,
   findShopBySlug,
-  findShopByTokenHash,
+  findShopByToken,
   getShopPhotoMap,
   getShopStats,
   incrementShopView,
@@ -150,7 +150,7 @@ export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Prom
 
     let existing: ShopRow | undefined;
     if (body.token) {
-      existing = await findShopByTokenHash(deps.sql, await sha256HexOfString(body.token));
+      existing = await findShopByToken(deps.sql, body.token);
       if (!existing) {
         log({ event: "shop_publish", status: 401 });
         return badTokenResponse();
@@ -211,7 +211,7 @@ export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Prom
   }
 
   async function withAuthedShop(token: string, run: (shop: ShopRow) => Promise<Response>): Promise<Response> {
-    const shop = await findShopByTokenHash(deps.sql, await sha256HexOfString(token));
+    const shop = await findShopByToken(deps.sql, token);
     if (!shop) return badTokenResponse();
     return run(shop);
   }
