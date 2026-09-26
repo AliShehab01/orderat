@@ -1,0 +1,131 @@
+import { describe, expect, it } from "vitest";
+import { MAX_BODY_BYTES, MAX_CHANGES_PER_REQUEST, MAX_RECORD_DATA_BYTES, validateSyncBody } from "./validate.ts";
+
+const SHOP_ID = "11111111-1111-1111-1111-111111111111";
+const USER_ID = "22222222-2222-2222-2222-222222222222";
+
+describe("validateSyncBody / create_shop", () => {
+  it("accepts a valid create_shop body", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "create_shop", shopId: SHOP_ID, name: "Sara's Cakes" }))).toEqual({
+      ok: true,
+      body: { action: "create_shop", shopId: SHOP_ID, name: "Sara's Cakes" },
+    });
+  });
+
+  it("rejects a non-uuid shopId", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "create_shop", shopId: "not-a-uuid", name: "x" }))).toEqual({ ok: false, error: "invalid_body" });
+  });
+
+  it("rejects a missing or empty name", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "create_shop", shopId: SHOP_ID }))).toEqual({ ok: false, error: "invalid_body" });
+    expect(validateSyncBody(JSON.stringify({ action: "create_shop", shopId: SHOP_ID, name: "" }))).toEqual({ ok: false, error: "invalid_body" });
+  });
+});
+
+describe("validateSyncBody / sync", () => {
+  it("accepts a sync body with an empty changes array (pull-only)", () => {
+    const result = validateSyncBody(JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 0, changes: [] }));
+    expect(result).toEqual({ ok: true, body: { action: "sync", shopId: SHOP_ID, cursor: 0, changes: [] } });
+  });
+
+  it("accepts a well-formed change and fills in defaults for deleted/baseSeq", () => {
+    const result = validateSyncBody(JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 5, changes: [{ entity: "order", id: "o1", data: { status: "pending" } }] }));
+    expect(result).toEqual({ ok: true, body: { action: "sync", shopId: SHOP_ID, cursor: 5, changes: [{ entity: "order", id: "o1", data: { status: "pending" }, deleted: false, baseSeq: 0 }] } });
+  });
+
+  it("accepts an explicit deleted/baseSeq", () => {
+    const result = validateSyncBody(JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 5, changes: [{ entity: "order", id: "o1", data: {}, deleted: true, baseSeq: 42 }] }));
+    expect(result.ok).toBe(true);
+    if (result.ok && result.body.action === "sync") expect(result.body.changes[0]).toEqual({ entity: "order", id: "o1", data: {}, deleted: true, baseSeq: 42 });
+  });
+
+  it("rejects a negative cursor", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: -1, changes: [] }))).toEqual({ ok: false, error: "invalid_body" });
+  });
+
+  it("rejects an unknown entity", () => {
+    const body = JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 0, changes: [{ entity: "not_an_entity", id: "x", data: {} }] });
+    expect(validateSyncBody(body)).toEqual({ ok: false, error: "invalid_body" });
+  });
+
+  it("rejects a change with a non-object data field", () => {
+    const body = JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 0, changes: [{ entity: "order", id: "x", data: "nope" }] });
+    expect(validateSyncBody(body)).toEqual({ ok: false, error: "invalid_body" });
+  });
+
+  it("rejects a record over 32 KB with too_large", () => {
+    const body = JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 0, changes: [{ entity: "order", id: "x", data: { note: "a".repeat(MAX_RECORD_DATA_BYTES) } }] });
+    expect(validateSyncBody(body)).toEqual({ ok: false, error: "too_large" });
+  });
+
+  it("rejects more than the defensive per-request change cap", () => {
+    const changes = Array.from({ length: MAX_CHANGES_PER_REQUEST + 1 }, (_, i) => ({ entity: "order", id: `o${i}`, data: {} }));
+    expect(validateSyncBody(JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 0, changes }))).toEqual({ ok: false, error: "invalid_body" });
+  });
+
+  it("rejects a body over the 2 MB cap with too_large", () => {
+    const body = JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 0, changes: [{ entity: "order", id: "x", data: { note: "a".repeat(MAX_BODY_BYTES) } }] });
+    expect(validateSyncBody(body)).toEqual({ ok: false, error: "too_large" });
+  });
+});
+
+describe("validateSyncBody / invites", () => {
+  it("accepts invite_create with just a shopId", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "invite_create", shopId: SHOP_ID }))).toEqual({ ok: true, body: { action: "invite_create", shopId: SHOP_ID } });
+  });
+
+  it("accepts a 6-digit invite_join code", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "invite_join", code: "123456" }))).toEqual({ ok: true, body: { action: "invite_join", code: "123456" } });
+  });
+
+  it("rejects a code that isn't exactly 6 digits", () => {
+    for (const code of ["12345", "1234567", "12345a", ""]) {
+      expect(validateSyncBody(JSON.stringify({ action: "invite_join", code }))).toEqual({ ok: false, error: "invalid_body" });
+    }
+  });
+});
+
+describe("validateSyncBody / members", () => {
+  it("accepts members_list, members_update and members_remove", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "members_list", shopId: SHOP_ID }))).toEqual({ ok: true, body: { action: "members_list", shopId: SHOP_ID } });
+    const permissions = { orders: true, prepare: false, money: false, products: true };
+    expect(validateSyncBody(JSON.stringify({ action: "members_update", shopId: SHOP_ID, userId: USER_ID, permissions }))).toEqual({
+      ok: true,
+      body: { action: "members_update", shopId: SHOP_ID, userId: USER_ID, permissions },
+    });
+    expect(validateSyncBody(JSON.stringify({ action: "members_remove", shopId: SHOP_ID, userId: USER_ID }))).toEqual({ ok: true, body: { action: "members_remove", shopId: SHOP_ID, userId: USER_ID } });
+  });
+
+  it("rejects members_update with an incomplete permissions object", () => {
+    const body = JSON.stringify({ action: "members_update", shopId: SHOP_ID, userId: USER_ID, permissions: { orders: true } });
+    expect(validateSyncBody(body)).toEqual({ ok: false, error: "invalid_body" });
+  });
+});
+
+describe("validateSyncBody / photos", () => {
+  it("accepts photo_upload and photo_url", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "photo_upload", shopId: SHOP_ID, mimeType: "image/jpeg", data: "abc" }))).toEqual({
+      ok: true,
+      body: { action: "photo_upload", shopId: SHOP_ID, mimeType: "image/jpeg", data: "abc" },
+    });
+    expect(validateSyncBody(JSON.stringify({ action: "photo_url", shopId: SHOP_ID, photoId: "a".repeat(64) }))).toEqual({
+      ok: true,
+      body: { action: "photo_url", shopId: SHOP_ID, photoId: "a".repeat(64) },
+    });
+  });
+
+  it("rejects an unsupported photo_upload mimeType", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "photo_upload", shopId: SHOP_ID, mimeType: "image/gif", data: "abc" }))).toEqual({ ok: false, error: "invalid_body" });
+  });
+});
+
+describe("validateSyncBody / general", () => {
+  it("rejects an unknown action", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "nope" }))).toEqual({ ok: false, error: "invalid_body" });
+  });
+
+  it("rejects malformed JSON and non-object bodies", () => {
+    expect(validateSyncBody("{not json")).toEqual({ ok: false, error: "invalid_body" });
+    expect(validateSyncBody("[1,2,3]")).toEqual({ ok: false, error: "invalid_body" });
+  });
+});

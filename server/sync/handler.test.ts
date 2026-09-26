@@ -1,0 +1,370 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import type { SqlClient } from "../agent/postgres-store.ts";
+import { createSession, newSessionToken, upsertUser } from "../auth/store.ts";
+import { createCloudTestSql } from "../cloud-pglite-test-support.ts";
+import { createSyncHandler, type GetSignedPhotoUrl, type UploadPhoto } from "./handler.ts";
+import { MAX_SYNCS_PER_MINUTE } from "./rate-limit.ts";
+
+const NOW = new Date("2026-09-27T12:00:00Z");
+const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+
+let sql: SqlClient;
+let uploadedPhotos: { shopId: string; photoId: string; mimeType: string }[];
+let uploadShouldSucceed: boolean;
+let signedUrlShouldExist: boolean;
+
+function makeHandler(now: () => Date = () => NOW) {
+  const uploadPhoto: UploadPhoto = async ({ shopId, photoId, mimeType }) => {
+    if (!uploadShouldSucceed) return false;
+    uploadedPhotos.push({ shopId, photoId, mimeType });
+    return true;
+  };
+  const getSignedPhotoUrl: GetSignedPhotoUrl = async ({ shopId, photoId }) => (signedUrlShouldExist ? `https://storage.test/${shopId}/${photoId}.jpg?token=fake` : undefined);
+  return createSyncHandler({ sql, uploadPhoto, getSignedPhotoUrl, now, log: () => {} });
+}
+
+async function signUp(providerSub: string): Promise<{ userId: string; session: string }> {
+  const user = await upsertUser(sql, { id: crypto.randomUUID(), provider: "apple", providerSub });
+  const { token, tokenHash } = await newSessionToken();
+  await createSession(sql, { tokenHash, userId: user.id });
+  return { userId: user.id, session: token };
+}
+
+function post(body: unknown, session?: string): Request {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (session) headers["x-orderat-session"] = session;
+  return new Request("https://example.test/orderat-sync", { method: "POST", headers, body: JSON.stringify(body) });
+}
+
+beforeEach(async () => {
+  sql = await createCloudTestSql();
+  uploadedPhotos = [];
+  uploadShouldSucceed = true;
+  signedUrlShouldExist = true;
+});
+
+describe("createSyncHandler / create_shop", () => {
+  it("first upload makes the caller the owner with full permissions", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("owner-1");
+    const shopId = crypto.randomUUID();
+    const res = await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, session));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ shop: { id: shopId, name: "Sara's Cakes", role: "owner", permissions: { orders: true, prepare: true, money: true, products: true } } });
+  });
+
+  it("is idempotent for the same owner calling twice", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("owner-1");
+    const shopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, session));
+    const second = await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, session));
+    expect(second.status).toBe(200);
+  });
+
+  it("refuses to let a different user claim an already-owned shopId", async () => {
+    const handler = makeHandler();
+    const { session: ownerSession } = await signUp("owner-1");
+    const { session: otherSession } = await signUp("owner-2");
+    const shopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, ownerSession));
+    const res = await handler(post({ action: "create_shop", shopId, name: "Hijack attempt" }, otherSession));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "shop_exists" });
+  });
+
+  it("requires a valid session", async () => {
+    const handler = makeHandler();
+    const res = await handler(post({ action: "create_shop", shopId: crypto.randomUUID(), name: "x" }));
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("createSyncHandler / sync", () => {
+  async function createShop(handler: (req: Request) => Promise<Response>, session: string) {
+    const shopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, session));
+    return shopId;
+  }
+
+  it("pushes and pulls in one call, reporting no conflicts for a clean first upload", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("owner-1");
+    const shopId = await createShop(handler, session);
+
+    const res = await handler(post({ action: "sync", shopId, cursor: 0, changes: [{ entity: "product", id: "p1", data: { name: "Cake" } }] }, session));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.conflicts).toEqual([]);
+    expect(body.rejected).toEqual([]);
+    expect(body.more).toBe(false);
+    expect(body.changes.some((c: { entity: string; id: string }) => c.entity === "product" && c.id === "p1")).toBe(true);
+  });
+
+  it("is forbidden for a signed-in user who isn't a member of the shop", async () => {
+    const handler = makeHandler();
+    const { session: ownerSession } = await signUp("owner-1");
+    const shopId = await createShop(handler, ownerSession);
+    const { session: strangerSession } = await signUp("stranger-1");
+
+    const res = await handler(post({ action: "sync", shopId, cursor: 0, changes: [] }, strangerSession));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "forbidden" });
+  });
+
+  it("enforces 60 syncs per minute per session with rate_limited", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("owner-1");
+    const shopId = await createShop(handler, session);
+
+    for (let i = 0; i < MAX_SYNCS_PER_MINUTE; i++) {
+      const res = await handler(post({ action: "sync", shopId, cursor: 0, changes: [] }, session));
+      expect(res.status).toBe(200);
+    }
+    const res = await handler(post({ action: "sync", shopId, cursor: 0, changes: [] }, session));
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: "rate_limited" });
+  });
+
+  it("keeps rate limits independent per session (a second device isn't throttled by the first)", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("owner-1");
+    const shopId = await createShop(handler, session);
+    const { token: secondDeviceToken, tokenHash } = await newSessionToken();
+    const owner = await sql.query<{ user_id: string }>(`select user_id from orderat.shop_members where shop_id = $1 and role = 'owner'`, [shopId]);
+    await createSession(sql, { tokenHash, userId: owner[0]!.user_id });
+
+    for (let i = 0; i < MAX_SYNCS_PER_MINUTE; i++) await handler(post({ action: "sync", shopId, cursor: 0, changes: [] }, session));
+    const res = await handler(post({ action: "sync", shopId, cursor: 0, changes: [] }, secondDeviceToken));
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("createSyncHandler / invites", () => {
+  async function createShop(handler: (req: Request) => Promise<Response>, session: string) {
+    const shopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, session));
+    return shopId;
+  }
+
+  it("lets the owner create an invite and a staff member join with it", async () => {
+    const handler = makeHandler();
+    const { session: ownerSession } = await signUp("owner-1");
+    const shopId = await createShop(handler, ownerSession);
+
+    const createRes = await handler(post({ action: "invite_create", shopId }, ownerSession));
+    expect(createRes.status).toBe(200);
+    const { code, expiresAt } = await createRes.json();
+    expect(code).toMatch(/^\d{6}$/);
+    expect(new Date(expiresAt).getTime() - NOW.getTime()).toBe(48 * 60 * 60 * 1000);
+
+    const { session: staffSession } = await signUp("staff-1");
+    const joinRes = await handler(post({ action: "invite_join", code }, staffSession));
+    expect(joinRes.status).toBe(200);
+    expect(await joinRes.json()).toEqual({ shop: { id: shopId, name: "Sara's Cakes" }, role: "staff", permissions: { orders: false, prepare: false, money: false, products: false } });
+  });
+
+  it("refuses invite_create from staff (owner only)", async () => {
+    const handler = makeHandler();
+    const { session: ownerSession } = await signUp("owner-1");
+    const shopId = await createShop(handler, ownerSession);
+    const createRes = await handler(post({ action: "invite_create", shopId }, ownerSession));
+    const { code } = await createRes.json();
+    const { session: staffSession } = await signUp("staff-1");
+    await handler(post({ action: "invite_join", code }, staffSession));
+
+    const res = await handler(post({ action: "invite_create", shopId }, staffSession));
+    expect(res.status).toBe(403);
+  });
+
+  it("a code is single-use: joining twice with the same code fails the second time", async () => {
+    const handler = makeHandler();
+    const { session: ownerSession } = await signUp("owner-1");
+    const shopId = await createShop(handler, ownerSession);
+    const { code } = await (await handler(post({ action: "invite_create", shopId }, ownerSession))).json();
+
+    const { session: staff1 } = await signUp("staff-1");
+    expect((await handler(post({ action: "invite_join", code }, staff1))).status).toBe(200);
+
+    const { session: staff2 } = await signUp("staff-2");
+    const res = await handler(post({ action: "invite_join", code }, staff2));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "invalid_code" });
+  });
+
+  it("an expired invite cannot be joined", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const { session: ownerSession } = await signUp("owner-1");
+    const shopId = await createShop(handler, ownerSession);
+    const { code } = await (await handler(post({ action: "invite_create", shopId }, ownerSession))).json();
+
+    clock = new Date(NOW.getTime() + 48 * 60 * 60 * 1000 + 1000); // Just past the 48h TTL.
+    const { session: staffSession } = await signUp("staff-1");
+    const res = await handler(post({ action: "invite_join", code }, staffSession));
+    expect(res.status).toBe(404);
+  });
+
+  it("an unknown code is rejected", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("someone");
+    const res = await handler(post({ action: "invite_join", code: "000000" }, session));
+    expect(res.status).toBe(404);
+  });
+
+  it("enforces the 5-staff-per-shop limit", async () => {
+    const handler = makeHandler();
+    const { session: ownerSession } = await signUp("owner-1");
+    const shopId = await createShop(handler, ownerSession);
+
+    for (let i = 0; i < 5; i++) {
+      const { code } = await (await handler(post({ action: "invite_create", shopId }, ownerSession))).json();
+      const { session: staffSession } = await signUp(`staff-${i}`);
+      expect((await handler(post({ action: "invite_join", code }, staffSession))).status).toBe(200);
+    }
+
+    const { code } = await (await handler(post({ action: "invite_create", shopId }, ownerSession))).json();
+    const { session: sixthStaffSession } = await signUp("staff-6");
+    const res = await handler(post({ action: "invite_join", code }, sixthStaffSession));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "staff_limit" });
+  });
+});
+
+describe("createSyncHandler / members", () => {
+  async function setUpShopWithStaff() {
+    const handler = makeHandler();
+    const { session: ownerSession, userId: ownerId } = await signUp("owner-1");
+    const shopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, ownerSession));
+    const { code } = await (await handler(post({ action: "invite_create", shopId }, ownerSession))).json();
+    const { session: staffSession, userId: staffId } = await signUp("staff-1");
+    await handler(post({ action: "invite_join", code }, staffSession));
+    return { handler, ownerSession, ownerId, shopId, staffSession, staffId };
+  }
+
+  it("lists members with the owner and staff", async () => {
+    const { handler, ownerSession, shopId, staffId } = await setUpShopWithStaff();
+    const res = await handler(post({ action: "members_list", shopId }, ownerSession));
+    expect(res.status).toBe(200);
+    const { members } = await res.json();
+    expect(members.map((m: { role: string }) => m.role)).toEqual(["owner", "staff"]);
+    expect(members[1].userId).toBe(staffId);
+  });
+
+  it("refuses members_list from staff", async () => {
+    const { handler, staffSession, shopId } = await setUpShopWithStaff();
+    expect((await handler(post({ action: "members_list", shopId }, staffSession))).status).toBe(403);
+  });
+
+  it("lets the owner update a staff member's permissions", async () => {
+    const { handler, ownerSession, shopId, staffId } = await setUpShopWithStaff();
+    const permissions = { orders: true, prepare: false, money: false, products: true };
+    const res = await handler(post({ action: "members_update", shopId, userId: staffId, permissions }, ownerSession));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    const listRes = await handler(post({ action: "members_list", shopId }, ownerSession));
+    const { members } = await listRes.json();
+    expect(members.find((m: { userId: string }) => m.userId === staffId).permissions).toEqual(permissions);
+  });
+
+  it("members_update on an unknown staff id returns not_found", async () => {
+    const { handler, ownerSession, shopId } = await setUpShopWithStaff();
+    const res = await handler(post({ action: "members_update", shopId, userId: crypto.randomUUID(), permissions: { orders: true, prepare: false, money: false, products: false } }, ownerSession));
+    expect(res.status).toBe(404);
+  });
+
+  it("lets the owner remove a staff member", async () => {
+    const { handler, ownerSession, shopId, staffId } = await setUpShopWithStaff();
+    const res = await handler(post({ action: "members_remove", shopId, userId: staffId }, ownerSession));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, removed: true });
+  });
+
+  it("removing the owner is a no-op that reports removed: false", async () => {
+    const { handler, ownerSession, ownerId, shopId } = await setUpShopWithStaff();
+    const res = await handler(post({ action: "members_remove", shopId, userId: ownerId }, ownerSession));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, removed: false });
+  });
+});
+
+describe("createSyncHandler / photos", () => {
+  async function setUpShop(permissions: { orders?: boolean; prepare?: boolean; money?: boolean; products?: boolean } = {}) {
+    const handler = makeHandler();
+    const { session: ownerSession } = await signUp("owner-1");
+    const shopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, ownerSession));
+    const { code } = await (await handler(post({ action: "invite_create", shopId }, ownerSession))).json();
+    const { session: staffSession, userId: staffId } = await signUp("staff-1");
+    await handler(post({ action: "invite_join", code }, staffSession));
+    if (Object.keys(permissions).length > 0) {
+      await handler(post({ action: "members_update", shopId, userId: staffId, permissions: { orders: false, prepare: false, money: false, products: false, ...permissions } }, ownerSession));
+    }
+    return { handler, ownerSession, shopId, staffSession };
+  }
+
+  it("lets the owner upload a photo and returns its content-addressed photoId", async () => {
+    const { handler, ownerSession, shopId } = await setUpShop();
+    const res = await handler(post({ action: "photo_upload", shopId, mimeType: "image/jpeg", data: JPEG_BYTES.toString("base64") }, ownerSession));
+    expect(res.status).toBe(200);
+    const { photoId } = await res.json();
+    expect(photoId).toMatch(/^[0-9a-f]{64}$/);
+    expect(uploadedPhotos).toEqual([{ shopId, photoId, mimeType: "image/jpeg" }]);
+  });
+
+  it("refuses a photo upload from staff without products", async () => {
+    const { handler, staffSession, shopId } = await setUpShop();
+    const res = await handler(post({ action: "photo_upload", shopId, mimeType: "image/jpeg", data: JPEG_BYTES.toString("base64") }, staffSession));
+    expect(res.status).toBe(403);
+  });
+
+  it("allows a photo upload from staff with products", async () => {
+    const { handler, staffSession, shopId } = await setUpShop({ products: true });
+    const res = await handler(post({ action: "photo_upload", shopId, mimeType: "image/jpeg", data: JPEG_BYTES.toString("base64") }, staffSession));
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects a mimeType that doesn't match the bytes' magic number", async () => {
+    const { handler, ownerSession, shopId } = await setUpShop();
+    const res = await handler(post({ action: "photo_upload", shopId, mimeType: "image/png", data: JPEG_BYTES.toString("base64") }, ownerSession));
+    expect(res.status).toBe(400);
+  });
+
+  it("returns upload_failed (502) when the storage dependency fails", async () => {
+    uploadShouldSucceed = false;
+    const { handler, ownerSession, shopId } = await setUpShop();
+    const res = await handler(post({ action: "photo_upload", shopId, mimeType: "image/jpeg", data: JPEG_BYTES.toString("base64") }, ownerSession));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "upload_failed" });
+  });
+
+  it("any member (not just owner/products) can fetch a signed photo_url", async () => {
+    const { handler, staffSession, shopId } = await setUpShop();
+    const res = await handler(post({ action: "photo_url", shopId, photoId: "a".repeat(64) }, staffSession));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.url).toContain(shopId);
+  });
+
+  it("returns not_found when the signed URL dependency has nothing for that photo", async () => {
+    signedUrlShouldExist = false;
+    const { handler, ownerSession, shopId } = await setUpShop();
+    const res = await handler(post({ action: "photo_url", shopId, photoId: "a".repeat(64) }, ownerSession));
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("createSyncHandler / request shape", () => {
+  it("rejects a non-POST request", async () => {
+    const handler = makeHandler();
+    expect((await handler(new Request("https://example.test/orderat-sync", { method: "GET" }))).status).toBe(400);
+  });
+
+  it("rejects malformed JSON", async () => {
+    const handler = makeHandler();
+    const res = await handler(new Request("https://example.test/orderat-sync", { method: "POST", body: "{not json" }));
+    expect(res.status).toBe(400);
+  });
+});
