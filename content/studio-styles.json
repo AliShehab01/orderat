@@ -2,75 +2,255 @@
   "styles": [
     {
       "id": "white",
-      "name": { "ar": "أبيض نظيف", "en": "Clean white" },
-      "emoji": "⬜",
-      "swatch": "#FFFFFF",
+      "name": {
+        "ar": "أبيض نظيف",
+        "en": "Clean white"
+      },
+      "emoji": "⚪",
+      "swatch": "#F5F5F5",
       "previewUrl": null,
       "occasion": null,
-      "prompt": "Place the product on a seamless pure white studio background, shot straight-on at eye level, soft even softbox lighting from the front-left, a subtle soft shadow directly beneath the product, minimal and clean e-commerce product photography."
+      "prompt": "Place the product on a seamless pure white studio background with soft, even, diffused lighting and a gentle natural contact shadow beneath it, like a premium online-store catalog photo."
     },
     {
       "id": "marble",
-      "name": { "ar": "رخام", "en": "Marble" },
-      "emoji": "🪨",
-      "swatch": "#D9D3C7",
+      "name": {
+        "ar": "رخام",
+        "en": "Marble"
+      },
+      "emoji": "🤍",
+      "swatch": "#E8E4DF",
       "previewUrl": null,
       "occasion": null,
-      "prompt": "Place the product on a light grey-and-white veined marble surface, shot from a slight top-down angle, soft natural daylight coming from a window to the side, a gentle soft reflection on the marble, elegant boutique product photography."
+      "prompt": "Place the product on a polished white Carrara marble countertop with soft morning window light from the side and a bright, softly blurred modern kitchen in the background."
     },
     {
       "id": "pastel",
-      "name": { "ar": "خلفية باستيل", "en": "Pastel" },
+      "name": {
+        "ar": "باستيل ناعم",
+        "en": "Soft pastel"
+      },
       "emoji": "🎀",
-      "swatch": "#FCE4EC",
+      "swatch": "#F8BBD0",
       "previewUrl": null,
       "occasion": null,
-      "prompt": "Place the product on a soft pastel pink-and-cream gradient background, bright and airy lighting with no harsh shadows, a few small out-of-focus dried flower petals scattered near the base, cheerful lifestyle product photography."
+      "prompt": "Place the product on a smooth matte surface in soft pastel pink against a pastel peach backdrop, with gentle diffused light and a few small out-of-focus pastel decorations at the edges; dreamy and cheerful."
     },
     {
       "id": "wood",
-      "name": { "ar": "خشب طبيعي", "en": "Natural wood" },
+      "name": {
+        "ar": "خشب دافئ",
+        "en": "Warm wood"
+      },
       "emoji": "🪵",
-      "swatch": "#8B5E3C",
+      "swatch": "#A1887F",
       "previewUrl": null,
       "occasion": null,
-      "prompt": "Place the product on a warm rustic light-oak wood table, shot at a 45-degree angle, warm golden-hour side lighting, a softly folded linen napkin in the background corner, cozy home-bakery product photography."
+      "prompt": "Place the product on a rustic light oak table in warm late-afternoon sunlight, with a linen napkin and a few natural ingredients softly blurred in the background; a cozy homemade feel."
     },
     {
       "id": "flatlay_flowers",
-      "name": { "ar": "تنسيق ورد", "en": "Flower flat lay" },
+      "name": {
+        "ar": "ورد",
+        "en": "Flowers"
+      },
       "emoji": "🌸",
-      "swatch": "#F7C6D9",
+      "swatch": "#F48FB1",
       "previewUrl": null,
       "occasion": null,
-      "prompt": "Shoot the product from directly above (flat lay) on a light cream linen surface, surrounded by scattered fresh pink and white flower petals and a small sprig of eucalyptus, soft diffused daylight, elegant top-down product photography."
+      "prompt": "Place the product on a soft cream linen surface framed at the edges by fresh pink roses, baby's breath and green eucalyptus leaves, in bright soft daylight."
     },
     {
       "id": "dark_luxury",
-      "name": { "ar": "فخم غامق", "en": "Dark luxury" },
+      "name": {
+        "ar": "فخم داكن",
+        "en": "Dark luxury"
+      },
       "emoji": "🖤",
-      "swatch": "#1B1B1F",
+      "swatch": "#212121",
       "previewUrl": null,
       "occasion": null,
-      "prompt": "Place the product on a matte black stone surface against a deep charcoal background, dramatic single-source rim lighting from behind, a soft warm gold-toned highlight along the product's edge, premium luxury product photography."
+      "prompt": "Place the product on a dark slate surface against a deep charcoal backdrop with dramatic soft side lighting, subtle gold accents and a few elegant blurred gold bokeh lights; a luxurious premium mood."
     },
     {
       "id": "teachers_day",
-      "name": { "ar": "يوم المعلم", "en": "Teacher's Day" },
+      "name": {
+        "ar": "يوم المعلم",
+        "en": "Teachers' Day"
+      },
       "emoji": "🍎",
       "swatch": "#E4572E",
       "previewUrl": null,
       "occasion": "teachers_day",
-      "prompt": "Place the product on a warm wood desk beside a small neat stack of books, one red apple and a few sharpened pencils arranged nearby, soft daylight as if from a classroom window, cheerful Teacher's Day themed product photography, no text or lettering anywhere in the scene."
+      "prompt": "Place the product on a light wooden school desk with a shiny red apple, a few colorful pencils, a small stack of books and a blank mini chalkboard softly blurred beside it, in bright cheerful classroom daylight. The chalkboard stays blank."
     },
     {
-      "id": "national_day",
-      "name": { "ar": "اليوم الوطني", "en": "National Day" },
-      "emoji": "🎉",
+      "id": "national_day_bh",
+      "name": {
+        "ar": "العيد الوطني البحريني",
+        "en": "Bahrain National Day"
+      },
+      "emoji": "🇧🇭",
       "swatch": "#CE1126",
       "previewUrl": null,
       "occasion": "national_day",
-      "prompt": "Place the product on a clean white surface with soft red-and-white fabric bokeh in the background evoking a national celebration, a few red and white paper streamers softly out of focus at the edges, bright festive lighting, no flags, emblems, text or lettering anywhere in the scene."
+      "prompt": "Place the product on a clean white table with a festive national-day mood: red and white ribbons, red and white balloons and bunting softly blurred in the background, bright daylight. Only red and white decorations; no flags."
+    },
+    {
+      "id": "national_day_sa",
+      "name": {
+        "ar": "اليوم الوطني السعودي",
+        "en": "Saudi National Day"
+      },
+      "emoji": "🇸🇦",
+      "swatch": "#006C35",
+      "previewUrl": null,
+      "occasion": "national_day",
+      "prompt": "Place the product on a clean white table with a festive national-day mood: green and white ribbons, green and white balloons and palm-frond decorations softly blurred in the background, bright daylight. Only green and white decorations; no flags."
+    },
+    {
+      "id": "national_day_ae",
+      "name": {
+        "ar": "عيد الاتحاد",
+        "en": "UAE National Day"
+      },
+      "emoji": "🇦🇪",
+      "swatch": "#00732F",
+      "previewUrl": null,
+      "occasion": "national_day",
+      "prompt": "Place the product on a clean white table with a festive national-day mood: red, green, white and black ribbons and balloons softly blurred in the background, bright daylight. No flags."
+    },
+    {
+      "id": "national_day_kw",
+      "name": {
+        "ar": "الأعياد الوطنية الكويتية",
+        "en": "Kuwait National Days"
+      },
+      "emoji": "🇰🇼",
+      "swatch": "#007A3D",
+      "previewUrl": null,
+      "occasion": "national_day",
+      "prompt": "Place the product on a clean white table with a festive national-day mood: green, white, red and black ribbons and balloons softly blurred in the background, bright daylight. No flags."
+    },
+    {
+      "id": "national_day_qa",
+      "name": {
+        "ar": "اليوم الوطني القطري",
+        "en": "Qatar National Day"
+      },
+      "emoji": "🇶🇦",
+      "swatch": "#8A1538",
+      "previewUrl": null,
+      "occasion": "national_day",
+      "prompt": "Place the product on a clean white table with a festive national-day mood: maroon and white ribbons, maroon and white balloons and bunting softly blurred in the background, bright daylight. No flags."
+    },
+    {
+      "id": "national_day_om",
+      "name": {
+        "ar": "العيد الوطني العُماني",
+        "en": "Oman National Day"
+      },
+      "emoji": "🇴🇲",
+      "swatch": "#DB161B",
+      "previewUrl": null,
+      "occasion": "national_day",
+      "prompt": "Place the product on a clean white table with a festive national-day mood: red, white and green ribbons and balloons softly blurred in the background, bright daylight. No flags."
+    },
+    {
+      "id": "ramadan",
+      "name": {
+        "ar": "رمضان",
+        "en": "Ramadan"
+      },
+      "emoji": "🌙",
+      "swatch": "#1B4F72",
+      "previewUrl": null,
+      "occasion": "ramadan",
+      "prompt": "Place the product on a dark wooden table set for a Ramadan evening: warm glowing brass lanterns and a golden crescent-moon ornament softly blurred in the background, a small bowl of dates at the side, warm golden light; elegant and cozy."
+    },
+    {
+      "id": "eid",
+      "name": {
+        "ar": "العيد",
+        "en": "Eid"
+      },
+      "emoji": "✨",
+      "swatch": "#7B2CBF",
+      "previewUrl": null,
+      "occasion": "eid",
+      "prompt": "Place the product on an elegant table decorated for Eid: cream and gold tones, delicate gold crescent and star ornaments and warm fairy lights softly blurred in the background, a few wrapped gift boxes at the side, bright festive light."
+    },
+    {
+      "id": "gergaoun",
+      "name": {
+        "ar": "قرقاعون",
+        "en": "Gergaoun"
+      },
+      "emoji": "🍬",
+      "swatch": "#F2A900",
+      "previewUrl": null,
+      "occasion": "gergaoun",
+      "prompt": "Place the product on a festive table for the Gulf mid-Ramadan children's celebration: colorful traditional woven baskets and small cloth bags filled with wrapped candies and nuts softly blurred around it, cheerful bright colors, warm evening light."
+    },
+    {
+      "id": "valentines",
+      "name": {
+        "ar": "يوم الحب",
+        "en": "Valentine's"
+      },
+      "emoji": "❤️",
+      "swatch": "#D7263D",
+      "previewUrl": null,
+      "occasion": "valentines",
+      "prompt": "Place the product on a white table scattered with red rose petals, with red roses and soft heart-shaped bokeh lights blurred in the background, in warm romantic light."
+    },
+    {
+      "id": "mothers_day",
+      "name": {
+        "ar": "عيد الأم",
+        "en": "Mother's Day"
+      },
+      "emoji": "💐",
+      "swatch": "#E91E63",
+      "previewUrl": null,
+      "occasion": "mothers_day",
+      "prompt": "Place the product on a soft blush-pink table next to a bouquet of pink peonies and roses and a small blank greeting card, in bright soft morning light; tender and elegant. The card stays blank."
+    },
+    {
+      "id": "graduation",
+      "name": {
+        "ar": "التخرج",
+        "en": "Graduation"
+      },
+      "emoji": "🎓",
+      "swatch": "#1A237E",
+      "previewUrl": null,
+      "occasion": "graduation",
+      "prompt": "Place the product on a table with a navy and gold graduation theme: a black graduation cap, a rolled diploma tied with a gold ribbon and gold confetti softly blurred around it, bright celebratory light."
+    },
+    {
+      "id": "back_to_school",
+      "name": {
+        "ar": "المدارس",
+        "en": "Back to school"
+      },
+      "emoji": "🎒",
+      "swatch": "#F57C00",
+      "previewUrl": null,
+      "occasion": "back_to_school",
+      "prompt": "Place the product on a bright table with colorful pencils, a notebook, a small kids' lunchbox and a red apple softly blurred around it, in cheerful morning light."
+    },
+    {
+      "id": "new_year",
+      "name": {
+        "ar": "رأس السنة",
+        "en": "New Year"
+      },
+      "emoji": "🎉",
+      "swatch": "#B8860B",
+      "previewUrl": null,
+      "occasion": "new_year",
+      "prompt": "Place the product on a dark table with gold confetti, glowing sparklers and warm gold bokeh lights in the background; a festive night-party mood. No drinks."
     }
   ]
 }

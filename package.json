@@ -17,7 +17,8 @@
     "hosting:secrets": "node scripts/hosting-secrets.mjs",
     "hosting:deploy": "node scripts/hosting-deploy.mjs",
     "whatsapp:live": "tsx server/live.ts",
-    "pages:publish": "node scripts/publish-pages.mjs"
+    "pages:publish": "node scripts/publish-pages.mjs",
+    "content:build": "node scripts/content/gen-campaigns.mjs && node scripts/content/build-styles.mjs"
   },
   "dependencies": {
     "next": "16.3.5",
