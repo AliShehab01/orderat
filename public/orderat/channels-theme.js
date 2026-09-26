@@ -75,9 +75,9 @@ review = function sourcedReview(draft) {
   const refreshReference = () => {
     const isWhatsApp = channel.value === "whatsapp";
     const isInstagram = channel.value === "instagram";
-    document.getElementById("source-ref-label").textContent = isWhatsApp ? tr("Customer WhatsApp number", "رقم واتساب العميل") : isInstagram ? tr("Instagram username", "اسم مستخدم إنستغرام") : tr("Source reference", "مرجع المصدر");
+    document.getElementById("source-ref-label").textContent = isWhatsApp ? tr("Customer WhatsApp number (optional)", "رقم واتساب العميل (اختياري)") : isInstagram ? tr("Instagram username (optional)", "اسم مستخدم إنستغرام (اختياري)") : tr("Source reference", "مرجع المصدر");
     reference.placeholder = isWhatsApp ? "+973 3XXX XXXX" : isInstagram ? "@username" : tr("Phone, shop or referral", "هاتف أو متجر أو إحالة");
-    reference.required = isWhatsApp || isInstagram;
+    reference.required = false;
     document.getElementById("source-ref-help").textContent = document.getElementById("draft-intake").value === "auto" ? tr("Captured with the connected customer conversation.", "يُحفظ من محادثة العميل المتصلة.") : tr("Recorded by the owner during manual entry.", "يسجله المالك أثناء الإدخال اليدوي.");
   };
   channel.onchange = refreshReference;
