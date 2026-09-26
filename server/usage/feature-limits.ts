@@ -4,15 +4,19 @@
 // returning count" (increment-then-check, not check-then-increment) as server/ask/limits.ts — see
 // that file's header for why: a burst of concurrent requests can only ever push a counter a little
 // past its limit, never let an unbounded number through the way a separate SELECT-then-UPDATE would.
-// Parametrized by `feature` ("caption" | "photo") so both counters share one table pair without
-// colliding; Ask Orderat keeps its own separate ai_usage tables (0002_ai_usage.sql) and is untouched
-// by this file. Requests are only ever counted here after body validation has already passed
-// (server/studio/validate.ts) and are never uncounted afterwards, even if the request then turns out
-// to be over a limit or Gemini fails.
+// Parametrized by `feature` ("caption" | "photo" | "parse") so every feature's counters share one
+// table pair without colliding; Ask Orderat keeps its own separate ai_usage tables
+// (0002_ai_usage.sql) and is untouched by this file. Requests are only ever counted here after body
+// validation has already passed (server/studio/validate.ts, server/parse/validate.ts) and are never
+// uncounted afterwards, even if the request then turns out to be over a limit or Gemini fails.
+//
+// "parse" (docs/sme-phase-2-cloud.md's AI order entry, server/parse/handler.ts) was added for SME
+// phase 2 alongside "caption"/"photo" from the marketing tools — same ledger, same reasoning, just one
+// more feature name sharing it.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 
-export type Feature = "caption" | "photo";
+export type Feature = "caption" | "photo" | "parse";
 
 export interface FeatureLimits {
   /** Requests/day for a single install. */
@@ -32,8 +36,14 @@ export const DEFAULT_CAPTION_LIMITS: FeatureLimits = { perInstall: 20, perInstal
  * than captions. */
 export const DEFAULT_PHOTO_LIMITS: FeatureLimits = { perInstall: 10, perInstallDemo: 2, globalCap: 300 };
 
+/** docs/sme-phase-2-cloud.md: AI order entry 50/day per install, 5/day in demo mode, global cap
+ * default 5000 (env ORDERAT_PARSE_DAILY_CAP). */
+export const DEFAULT_PARSE_LIMITS: FeatureLimits = { perInstall: 50, perInstallDemo: 5, globalCap: 5000 };
+
 export function defaultLimitsFor(feature: Feature): FeatureLimits {
-  return feature === "caption" ? DEFAULT_CAPTION_LIMITS : DEFAULT_PHOTO_LIMITS;
+  if (feature === "caption") return DEFAULT_CAPTION_LIMITS;
+  if (feature === "photo") return DEFAULT_PHOTO_LIMITS;
+  return DEFAULT_PARSE_LIMITS;
 }
 
 /** `date`-typed columns take a plain "YYYY-MM-DD" string from both the Node and Deno postgres

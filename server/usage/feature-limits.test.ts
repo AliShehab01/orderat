@@ -11,6 +11,7 @@ import {
   checkAndRecordFeatureUsage,
   dayKey,
   DEFAULT_CAPTION_LIMITS,
+  DEFAULT_PARSE_LIMITS,
   DEFAULT_PHOTO_LIMITS,
   incrementFeatureDailyUsage,
   incrementFeatureInstallUsage,
@@ -35,6 +36,10 @@ describe("default limits", () => {
 
   it("match docs/marketing-tools.md for photos", () => {
     expect(DEFAULT_PHOTO_LIMITS).toEqual({ perInstall: 10, perInstallDemo: 2, globalCap: 300 });
+  });
+
+  it("match docs/sme-phase-2-cloud.md for AI order entry (parse)", () => {
+    expect(DEFAULT_PARSE_LIMITS).toEqual({ perInstall: 50, perInstallDemo: 5, globalCap: 5000 });
   });
 });
 
