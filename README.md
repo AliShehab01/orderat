@@ -66,10 +66,11 @@ Meta needs a public HTTPS address for the webhook, so expose port 8787 through a
 
 ## Hosting
 
-`server/` and `src/lib/` run unchanged under Deno as three Supabase Edge Functions — the same
-webhook handlers, agent, parser and day-plan logic as `npm run whatsapp:dev`, just deployed instead
-of run on your machine, and backed by Postgres instead of an in-memory array. Nothing here is
-required for local development; `npm run whatsapp:dev` keeps working exactly as before.
+`server/` and `src/lib/` run unchanged under Deno as ten Supabase Edge Functions — the same
+webhook handlers, agent, parser, day-plan logic, marketing tools and SME-phase-2 cloud backend
+(accounts, sync, AI order entry) as `npm run whatsapp:dev`, just deployed instead of run on your
+machine, and backed by Postgres instead of an in-memory array. Nothing here is required for local
+development; `npm run whatsapp:dev` keeps working exactly as before.
 
 ### Why Hayati
 
@@ -102,20 +103,26 @@ read Hayati's data, degrade its database, or get in the way of moving off this a
   PostgREST later.
 - **Prefixed everywhere it's visible in the shared project.** Edge Functions are named
   `orderat-whatsapp`, `orderat-instagram`, `orderat-owner`, `orderat-ask`, `orderat-campaigns`,
-  `orderat-studio`, `orderat-shop` (not `whatsapp`/`instagram`/`owner`/etc.); every hosted secret
-  carries an `ORDERAT_` prefix and is read only through that prefix (`supabase/functions/_shared/env.ts`)
-  — the one documented exception is `orderat-shop`, which also reads Supabase's own auto-injected
-  `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` directly, needed to write to Storage (see
-  `supabase/functions/orderat-shop/index.ts`'s own header for why). Nothing else Orderat does can
-  accidentally read, overwrite, or even collide in name with something that belongs to Hayati.
+  `orderat-studio`, `orderat-shop`, `orderat-auth`, `orderat-sync`, `orderat-parse` (not
+  `whatsapp`/`instagram`/`owner`/etc.); every hosted secret carries an `ORDERAT_` prefix and is read
+  only through that prefix (`supabase/functions/_shared/env.ts`) — the documented exceptions are
+  `orderat-shop` and `orderat-sync`, which also read Supabase's own auto-injected
+  `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` directly, needed to write to (and, for `orderat-sync`'s
+  private `orderat-photos` bucket, sign a URL into) Storage (see each function's own `index.ts`
+  header for why). Nothing else Orderat does can accidentally read, overwrite, or even collide in
+  name with something that belongs to Hayati. `orderat-auth`/`orderat-sync` also introduce their own
+  account system
+  (`orderat.users`/`orderat.sessions`, docs/sme-phase-2-cloud.md) rather than Supabase Auth — the
+  project's `auth.users` belongs to Hayati, so Orderat can never touch it, matching the no-PostgREST,
+  no-service-role-key-for-data posture the rest of this contract already takes.
 - **Migrations outside the Supabase CLI's managed folder.** `db/migrations/` (not
   `supabase/migrations/`), applied by `npm run hosting:migrate`, never `supabase db push` — so
   nobody ever points the CLI's own migration history at Hayati's project and risks it trying to
   reconcile against Hayati's own (unrelated) migrations.
 
-**Layout:** seven thin `Deno.serve` entry points,
-`supabase/functions/orderat-{whatsapp,instagram,owner,ask,campaigns,studio,shop}/index.ts`, import
-`server/`, `src/lib/` and (for `orderat-campaigns`/`orderat-studio`) `content/` by relative path and
+**Layout:** ten thin `Deno.serve` entry points,
+`supabase/functions/orderat-{whatsapp,instagram,owner,ask,campaigns,studio,shop,auth,sync,parse}/index.ts`,
+import `server/`, `src/lib/` and (for `orderat-campaigns`/`orderat-studio`) `content/` by relative path and
 are deployed with `--use-api` (server-side bundling, no local Docker daemon needed). Supabase's own
 docs show `--use-api` bundling a sibling folder outside `supabase/` for exactly this kind of monorepo
 case, but it's a newer path than the Docker-based deploy and has had reported bundler rough edges with
@@ -191,6 +198,9 @@ npx supabase functions delete orderat-ask --project-ref ckjmbdbvlbxfofjgqiuj
 npx supabase functions delete orderat-campaigns --project-ref ckjmbdbvlbxfofjgqiuj
 npx supabase functions delete orderat-studio --project-ref ckjmbdbvlbxfofjgqiuj
 npx supabase functions delete orderat-shop --project-ref ckjmbdbvlbxfofjgqiuj
+npx supabase functions delete orderat-auth --project-ref ckjmbdbvlbxfofjgqiuj
+npx supabase functions delete orderat-sync --project-ref ckjmbdbvlbxfofjgqiuj
+npx supabase functions delete orderat-parse --project-ref ckjmbdbvlbxfofjgqiuj
 # Unset every ORDERAT_* secret in the dashboard (Edge Functions > Secrets), or via the CLI.
 ```
 ```sql
@@ -250,10 +260,14 @@ When it becomes a real constraint, that's the trigger for "Move to a dedicated p
    - `SHOP_BASE_URL` (`orderat-shop`, optional — defaults to
      `https://alishehab01.github.io/orderat/s/?`) and `SHOP_IP_SALT` (optional — falls back to a hash
      of the service role key when unset; see `supabase/functions/orderat-shop/index.ts`)
+   - `APPLE_AUDIENCES` / `GOOGLE_AUDIENCES` (`orderat-auth`, docs/sme-phase-2-cloud.md — comma lists
+     of accepted ID-token `aud` values; `APPLE_AUDIENCES` optional, defaults to `com.ams.orderat`,
+     `GOOGLE_AUDIENCES` has no default, so Google sign-in stays refused until it's set)
+   - `PARSE_DAILY_CAP` (`orderat-parse`'s AI order entry, optional — defaults to 5000)
    ```
    npm run hosting:secrets
    ```
-6. **Deploy all seven functions:**
+6. **Deploy all ten functions:**
    ```
    npm run hosting:deploy
    ```

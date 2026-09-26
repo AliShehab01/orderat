@@ -47,3 +47,20 @@ verify_jwt = false
 
 [functions.orderat-shop]
 verify_jwt = false
+
+# orderat-auth/orderat-sync/orderat-parse (docs/sme-phase-2-cloud.md, SME phase 2): same reasoning as
+# orderat-ask/orderat-studio above — the apps send a real (public) anon-key Bearer token, but
+# Supabase's own JWT check would add no real authorization. Their actual authentication is
+# server/auth's own session tokens (X-Orderat-Session, checked inside server/auth/store.ts's
+# resolveSession) for every orderat-sync action and orderat-auth's signed-in actions; orderat-parse
+# needs no session at all (docs/sme-phase-2-cloud.md's AI order entry is independent of accounts) and
+# orderat-auth's own `signin` action is what verifies the *provider's* ID token in the first place
+# (server/auth/verify-token.ts) — none of that is Supabase's JWT check.
+[functions.orderat-auth]
+verify_jwt = false
+
+[functions.orderat-sync]
+verify_jwt = false
+
+[functions.orderat-parse]
+verify_jwt = false

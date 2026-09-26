@@ -18,6 +18,9 @@ const ALL = [
   "orderat-campaigns",
   "orderat-studio",
   "orderat-shop",
+  "orderat-auth",
+  "orderat-sync",
+  "orderat-parse",
 ];
 
 function main() {

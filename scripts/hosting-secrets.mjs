@@ -42,6 +42,10 @@ export const ALLOWLIST = [
   "IMAGE_FALLBACK_MODELS",
   "SHOP_BASE_URL",
   "SHOP_IP_SALT",
+  // docs/sme-phase-2-cloud.md (orderat-auth/orderat-sync/orderat-parse, SME phase 2).
+  "APPLE_AUDIENCES",
+  "GOOGLE_AUDIENCES",
+  "PARSE_DAILY_CAP",
 ];
 
 // Local-only convenience flags (server/dev.ts, server/whatsapp/webhook.ts, server/instagram/config.ts)
