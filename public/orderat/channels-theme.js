@@ -66,7 +66,7 @@ review = function sourcedReview(draft) {
   if (!form || !anchor) return;
   anchor.insertAdjacentHTML("afterend", `<section class="source-fields">
     <div class="source-section-head"><div><h3>${tr("Order source", "مصدر الطلب")}</h3><p>${tr("Keep the channel and customer reference with the order, even when you enter it manually.", "احفظ القناة ومرجع العميل مع الطلب حتى عند إدخاله يدويًا.")}</p></div></div>
-    <div class="two-col"><div class="field"><label for="draft-intake">${tr("How it reached Orderat", "كيف وصل إلى اوردرات")}</label><select id="draft-intake"><option value="manual" ${draft.intake === "manual" ? "selected" : ""}>${tr("Manual capture", "إدخال يدوي")}</option><option value="auto" ${draft.intake === "auto" ? "selected" : ""}>${tr("Automatic connection (Pro)", "ربط تلقائي (برو)")}</option></select></div><div class="field"><label for="draft-channel">${tr("Customer channel", "قناة العميل")}</label><select id="draft-channel"><option value="whatsapp" ${draft.channel === "whatsapp" ? "selected" : ""}>WhatsApp</option><option value="instagram" ${draft.channel === "instagram" ? "selected" : ""}>Instagram</option><option value="other" ${draft.channel === "other" ? "selected" : ""}>${tr("Other", "أخرى")}</option></select></div></div>
+    <div class="two-col"><div class="field"><label for="draft-intake">${tr("How it reached Orderat", "كيف وصل إلى اوردرات")}</label><select id="draft-intake"><option value="manual" ${draft.intake === "manual" ? "selected" : ""}>${tr("Manual capture", "إدخال يدوي")}</option>${draft.intake === "auto" ? `<option value="auto" selected>${tr("Automatic connection", "ربط تلقائي")}</option>` : ""}</select></div><div class="field"><label for="draft-channel">${tr("Customer channel", "قناة العميل")}</label><select id="draft-channel"><option value="whatsapp" ${draft.channel === "whatsapp" ? "selected" : ""}>WhatsApp</option><option value="instagram" ${draft.channel === "instagram" ? "selected" : ""}>Instagram</option><option value="other" ${draft.channel === "other" ? "selected" : ""}>${tr("Other", "أخرى")}</option></select></div></div>
     <div class="field"><label id="source-ref-label" for="draft-source-ref"></label><input id="draft-source-ref" value="${esc(draft.sourceRef)}" maxlength="100" dir="ltr"><p id="source-ref-help" class="field-help"></p></div>
   </section>`);
   localizeValidity(modalEl);
@@ -104,7 +104,7 @@ orderDetails = function sourcedOrderDetails(id) {
   const order = state.orders.find((item) => item.id === id);
   const anchor = modalEl.querySelector(".modal-body .row-between");
   if (!order || !anchor) return;
-  anchor.insertAdjacentHTML("afterend", `<div class="source-summary"><span>${tr("ORDER SOURCE", "مصدر الطلب")}</span><strong>${sourceCaption(order)}</strong><small>${order.intake === "auto" ? tr("Arrived through a Pro channel connection", "وصل عبر ربط قناة برو") : tr("Recorded manually by the owner", "سجله المالك يدويًا")}</small></div>`);
+  anchor.insertAdjacentHTML("afterend", `<div class="source-summary"><span>${tr("ORDER SOURCE", "مصدر الطلب")}</span><strong>${sourceCaption(order)}</strong><small>${order.intake === "auto" ? tr("Arrived through a connected channel", "وصل عبر قناة مربوطة") : tr("Recorded manually by the owner", "سجله المالك يدويًا")}</small></div>`);
 };
 
 exportCsv = function sourcedExportCsv() {
