@@ -66,7 +66,7 @@ review = function sourcedReview(draft) {
   if (!form || !anchor) return;
   anchor.insertAdjacentHTML("afterend", `<section class="source-fields">
     <div class="source-section-head"><div><h3>${tr("Order source", "مصدر الطلب")}</h3><p>${tr("Keep the channel and customer reference with the order, even when you enter it manually.", "احفظ القناة ومرجع العميل مع الطلب حتى عند إدخاله يدويًا.")}</p></div></div>
-    <div class="two-col"><div class="field"><label for="draft-intake">${tr("How it reached Orderat", "كيف وصل إلى اوردرات")}</label><select id="draft-intake"><option value="manual" ${draft.intake === "manual" ? "selected" : ""}>${tr("Manual capture", "إدخال يدوي")}</option><option value="auto" ${draft.intake === "auto" ? "selected" : ""}>${tr("Automatic connection (Pro)", "ربط تلقائي (برو)")}</option></select></div><div class="field"><label for="draft-channel">${tr("Customer channel", "قناة العميل")}</label><select id="draft-channel"><option value="whatsapp" ${draft.channel === "whatsapp" ? "selected" : ""}>WhatsApp</option><option value="instagram" ${draft.channel === "instagram" ? "selected" : ""}>Instagram</option><option value="other" ${draft.channel === "other" ? "selected" : ""}>${tr("Other", "أخرى")}</option></select></div></div>
+    <div class="two-col"><div class="field"><label for="draft-intake">${tr("How it reached Orderat", "كيف وصل إلى اوردرات")}</label><select id="draft-intake"><option value="manual" ${draft.intake === "manual" ? "selected" : ""}>${tr("Manual capture", "إدخال يدوي")}</option>${draft.intake === "auto" ? `<option value="auto" selected>${tr("Automatic connection", "ربط تلقائي")}</option>` : ""}</select></div><div class="field"><label for="draft-channel">${tr("Customer channel", "قناة العميل")}</label><select id="draft-channel"><option value="whatsapp" ${draft.channel === "whatsapp" ? "selected" : ""}>WhatsApp</option><option value="instagram" ${draft.channel === "instagram" ? "selected" : ""}>Instagram</option><option value="other" ${draft.channel === "other" ? "selected" : ""}>${tr("Other", "أخرى")}</option></select></div></div>
     <div class="field"><label id="source-ref-label" for="draft-source-ref"></label><input id="draft-source-ref" value="${esc(draft.sourceRef)}" maxlength="100" dir="ltr"><p id="source-ref-help" class="field-help"></p></div>
   </section>`);
   localizeValidity(modalEl);
@@ -75,9 +75,9 @@ review = function sourcedReview(draft) {
   const refreshReference = () => {
     const isWhatsApp = channel.value === "whatsapp";
     const isInstagram = channel.value === "instagram";
-    document.getElementById("source-ref-label").textContent = isWhatsApp ? tr("Customer WhatsApp number", "رقم واتساب العميل") : isInstagram ? tr("Instagram username", "اسم مستخدم إنستغرام") : tr("Source reference", "مرجع المصدر");
+    document.getElementById("source-ref-label").textContent = isWhatsApp ? tr("Customer WhatsApp number (optional)", "رقم واتساب العميل (اختياري)") : isInstagram ? tr("Instagram username (optional)", "اسم مستخدم إنستغرام (اختياري)") : tr("Source reference", "مرجع المصدر");
     reference.placeholder = isWhatsApp ? "+973 3XXX XXXX" : isInstagram ? "@username" : tr("Phone, shop or referral", "هاتف أو متجر أو إحالة");
-    reference.required = isWhatsApp || isInstagram;
+    reference.required = false;
     document.getElementById("source-ref-help").textContent = document.getElementById("draft-intake").value === "auto" ? tr("Captured with the connected customer conversation.", "يُحفظ من محادثة العميل المتصلة.") : tr("Recorded by the owner during manual entry.", "يسجله المالك أثناء الإدخال اليدوي.");
   };
   channel.onchange = refreshReference;
@@ -104,7 +104,7 @@ orderDetails = function sourcedOrderDetails(id) {
   const order = state.orders.find((item) => item.id === id);
   const anchor = modalEl.querySelector(".modal-body .row-between");
   if (!order || !anchor) return;
-  anchor.insertAdjacentHTML("afterend", `<div class="source-summary"><span>${tr("ORDER SOURCE", "مصدر الطلب")}</span><strong>${sourceCaption(order)}</strong><small>${order.intake === "auto" ? tr("Arrived through a Pro channel connection", "وصل عبر ربط قناة برو") : tr("Recorded manually by the owner", "سجله المالك يدويًا")}</small></div>`);
+  anchor.insertAdjacentHTML("afterend", `<div class="source-summary"><span>${tr("ORDER SOURCE", "مصدر الطلب")}</span><strong>${sourceCaption(order)}</strong><small>${order.intake === "auto" ? tr("Arrived through a connected channel", "وصل عبر قناة مربوطة") : tr("Recorded manually by the owner", "سجله المالك يدويًا")}</small></div>`);
 };
 
 exportCsv = function sourcedExportCsv() {
@@ -116,14 +116,6 @@ exportCsv = function sourcedExportCsv() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   toast(tr("Order CSV downloaded with source details.", "تم تنزيل الطلبات مع تفاصيل المصدر."));
 };
-
-function mobileMoreMenu() {
-  const destinations = [
-    ["inventory", "inventory"], ["analytics", "analytics"], ["products", "products"], ["plans", "plans"], ["settings", "settings"]
-  ];
-  modal(tr("More tools", "المزيد من الأدوات"), `<div class="more-menu">${destinations.map(([destination, iconName]) => `<button data-more-nav="${destination}" class="more-menu-item ${view === destination ? "active" : ""}">${icon(iconName)}<span><strong>${tr(...labels[destination])}</strong><small>${({ inventory: tr("Finished stock and reservations", "المخزون الجاهز والحجوزات"), analytics: tr("Sales and demand", "المبيعات والطلب"), products: tr("Menu and batch setup", "المنتجات والدفعات"), plans: tr("Basic and Pro", "بيسك وبرو"), settings: tr("Workspace and brand", "المساحة والهوية") })[destination]}</small></span>${icon("arrow")}</button>`).join("")}</div>`, tr("Everything else, one tap away.", "كل الأدوات الأخرى على بُعد نقرة."));
-  modalEl.querySelectorAll("[data-more-nav]").forEach((button) => button.onclick = () => { closeModal(); navigate(button.dataset.moreNav); });
-}
 
 const sourceBaseSettings = settingsPage;
 settingsPage = function sourcedSettings() {
@@ -143,11 +135,6 @@ function patchShell() {
     themeButton.innerHTML = `${icon("theme")}<span>${dark ? tr("Light", "فاتح") : tr("Dark", "داكن")}</span>`;
     topActions.insertBefore(themeButton, document.getElementById("language"));
     themeButton.onclick = () => { state.theme = dark ? "light" : "dark"; persist(); render(); };
-  }
-  const more = document.getElementById("nav-more");
-  if (more) {
-    more.classList.toggle("active", ["inventory", "analytics", "products", "plans", "settings"].includes(view));
-    more.onclick = mobileMoreMenu;
   }
   const themeSetting = document.getElementById("theme-setting");
   if (themeSetting) themeSetting.onchange = () => { state.theme = themeSetting.value; persist(); render(); };
