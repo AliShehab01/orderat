@@ -1,0 +1,91 @@
+{
+  "version": "2026-09-26.1",
+  "campaigns": [
+    {
+      "id": "teachers-day-2026",
+      "occasion": "teachers_day",
+      "name": { "ar": "يوم المعلم", "en": "Teachers' Day" },
+      "emoji": "🍎",
+      "countries": ["BH", "SA", "AE", "KW", "QA", "OM"],
+      "startDate": "2026-10-05",
+      "endDate": "2026-10-05",
+      "promoteFrom": "2026-09-21",
+      "accent": "#E4572E",
+      "headline": { "ar": "هدية حلوة للمعلمة", "en": "A sweet thank-you for teachers" },
+      "tips": {
+        "ar": [
+          "جهزي بوكسات صغيرة تناسب الهدايا الفردية",
+          "خلي التغليف بسيط وأنيق بدون تكاليف زيادة",
+          "اطرحي عروض حجز مسبق قبل اليوم بثلاثة أيام"
+        ],
+        "en": [
+          "Prepare small individual gift boxes",
+          "Keep packaging simple and elegant, no extra cost",
+          "Open pre-orders three days before the day"
+        ]
+      },
+      "productIdeas": {
+        "ar": ["كوكيز مزينة بعبارات شكر", "كب كيك بغطاء تفاحة", "شوكولاتة مغلفة برسائل شكر"],
+        "en": ["Thank-you message cookies", "Apple-topped cupcakes", "Wrapped chocolates with thank-you notes"]
+      },
+      "captions": {
+        "ar": [
+          "يوم المعلم قرب، فرحي معلمتك بهدية من {shop} 🍎 اطلبي {item} بسعر {price} {link}",
+          "أحلى هدية لأحلى معلمة، {item} من {shop} جاهزة ليوم المعلم {date} {link}"
+        ],
+        "en": [
+          "Teachers' Day is near — surprise her with a gift from {shop} 🍎 Order {item} for {price} {link}",
+          "The sweetest gift for the sweetest teacher: {item} from {shop}, ready for Teachers' Day {date} {link}"
+        ]
+      },
+      "hashtags": {
+        "ar": ["#يوم_المعلم", "#تكريم_المعلمين"],
+        "en": ["#TeachersDay", "#ThankYouTeachers"]
+      },
+      "studioStyles": ["teachers_day", "white"]
+    },
+    {
+      "id": "bahrain-national-day-2026",
+      "occasion": "national_day",
+      "name": { "ar": "اليوم الوطني البحريني", "en": "Bahrain National Day" },
+      "emoji": "🎉",
+      "countries": ["BH"],
+      "startDate": "2026-12-16",
+      "endDate": "2026-12-17",
+      "promoteFrom": "2026-12-01",
+      "accent": "#CE1126",
+      "headline": { "ar": "احتفلي بالوطن بطلبيات العيد الوطني", "en": "Celebrate National Day with festive orders" },
+      "tips": {
+        "ar": [
+          "ضيفي لمسة بالأحمر والأبيض بدون رموز رسمية",
+          "افتحي الحجز المسبق قبل أسبوع من العيد",
+          "جهزي عروض عائلية تناسب التجمعات"
+        ],
+        "en": [
+          "Add a red-and-white touch, no official emblems",
+          "Open pre-orders a week before the day",
+          "Prepare family-size bundles for gatherings"
+        ]
+      },
+      "productIdeas": {
+        "ar": ["كيك بطبقات حمراء وبيضاء", "بوكس حلى وطني للتجمعات", "كوكيز على شكل نجمة"],
+        "en": ["Red-and-white layered cake", "National sweets box for gatherings", "Star-shaped cookies"]
+      },
+      "captions": {
+        "ar": [
+          "كل عام والبحرين بخير 🎉 اطلبي {item} من {shop} بمناسبة اليوم الوطني بسعر {price} {link}",
+          "احتفلي معنا في {shop}، {item} جاهز ليوم {date} {link}"
+        ],
+        "en": [
+          "Happy National Day 🎉 Order {item} from {shop} for {price} {link}",
+          "Celebrate with {shop} — {item} ready for {date} {link}"
+        ]
+      },
+      "hashtags": {
+        "ar": ["#اليوم_الوطني_البحريني", "#البحرين"],
+        "en": ["#BahrainNationalDay", "#Bahrain"]
+      },
+      "studioStyles": ["national_day", "dark_luxury"]
+    }
+  ]
+}

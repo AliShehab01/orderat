@@ -10,7 +10,15 @@
 import { spawnSync } from "node:child_process";
 import { resolveProjectRef } from "./lib/hosting-env.mjs";
 
-const ALL = ["orderat-whatsapp", "orderat-instagram", "orderat-owner", "orderat-ask"];
+const ALL = [
+  "orderat-whatsapp",
+  "orderat-instagram",
+  "orderat-owner",
+  "orderat-ask",
+  "orderat-campaigns",
+  "orderat-studio",
+  "orderat-shop",
+];
 
 function main() {
   const argv = process.argv.slice(2);

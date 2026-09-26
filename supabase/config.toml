@@ -32,3 +32,18 @@ verify_jwt = false
 # for anyone deploying orderat-ask directly with the CLI.
 [functions.orderat-ask]
 verify_jwt = false
+
+# orderat-campaigns/orderat-studio/orderat-shop (docs/marketing-tools.md): same reasoning as
+# orderat-ask above — the apps send a real (public) anon-key Bearer token, but Supabase's own JWT
+# check would add no real authorization, so verify_jwt is off for these too. orderat-shop is also
+# called directly by the public shop page's browser JS (never a Supabase client), which sends no
+# Authorization header of its own at all; the function's own CORS (server/shared/cors.ts) and the
+# shop's edit-token checks are what actually authorize it, independent of this setting.
+[functions.orderat-campaigns]
+verify_jwt = false
+
+[functions.orderat-studio]
+verify_jwt = false
+
+[functions.orderat-shop]
+verify_jwt = false

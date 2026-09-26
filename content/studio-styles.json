@@ -1,0 +1,76 @@
+{
+  "styles": [
+    {
+      "id": "white",
+      "name": { "ar": "أبيض نظيف", "en": "Clean white" },
+      "emoji": "⬜",
+      "swatch": "#FFFFFF",
+      "previewUrl": null,
+      "occasion": null,
+      "prompt": "Place the product on a seamless pure white studio background, shot straight-on at eye level, soft even softbox lighting from the front-left, a subtle soft shadow directly beneath the product, minimal and clean e-commerce product photography."
+    },
+    {
+      "id": "marble",
+      "name": { "ar": "رخام", "en": "Marble" },
+      "emoji": "🪨",
+      "swatch": "#D9D3C7",
+      "previewUrl": null,
+      "occasion": null,
+      "prompt": "Place the product on a light grey-and-white veined marble surface, shot from a slight top-down angle, soft natural daylight coming from a window to the side, a gentle soft reflection on the marble, elegant boutique product photography."
+    },
+    {
+      "id": "pastel",
+      "name": { "ar": "خلفية باستيل", "en": "Pastel" },
+      "emoji": "🎀",
+      "swatch": "#FCE4EC",
+      "previewUrl": null,
+      "occasion": null,
+      "prompt": "Place the product on a soft pastel pink-and-cream gradient background, bright and airy lighting with no harsh shadows, a few small out-of-focus dried flower petals scattered near the base, cheerful lifestyle product photography."
+    },
+    {
+      "id": "wood",
+      "name": { "ar": "خشب طبيعي", "en": "Natural wood" },
+      "emoji": "🪵",
+      "swatch": "#8B5E3C",
+      "previewUrl": null,
+      "occasion": null,
+      "prompt": "Place the product on a warm rustic light-oak wood table, shot at a 45-degree angle, warm golden-hour side lighting, a softly folded linen napkin in the background corner, cozy home-bakery product photography."
+    },
+    {
+      "id": "flatlay_flowers",
+      "name": { "ar": "تنسيق ورد", "en": "Flower flat lay" },
+      "emoji": "🌸",
+      "swatch": "#F7C6D9",
+      "previewUrl": null,
+      "occasion": null,
+      "prompt": "Shoot the product from directly above (flat lay) on a light cream linen surface, surrounded by scattered fresh pink and white flower petals and a small sprig of eucalyptus, soft diffused daylight, elegant top-down product photography."
+    },
+    {
+      "id": "dark_luxury",
+      "name": { "ar": "فخم غامق", "en": "Dark luxury" },
+      "emoji": "🖤",
+      "swatch": "#1B1B1F",
+      "previewUrl": null,
+      "occasion": null,
+      "prompt": "Place the product on a matte black stone surface against a deep charcoal background, dramatic single-source rim lighting from behind, a soft warm gold-toned highlight along the product's edge, premium luxury product photography."
+    },
+    {
+      "id": "teachers_day",
+      "name": { "ar": "يوم المعلم", "en": "Teacher's Day" },
+      "emoji": "🍎",
+      "swatch": "#E4572E",
+      "previewUrl": null,
+      "occasion": "teachers_day",
+      "prompt": "Place the product on a warm wood desk beside a small neat stack of books, one red apple and a few sharpened pencils arranged nearby, soft daylight as if from a classroom window, cheerful Teacher's Day themed product photography, no text or lettering anywhere in the scene."
+    },
+    {
+      "id": "national_day",
+      "name": { "ar": "اليوم الوطني", "en": "National Day" },
+      "emoji": "🎉",
+      "swatch": "#CE1126",
+      "previewUrl": null,
+      "occasion": "national_day",
+      "prompt": "Place the product on a clean white surface with soft red-and-white fabric bokeh in the background evoking a national celebration, a few red and white paper streamers softly out of focus at the edges, bright festive lighting, no flags, emblems, text or lettering anywhere in the scene."
+    }
+  ]
+}
