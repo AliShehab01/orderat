@@ -16,7 +16,8 @@
     "hosting:db-user": "node scripts/hosting-db-user.mjs",
     "hosting:secrets": "node scripts/hosting-secrets.mjs",
     "hosting:deploy": "node scripts/hosting-deploy.mjs",
-    "whatsapp:live": "tsx server/live.ts"
+    "whatsapp:live": "tsx server/live.ts",
+    "pages:publish": "node scripts/publish-pages.mjs"
   },
   "dependencies": {
     "next": "16.3.5",
