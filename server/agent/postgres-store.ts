@@ -100,7 +100,7 @@ export class PostgresStore implements OrderStore {
     await this.sql.query(
       `insert into orderat.orders
          (id, channel, customer_id, customer_name, items, collection_at, notes, status, changes, lang, source_text, created_at)
-       values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, $11, $12)`,
+       values ($1, $2, $3, $4, $5::text::jsonb, $6, $7, $8, $9::text::jsonb, $10, $11, $12)`,
       [
         stored.order.id,
         stored.channel,
@@ -126,11 +126,11 @@ export class PostgresStore implements OrderStore {
       sets.push(`${column} = $${params.length}${cast}`);
     };
     if ("customerName" in patch) set("customer_name", patch.customerName);
-    if ("items" in patch) set("items", JSON.stringify(patch.items), "::jsonb");
+    if ("items" in patch) set("items", JSON.stringify(patch.items), "::text::jsonb");
     if ("collectionAt" in patch) set("collection_at", patch.collectionAt ?? null);
     if ("notes" in patch) set("notes", patch.notes ?? null);
     if ("status" in patch) set("status", patch.status);
-    if ("changes" in patch) set("changes", JSON.stringify(patch.changes), "::jsonb");
+    if ("changes" in patch) set("changes", JSON.stringify(patch.changes), "::text::jsonb");
     if ("createdAt" in patch) set("created_at", patch.createdAt);
 
     if (sets.length === 0) return this.get(orderId);
