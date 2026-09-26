@@ -34,6 +34,7 @@ export const ALLOWLIST = [
   "INSTAGRAM_REPLY_TO",
   "OWNER_KEY",
   "OWNER_ALLOWED_ORIGINS",
+  "ASK_DAILY_CAP",
 ];
 
 // Local-only convenience flags (server/dev.ts, server/whatsapp/webhook.ts, server/instagram/config.ts)

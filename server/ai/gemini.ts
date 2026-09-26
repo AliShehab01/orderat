@@ -161,6 +161,72 @@ function toDraft(answer: AiAnswer, products: Product[]): Draft {
   };
 }
 
+export interface GeminiCallResult {
+  /** Model that produced the answer — the first one in the list that returned 2xx. */
+  model: string;
+  /** The model's raw text answer (JSON, per the caller's responseSchema); callers parse it themselves. */
+  text: string;
+}
+
+/**
+ * POSTs a Gemini `generateContent` body to `models` in order, trying the next one when the previous
+ * is busy (429/5xx), retired (404), or hangs past `timeoutMs` (treated like a 5xx) — the model
+ * fallback + timeout machinery createGeminiExtractor below has always used, extracted so a second,
+ * separate Gemini caller (server/ai/ask.ts, for "Ask Orderat") can reuse it instead of
+ * reimplementing the same loop. Throws when every model fails, when the response isn't JSON, or when
+ * Gemini returns no content (blocked, or finished without output) — the same error messages
+ * createGeminiExtractor has always thrown, preserved here so its own tests needed no changes.
+ */
+export async function callGemini(models: string[], apiKey: string, body: string, timeoutMs: number, fetchImpl: typeof fetch = fetch): Promise<GeminiCallResult> {
+  let res: Response | undefined;
+  let okModel: string | undefined;
+  const failures: string[] = [];
+  for (const model of models) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+        body,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      // A hung model is treated like a 5xx: log it and move on to the next model.
+      if ((err as { name?: string })?.name === "AbortError") {
+        failures.push(`${model}: timed out after ${timeoutMs}ms`);
+        res = undefined;
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.ok) { okModel = model; break; }
+    failures.push(`${model}: ${res.status}`);
+    if (!TRY_NEXT_MODEL.has(res.status)) break;
+  }
+  if (!res || !res.ok) {
+    const detail = res ? (await res.text()).slice(0, 300) : "";
+    throw new Error(`Gemini request failed (${failures.join(", ")}): ${detail}`);
+  }
+
+  const bodyText = await res.text();
+  let data: { candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[]; promptFeedback?: { blockReason?: string } };
+  try {
+    data = JSON.parse(bodyText) as typeof data;
+  } catch {
+    throw new Error(`Gemini response from ${okModel} (${res.status}) was not JSON`);
+  }
+  const candidate = data.candidates?.[0];
+  const raw = candidate?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  if (!raw) {
+    const reason = data.promptFeedback?.blockReason ?? candidate?.finishReason ?? "unknown reason";
+    throw new Error(`Gemini returned no content from ${okModel} (${reason})`);
+  }
+  return { model: okModel!, text: raw };
+}
+
 export function createGeminiExtractor(cfg: GeminiConfig, fetchImpl: typeof fetch = fetch): OrderExtractor {
   const models = [cfg.model ?? DEFAULT_MODEL, ...(cfg.fallbackModels ?? DEFAULT_FALLBACK_MODELS)];
   const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -174,52 +240,7 @@ export function createGeminiExtractor(cfg: GeminiConfig, fetchImpl: typeof fetch
       generationConfig: { responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA, temperature: 0 },
     });
 
-    let res: Response | undefined;
-    let okModel: string | undefined;
-    const failures: string[] = [];
-    for (const model of models) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-          method: "POST",
-          headers: { "content-type": "application/json", "x-goog-api-key": cfg.apiKey },
-          body,
-          signal: controller.signal,
-        });
-      } catch (err) {
-        // A hung model is treated like a 5xx: log it and move on to the next model.
-        if ((err as { name?: string })?.name === "AbortError") {
-          failures.push(`${model}: timed out after ${timeoutMs}ms`);
-          res = undefined;
-          continue;
-        }
-        throw err;
-      } finally {
-        clearTimeout(timer);
-      }
-      if (res.ok) { okModel = model; break; }
-      failures.push(`${model}: ${res.status}`);
-      if (!TRY_NEXT_MODEL.has(res.status)) break;
-    }
-    if (!res || !res.ok) {
-      const detail = res ? (await res.text()).slice(0, 300) : "";
-      throw new Error(`Gemini request failed (${failures.join(", ")}): ${detail}`);
-    }
-
-    const bodyText = await res.text();
-    let data: { candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[]; promptFeedback?: { blockReason?: string } };
-    try {
-      data = JSON.parse(bodyText) as typeof data;
-    } catch {
-      throw new Error(`Gemini response from ${okModel} (${res.status}) was not JSON`);
-    }
-    const candidate = data.candidates?.[0];
-    const raw = candidate?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-    if (!raw) {
-      const reason = data.promptFeedback?.blockReason ?? candidate?.finishReason ?? "unknown reason";
-      throw new Error(`Gemini returned no content from ${okModel} (${reason})`);
-    }
+    const { text: raw } = await callGemini(models, cfg.apiKey, body, timeoutMs, fetchImpl);
     let answer: AiAnswer;
     try {
       answer = JSON.parse(raw) as AiAnswer;

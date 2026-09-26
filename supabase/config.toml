@@ -23,3 +23,12 @@ verify_jwt = false
 
 [functions.orderat-owner]
 verify_jwt = false
+
+# Unlike the three above, the iPhone/Android apps calling orderat-ask (docs/ask-orderat.md) *do* send
+# a real Supabase anon-key Bearer token — but that key is public (shipped in every app build, the
+# same way any Supabase client's anon key is), so Supabase's own JWT check would add no real
+# authorization, only reject a request if the key ever changed. hosting-deploy.mjs already passes
+# --no-verify-jwt for every function it deploys; this entry just keeps that documented and consistent
+# for anyone deploying orderat-ask directly with the CLI.
+[functions.orderat-ask]
+verify_jwt = false
