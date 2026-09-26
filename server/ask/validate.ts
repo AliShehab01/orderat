@@ -14,6 +14,8 @@ const MAX_APP_VERSION_CHARS = 32;
 
 export type Lang = "ar" | "en";
 export type Platform = "ios" | "android";
+/** How Arabic answers address the seller; the apps default to "male" (a setting can switch it). */
+export type AddressAs = "male" | "female";
 export type HistoryRole = "user" | "assistant";
 
 export interface HistoryTurn {
@@ -27,6 +29,7 @@ export interface AskRequestBody {
   appVersion: string;
   lang: Lang;
   demo: boolean;
+  addressAs: AddressAs;
   question: string;
   history: HistoryTurn[];
   /** Not validated field-by-field here — see server/ask/actions.ts for the parts of it (refs) that
@@ -78,13 +81,15 @@ export function validateAskBody(raw: string): AskValidationResult {
   }
   if (!isPlainObject(json)) return invalid();
 
-  const { installId, platform, appVersion, lang, demo, question, history, snapshot } = json;
+  const { installId, platform, appVersion, lang, demo, addressAs, question, history, snapshot } = json;
 
   if (!isNonEmptyString(installId, MAX_INSTALL_ID_CHARS)) return invalid();
   if (platform !== "ios" && platform !== "android") return invalid();
   if (!isNonEmptyString(appVersion, MAX_APP_VERSION_CHARS)) return invalid();
   if (lang !== "ar" && lang !== "en") return invalid();
   if (demo !== undefined && typeof demo !== "boolean") return invalid();
+  // Optional for older app builds, which never sent it.
+  if (addressAs !== undefined && addressAs !== "male" && addressAs !== "female") return invalid();
   if (!isNonEmptyString(question, MAX_QUESTION_CHARS)) return invalid();
   if (!isPlainObject(snapshot)) return invalid();
 
@@ -99,6 +104,7 @@ export function validateAskBody(raw: string): AskValidationResult {
       appVersion,
       lang,
       demo: demo === true,
+      addressAs: addressAs === "female" ? "female" : "male",
       question,
       history: parsedHistory,
       snapshot,

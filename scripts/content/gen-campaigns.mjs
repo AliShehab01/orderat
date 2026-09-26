@@ -21,10 +21,10 @@ const teachersDay = {
   headline: { ar: "هدية حلوة لكل معلمة", en: "A sweet thank-you for every teacher" },
   tips: {
     ar: [
-      "افتحي الطلب المسبق قبل أسبوعين، الأمهات يطلبون بكمية للصف كله",
-      "سوّي بوكس صغير بسعر مناسب يتوزع على أكثر من معلمة",
-      "اعرضي كتابة اسم المعلمة أو عبارة شكر على التغليف",
-      "حددي آخر يوم للطلب عشان تلحقين على التجهيز",
+      "افتح الطلب المسبق قبل أسبوعين، الأمهات يطلبون بكمية للصف كله",
+      "سوّ بوكس صغير بسعر مناسب يتوزع على أكثر من معلمة",
+      "اعرض كتابة اسم المعلمة أو عبارة شكر على التغليف",
+      "حدد آخر يوم للطلب عشان تلحق على التجهيز",
     ],
     en: [
       "Open pre-orders two weeks early; mums order for the whole class",
@@ -59,10 +59,10 @@ function nationalDay({ occasion, country, emoji, accent, style, lead = 14, nameA
     headline: { ar: `كل عام و${countryAr} بخير`, en: `Celebrate ${countryEn} with your best treats` },
     tips: {
       ar: [
-        `لوّني الحلويات والتغليف بألوان العلم (${colorsAr})`,
-        "الشركات والمدارس تطلب توزيعات بكميات، جهزي عرض خاص للكميات",
-        "افتحي الطلب المسبق قبل أسبوعين وحددي آخر يوم للطلب",
-        "صوّري منتجك بستايل المناسبة من استوديو الصور",
+        `لوّن الحلويات والتغليف بألوان العلم (${colorsAr})`,
+        "الشركات والمدارس تطلب توزيعات بكميات، جهّز عرض خاص للكميات",
+        "افتح الطلب المسبق قبل أسبوعين وحدد آخر يوم للطلب",
+        "صوّر منتجك بستايل المناسبة من استوديو الصور",
       ],
       en: [
         `Use the flag colors (${colorsEn}) on your treats and packaging`,
@@ -110,7 +110,7 @@ const saudiFoundingDay = {
     colorsAr: "الأخضر والبني والذهبي", colorsEn: "green, brown and gold",
     tagsAr: ["#يوم_التأسيس", "#السعودية", "#توزيعات", "#تراث"], tagsEn: ["#FoundingDay", "#KSA", "#Heritage", "#Homemade"],
   }),
-  headline: { ar: "احتفلي بيوم التأسيس بلمسة تراثية", en: "Celebrate Founding Day with a heritage touch" },
+  headline: { ar: "احتفل بيوم التأسيس بلمسة تراثية", en: "Celebrate Founding Day with a heritage touch" },
   productIdeas: {
     ar: ["حلويات تراثية بتغليف سدو", "بوكس تمر وقهوة", "كوكيز بنقشة السدو", "توزيعات للشركات"],
     en: ["Traditional sweets in Sadu-pattern packaging", "Dates and coffee box", "Sadu-pattern cookies", "Giveaways for companies"],
@@ -148,9 +148,9 @@ function womensDay({ country, nameAr, nameEn, womenAr, womenEn, tagsAr, tagsEn }
     headline: { ar: `هدية حلوة لكل ${womenAr} ملهمة`, en: `A sweet gift for every inspiring ${womenEn} woman` },
     tips: {
       ar: [
-        "الشركات والمكاتب تحتفل بموظفاتها، جهزي عرض كميات",
+        "الشركات والمكاتب تحتفل بموظفاتها، جهّز عرض كميات",
         "تغليف وردي أو بنفسجي مع كرت صغير يفرق كثير",
-        "حددي آخر يوم للطلب قبلها بثلاث أيام",
+        "حدد آخر يوم للطلب قبلها بثلاث أيام",
       ],
       en: [
         "Companies celebrate their women staff; prepare a bulk offer",
@@ -192,10 +192,10 @@ const whiteFriday = {
   headline: { ar: "أقوى عرض بالسنة", en: "The biggest offer of the year" },
   tips: {
     ar: [
-      "اختاري عرض واضح: خصم بسيط أو هدية مع الطلب",
-      "خلي العرض يوم أو يومين بس عشان يحمّس الناس",
-      "انشري عد تنازلي في الستوري قبلها بكم يوم",
-      "حطي حد يومي للطلبات عشان ما يضغط عليك التجهيز",
+      "اختر عرض واضح: خصم بسيط أو هدية مع الطلب",
+      "خل العرض يوم أو يومين بس عشان يحمّس الناس",
+      "انشر عد تنازلي في الستوري قبلها بكم يوم",
+      "حط حد يومي للطلبات عشان ما يضغط عليك التجهيز",
     ],
     en: [
       "Pick one clear offer: a small discount or a gift with every order",
@@ -229,9 +229,9 @@ const newYear = {
   headline: { ar: "بداية حلوة لسنة جديدة", en: "A sweet start to the new year" },
   tips: {
     ar: [
-      "العوائل والشلات يطلبون للتجمعات، جهزي أحجام كبيرة",
+      "العوائل والشلات يطلبون للتجمعات، جهّز أحجام كبيرة",
       "ألوان الذهبي والأسود تعطي إحساس الاحتفال",
-      "حددي آخر موعد استلام قبل الليلة بيوم",
+      "حدد آخر موعد استلام قبل الليلة بيوم",
     ],
     en: [
       "Families and friends order for gatherings; offer bigger sizes",
@@ -262,13 +262,13 @@ function candyNight({ id, countries, nameAr, nameEn, tagsAr, tagsEn }) {
   return {
     idSuffix: id, occasion: "gergaoun", emoji: "🍬", accent: "#F2A900", lead: 14, countries, styles: ["gergaoun", "pastel"],
     name: { ar: nameAr, en: nameEn },
-    headline: { ar: `جهزي أكياس ${nameAr} من بدري`, en: `Get your ${nameEn} bags ready early` },
+    headline: { ar: `جهّز أكياس ${nameAr} من بدري`, en: `Get your ${nameEn} bags ready early` },
     tips: {
       ar: [
-        "الأمهات يطلبون بالعشرات، جهزي أسعار للكميات (10، 25، 50 كيس)",
+        "الأمهات يطلبون بالعشرات، جهّز أسعار للكميات (10، 25، 50 كيس)",
         "خيارات تغليف بأسماء الأطفال تزيد الطلب",
-        "افتحي الطلب قبلها بأسبوعين وحددي آخر يوم للطلب",
-        "صوّري الأكياس بستايل المناسبة من استوديو الصور",
+        "افتح الطلب قبلها بأسبوعين وحدد آخر يوم للطلب",
+        "صوّر الأكياس بستايل المناسبة من استوديو الصور",
       ],
       en: [
         "Mums order dozens; price bundles of 10, 25 and 50 bags",
@@ -305,13 +305,13 @@ const haqAlLaila = { ...candyNight({ id: "ae", countries: ["AE"], nameAr: "حق 
 const ramadan = {
   occasion: "ramadan", emoji: "🌙", accent: "#1B4F72", lead: 21, countries: ALL, styles: ["ramadan", "dark_luxury"],
   name: { ar: "رمضان", en: "Ramadan" },
-  headline: { ar: "جهّزي حملة رمضان من بدري", en: "Plan your Ramadan campaign early" },
+  headline: { ar: "جهّز حملة رمضان من بدري", en: "Plan your Ramadan campaign early" },
   tips: {
     ar: [
-      "افتحي طلبات الغبقة والعزايم قبل رمضان بأسبوعين",
-      "سوّي أحجام للعزايم الكبيرة، الطلب عليها يزيد",
-      "خلي الاستلام قبل الفطور بساعة أو ساعتين",
-      "خففي الحد اليومي بالعشر الأواخر إذا تبين راحة",
+      "افتح طلبات الغبقة والعزايم قبل رمضان بأسبوعين",
+      "سوّ أحجام للعزايم الكبيرة، الطلب عليها يزيد",
+      "خل الاستلام قبل الفطور بساعة أو ساعتين",
+      "خفف الحد اليومي بالعشر الأواخر إذا تبي راحة",
     ],
     en: [
       "Open ghabga and gathering orders two weeks before Ramadan",
@@ -346,10 +346,10 @@ function eid({ occasion, emoji, accent, lead, nameAr, nameEn, extraIdeaAr, extra
     headline: { ar: `ضيافة ${nameAr} علينا`, en: `Your ${nameEn} treats, sorted` },
     tips: {
       ar: [
-        "افتحي طلبات العيد بدري، الناس تحجز قبلها بأسابيع",
+        "افتح طلبات العيد بدري، الناس تحجز قبلها بأسابيع",
         "بوكسات الضيافة والتوزيعات عليها طلب كبير",
-        "آخر يومين قبل العيد أكثر ضغط، حطي حد يومي",
-        "حددي آخر يوم استلام قبل إجازة العيد",
+        "آخر يومين قبل العيد أكثر ضغط، حط حد يومي",
+        "حدد آخر يوم استلام قبل إجازة العيد",
       ],
       en: [
         "Open Eid orders early; people book weeks ahead",
@@ -395,8 +395,8 @@ const valentines = {
   tips: {
     ar: [
       "الأحمر والوردي مع ورد طبيعي يعطي إحساس الهدية",
-      "اعرضي كتابة اسم أو عبارة قصيرة على التغليف",
-      "الطلب يتركز آخر ثلاث أيام، حطي حد يومي",
+      "اعرض كتابة اسم أو عبارة قصيرة على التغليف",
+      "الطلب يتركز آخر ثلاث أيام، حط حد يومي",
     ],
     en: [
       "Red and pink with fresh flowers feels like a gift",
@@ -429,9 +429,9 @@ const mothersDay = {
   headline: { ar: "أحلى هدية لست الحبايب", en: "The sweetest gift for mum" },
   tips: {
     ar: [
-      "الأبناء يدورون هدية جاهزة، جهزي بوكس هدية كامل",
-      "اعرضي كرت بعبارة للأم مع كل طلب",
-      "خلي خيار توصيل للبيت مباشرة إذا تقدرين",
+      "الأبناء يدورون هدية جاهزة، جهّز بوكس هدية كامل",
+      "اعرض كرت بعبارة للأم مع كل طلب",
+      "خل خيار توصيل للبيت مباشرة إذا تقدر",
     ],
     en: [
       "Children look for a ready gift; prepare a complete gift box",
@@ -464,9 +464,9 @@ const graduation = {
   headline: { ar: "حفلات التخرج تحتاج حلاك", en: "Graduation parties need your treats" },
   tips: {
     ar: [
-      "حفلات التخرج تنحجز بدري، افتحي المواعيد من الحين",
-      "اعرضي كتابة اسم الخريج وسنة التخرج",
-      "جهزي أحجام للحفلات الكبيرة والصغيرة",
+      "حفلات التخرج تنحجز بدري، افتح المواعيد من الحين",
+      "اعرض كتابة اسم الخريج وسنة التخرج",
+      "جهّز أحجام للحفلات الكبيرة والصغيرة",
     ],
     en: [
       "Graduation parties book early; open your slots now",
@@ -501,7 +501,7 @@ const mawlid = {
     ar: [
       "توزيعات الحلويات والمكسرات عليها طلب بهالمناسبة",
       "تغليف بسيط بألوان هادئة يناسب المناسبة",
-      "افتحي الطلب قبلها بأسبوع",
+      "افتح الطلب قبلها بأسبوع",
     ],
     en: [
       "Sweet and nut giveaways are popular for this occasion",
@@ -532,7 +532,7 @@ const backToSchool = {
   headline: { ar: "سناك الفسحة من عندك", en: "Be the lunchbox favorite" },
   tips: {
     ar: [
-      "الأمهات يدورون سناك صحي للفسحة، سوّي اشتراك أسبوعي",
+      "الأمهات يدورون سناك صحي للفسحة، سوّ اشتراك أسبوعي",
       "عبوات فردية صغيرة أسهل للمدرسة",
       "هدايا أول يوم دراسي للمعلمات والطلاب عليها طلب",
     ],

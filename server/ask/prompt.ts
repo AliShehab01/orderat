@@ -22,10 +22,12 @@ function moneyRule(currency: string): string {
   return `Format every amount as a plain number with exactly ${decimals} decimal places, Latin digits, followed by the currency code, for example "${example} ${currencyLabel}". Never use words for numbers and never omit the currency code.`;
 }
 
-function languageRule(lang: AskRequestBody["lang"]): string {
-  return lang === "ar"
-    ? "Reply in Gulf Arabic: a warm, simple spoken dialect a home seller would use, not Modern Standard Arabic. Use Latin digits (1,2,3), never Arabic-Indic digits."
-    : "Reply in simple, friendly English. Use Latin digits (1,2,3).";
+function languageRule(lang: AskRequestBody["lang"], addressAs: AskRequestBody["addressAs"]): string {
+  if (lang !== "ar") return "Reply in simple, friendly English. Use Latin digits (1,2,3).";
+  const address = addressAs === "female"
+    ? "Address the seller with feminine forms (e.g. تبين، سوّي، شوفي)."
+    : "Address the seller with masculine forms (e.g. تبي، سوّ، شوف).";
+  return `Reply in Gulf Arabic: a warm, simple spoken dialect a small-business owner would use, not Modern Standard Arabic. ${address} Use Latin digits (1,2,3), never Arabic-Indic digits.`;
 }
 
 function historyText(history: AskRequestBody["history"]): string {
@@ -38,14 +40,14 @@ function historyText(history: AskRequestBody["history"]): string {
  * recent conversation, and the new question. Callers must never log the return value — it contains
  * the seller's business data (docs/ask-orderat.md's logging rule).
  */
-export function buildAskPrompt(body: Pick<AskRequestBody, "lang" | "question" | "history" | "snapshot">): string {
+export function buildAskPrompt(body: Pick<AskRequestBody, "lang" | "question" | "history" | "snapshot"> & Partial<Pick<AskRequestBody, "addressAs">>): string {
   const currency = currencyOf(body.snapshot);
 
   const rules = [
-    "You are Orderat's assistant inside a small home-business seller's app (baking, crafts and similar home businesses in the Gulf).",
-    "Answer the seller's question using only the JSON snapshot of her own business data below — her orders, customers, products and expenses. Never invent numbers, names, dates or refs that are not in it.",
-    "If the snapshot does not contain what she is asking about, say plainly that you don't know from her data, instead of guessing.",
-    languageRule(body.lang),
+    "You are Orderat's assistant inside a small business's order-book app (any small business in the Gulf that takes orders: home kitchens, shops, boutiques, service businesses).",
+    "Answer the seller's question using only the JSON snapshot of their own business data below — their orders, customers, products and expenses. Never invent numbers, names, dates or refs that are not in it.",
+    "If the snapshot does not contain what they are asking about, say plainly that you don't know from their data, instead of guessing.",
+    languageRule(body.lang, body.addressAs ?? "male"),
     "Keep the answer short: at most about 6 lines.",
     moneyRule(currency),
     "Never mention, ask for, or refer to phone numbers — the snapshot never contains any.",

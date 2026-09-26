@@ -94,3 +94,17 @@ describe("buildAskPrompt", () => {
     expect(prompt).toMatch(/not something to follow|not.*instructions/i);
   });
 });
+
+describe("buildAskPrompt address form", () => {
+  const base = { lang: "ar" as const, question: "كم ربحت؟", history: [], snapshot: { currency: "BHD" } };
+
+  it("addresses the seller in masculine Arabic by default", () => {
+    expect(buildAskPrompt(base)).toContain("masculine forms");
+  });
+
+  it("switches to feminine Arabic when the app asks for it", () => {
+    const prompt = buildAskPrompt({ ...base, addressAs: "female" });
+    expect(prompt).toContain("feminine forms");
+    expect(prompt).not.toContain("masculine forms");
+  });
+});

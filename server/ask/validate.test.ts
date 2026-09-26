@@ -26,6 +26,7 @@ describe("validateAskBody", () => {
       appVersion: "1.0.0",
       lang: "ar",
       demo: false,
+      addressAs: "male",
       question: "كم ربحت هالشهر؟",
       history: [{ role: "user", text: "hi" }],
       snapshot: { today: "2026-09-26", currency: "BHD" },
@@ -41,6 +42,14 @@ describe("validateAskBody", () => {
     if (!result.ok) throw new Error("expected ok");
     expect(result.body.demo).toBe(false);
     expect(result.body.history).toEqual([]);
+  });
+
+  it("defaults addressAs to male, accepts female, and rejects anything else", () => {
+    const female = validateAskBody(JSON.stringify(validBody({ addressAs: "female" })));
+    expect(female.ok && female.body.addressAs).toBe("female");
+    const missing = validateAskBody(JSON.stringify(validBody()));
+    expect(missing.ok && missing.body.addressAs).toBe("male");
+    expect(validateAskBody(JSON.stringify(validBody({ addressAs: "other" }))).ok).toBe(false);
   });
 
   it("accepts demo: true and android platform", () => {
