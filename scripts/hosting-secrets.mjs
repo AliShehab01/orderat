@@ -35,6 +35,13 @@ export const ALLOWLIST = [
   "OWNER_KEY",
   "OWNER_ALLOWED_ORIGINS",
   "ASK_DAILY_CAP",
+  // docs/marketing-tools.md (orderat-campaigns/orderat-studio/orderat-shop).
+  "CAPTION_DAILY_CAP",
+  "PHOTO_DAILY_CAP",
+  "IMAGE_MODEL",
+  "IMAGE_FALLBACK_MODELS",
+  "SHOP_BASE_URL",
+  "SHOP_IP_SALT",
 ];
 
 // Local-only convenience flags (server/dev.ts, server/whatsapp/webhook.ts, server/instagram/config.ts)

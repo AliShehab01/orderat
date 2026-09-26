@@ -71,7 +71,9 @@ Response:
     {
       "id": "white",
       "name": { "ar": "أبيض نظيف", "en": "Clean white" },
-      "previewUrl": "https://alishehab01.github.io/orderat/studio/white.jpg",
+      "emoji": "⬜",
+      "swatch": "#FFFFFF",
+      "previewUrl": null,
       "occasion": null
     }
   ]
@@ -85,6 +87,11 @@ Response:
   into the function. Updating content = edit the JSON + `npm run hosting:deploy -- orderat-campaigns`.
   A unit test validates every entry (both languages present, valid dates, known style ids, hex
   accent, `promoteFrom <= startDate <= endDate`).
+- Each style's public shape is `{id, name: {ar, en}, emoji, swatch, previewUrl, occasion}`: `emoji`
+  (one emoji string) and `swatch` (`#RRGGBB`) let the app show a style before a preview photo exists;
+  `previewUrl` is `null` until one is generated (preview images need the paid image model) or an
+  `https://` URL once it is. The validator checks `emoji` is non-empty, `swatch` is `#RRGGBB`, and
+  `previewUrl` is `null` or an `https://` URL.
 - Style prompts (`prompt` in `studio-styles.json`) are server-only and never returned by any API.
 - Hijri occasions carry explicit Gregorian dates per year (from the Umm al-Qura calendar). When a
   moon sighting moves a date, fix the JSON and redeploy; the apps pick it up within an hour.

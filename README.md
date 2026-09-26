@@ -101,27 +101,31 @@ read Hayati's data, degrade its database, or get in the way of moving off this a
   RLS is still enabled on both as defense in depth, in case either table is ever exposed through
   PostgREST later.
 - **Prefixed everywhere it's visible in the shared project.** Edge Functions are named
-  `orderat-whatsapp`, `orderat-instagram`, `orderat-owner` (not `whatsapp`/`instagram`/`owner`);
-  every hosted secret carries an `ORDERAT_` prefix and is read only through that prefix
-  (`supabase/functions/_shared/env.ts`). Nothing Orderat does can accidentally read, overwrite, or
-  even collide in name with something that belongs to Hayati.
+  `orderat-whatsapp`, `orderat-instagram`, `orderat-owner`, `orderat-ask`, `orderat-campaigns`,
+  `orderat-studio`, `orderat-shop` (not `whatsapp`/`instagram`/`owner`/etc.); every hosted secret
+  carries an `ORDERAT_` prefix and is read only through that prefix (`supabase/functions/_shared/env.ts`)
+  — the one documented exception is `orderat-shop`, which also reads Supabase's own auto-injected
+  `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` directly, needed to write to Storage (see
+  `supabase/functions/orderat-shop/index.ts`'s own header for why). Nothing else Orderat does can
+  accidentally read, overwrite, or even collide in name with something that belongs to Hayati.
 - **Migrations outside the Supabase CLI's managed folder.** `db/migrations/` (not
   `supabase/migrations/`), applied by `npm run hosting:migrate`, never `supabase db push` — so
   nobody ever points the CLI's own migration history at Hayati's project and risks it trying to
   reconcile against Hayati's own (unrelated) migrations.
 
-**Layout:** three thin `Deno.serve` entry points, `supabase/functions/orderat-{whatsapp,instagram,owner}/index.ts`,
-import `server/` and `src/lib/` by relative path and are deployed with `--use-api` (server-side
-bundling, no local Docker daemon needed). Supabase's own docs show `--use-api` bundling a sibling
-folder outside `supabase/` for exactly this kind of monorepo case, but it's a newer path than the
-Docker-based deploy and has had reported bundler rough edges with outside imports on some layouts,
-and local `supabase functions serve` still needs Docker regardless of `--use-api` (that flag only
-changes how a real deploy bundles). `supabase/functions/_shared/` already holds two small files
-every function imports (`env.ts`, the `ORDERAT_` env prefix helper; `db.ts`, the Deno Postgres
-adapter) — **if a deploy ever fails to bundle the outside imports**, the fallback is to also copy
-`server/` and `src/lib/` in there (the officially-supported, Docker-bundled pattern) and re-point
-the three `index.ts` files and `server/dev.ts` at that copy instead — a single source of truth
-either way, just relocated.
+**Layout:** seven thin `Deno.serve` entry points,
+`supabase/functions/orderat-{whatsapp,instagram,owner,ask,campaigns,studio,shop}/index.ts`, import
+`server/`, `src/lib/` and (for `orderat-campaigns`/`orderat-studio`) `content/` by relative path and
+are deployed with `--use-api` (server-side bundling, no local Docker daemon needed). Supabase's own
+docs show `--use-api` bundling a sibling folder outside `supabase/` for exactly this kind of monorepo
+case, but it's a newer path than the Docker-based deploy and has had reported bundler rough edges with
+outside imports on some layouts, and local `supabase functions serve` still needs Docker regardless of
+`--use-api` (that flag only changes how a real deploy bundles). `supabase/functions/_shared/` already
+holds two small files every function imports (`env.ts`, the `ORDERAT_` env prefix helper; `db.ts`, the
+Deno Postgres adapter) — **if a deploy ever fails to bundle the outside imports**, the fallback is to
+also copy `server/`, `src/lib/` and `content/` in there (the officially-supported, Docker-bundled
+pattern) and re-point every `index.ts` file and `server/dev.ts` at that copy instead — a single source
+of truth either way, just relocated.
 
 ### The owner page, hosted
 
@@ -183,6 +187,10 @@ other `ORDERAT_*` secrets) and a redeploy, not a rewrite.
 npx supabase functions delete orderat-whatsapp --project-ref ckjmbdbvlbxfofjgqiuj
 npx supabase functions delete orderat-instagram --project-ref ckjmbdbvlbxfofjgqiuj
 npx supabase functions delete orderat-owner --project-ref ckjmbdbvlbxfofjgqiuj
+npx supabase functions delete orderat-ask --project-ref ckjmbdbvlbxfofjgqiuj
+npx supabase functions delete orderat-campaigns --project-ref ckjmbdbvlbxfofjgqiuj
+npx supabase functions delete orderat-studio --project-ref ckjmbdbvlbxfofjgqiuj
+npx supabase functions delete orderat-shop --project-ref ckjmbdbvlbxfofjgqiuj
 # Unset every ORDERAT_* secret in the dashboard (Edge Functions > Secrets), or via the CLI.
 ```
 ```sql
@@ -228,14 +236,24 @@ When it becomes a real constraint, that's the trigger for "Move to a dedicated p
    ```
    npm run hosting:db-user
    ```
-5. **Add the WhatsApp/Instagram/Gemini/`OWNER_KEY`/`OWNER_ALLOWED_ORIGINS` settings to `.env.local`**
-   (unprefixed — same names `server/dev.ts` already reads, plus `OWNER_ALLOWED_ORIGINS` which only
-   the hosted function reads; see `.env.example`), then **push them as hosted secrets** (renamed with
-   the `ORDERAT_` prefix, never printed):
+5. **Add the settings below to `.env.local`** (unprefixed — same names `server/dev.ts` already reads
+   where it reads any of them; the rest are only read by the hosted functions; see `.env.example`),
+   then **push them as hosted secrets** (renamed with the `ORDERAT_` prefix, never printed):
+   - `WHATSAPP_*` / `INSTAGRAM_*` / `GEMINI_*` (server/dev.ts's own settings, docs/ask-orderat.md's
+     Ask Orderat re-reads `GEMINI_*` too)
+   - `OWNER_KEY` / `OWNER_ALLOWED_ORIGINS` (`orderat-owner`)
+   - `ASK_DAILY_CAP` (`orderat-ask`, optional — defaults to 3000)
+   - `CAPTION_DAILY_CAP` / `PHOTO_DAILY_CAP` (`orderat-studio`'s two AI tasks, optional — default
+     3000 / 300), `IMAGE_MODEL` / `IMAGE_FALLBACK_MODELS` (optional — default
+     `gemini-3.1-flash-image` / `gemini-2.5-flash-image`; `GEMINI_API_KEY` above is reused for both
+     the text and image models)
+   - `SHOP_BASE_URL` (`orderat-shop`, optional — defaults to
+     `https://alishehab01.github.io/orderat/s/?`) and `SHOP_IP_SALT` (optional — falls back to a hash
+     of the service role key when unset; see `supabase/functions/orderat-shop/index.ts`)
    ```
    npm run hosting:secrets
    ```
-6. **Deploy the three functions:**
+6. **Deploy all seven functions:**
    ```
    npm run hosting:deploy
    ```
