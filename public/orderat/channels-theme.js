@@ -117,14 +117,6 @@ exportCsv = function sourcedExportCsv() {
   toast(tr("Order CSV downloaded with source details.", "تم تنزيل الطلبات مع تفاصيل المصدر."));
 };
 
-function mobileMoreMenu() {
-  const destinations = [
-    ["inventory", "inventory"], ["analytics", "analytics"], ["products", "products"], ["plans", "plans"], ["settings", "settings"]
-  ];
-  modal(tr("More tools", "المزيد من الأدوات"), `<div class="more-menu">${destinations.map(([destination, iconName]) => `<button data-more-nav="${destination}" class="more-menu-item ${view === destination ? "active" : ""}">${icon(iconName)}<span><strong>${tr(...labels[destination])}</strong><small>${({ inventory: tr("Finished stock and reservations", "المخزون الجاهز والحجوزات"), analytics: tr("Sales and demand", "المبيعات والطلب"), products: tr("Menu and batch setup", "المنتجات والدفعات"), plans: tr("Basic and Pro", "بيسك وبرو"), settings: tr("Workspace and brand", "المساحة والهوية") })[destination]}</small></span>${icon("arrow")}</button>`).join("")}</div>`, tr("Everything else, one tap away.", "كل الأدوات الأخرى على بُعد نقرة."));
-  modalEl.querySelectorAll("[data-more-nav]").forEach((button) => button.onclick = () => { closeModal(); navigate(button.dataset.moreNav); });
-}
-
 const sourceBaseSettings = settingsPage;
 settingsPage = function sourcedSettings() {
   return sourceBaseSettings() + `<section class="panel settings-panel spaced"><div class="settings-section"><h2>${tr("Appearance", "المظهر")}</h2><p>${tr("Follows your device by default. Choose a palette to override it on this device.", "تتبع إعداد جهازك افتراضيًا. اختر لوحة ألوان لتجاوزه على هذا الجهاز.")}</p><label for="theme-setting">${tr("Colour mode", "نمط الألوان")}</label><select id="theme-setting"><option value="light" ${!isDarkTheme() ? "selected" : ""}>${tr("Light", "فاتح")}</option><option value="dark" ${isDarkTheme() ? "selected" : ""}>${tr("Dark", "داكن")}</option></select></div></section>`;
@@ -143,11 +135,6 @@ function patchShell() {
     themeButton.innerHTML = `${icon("theme")}<span>${dark ? tr("Light", "فاتح") : tr("Dark", "داكن")}</span>`;
     topActions.insertBefore(themeButton, document.getElementById("language"));
     themeButton.onclick = () => { state.theme = dark ? "light" : "dark"; persist(); render(); };
-  }
-  const more = document.getElementById("nav-more");
-  if (more) {
-    more.classList.toggle("active", ["inventory", "analytics", "products", "plans", "settings"].includes(view));
-    more.onclick = mobileMoreMenu;
   }
   const themeSetting = document.getElementById("theme-setting");
   if (themeSetting) themeSetting.onchange = () => { state.theme = themeSetting.value; persist(); render(); };

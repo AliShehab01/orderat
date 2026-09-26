@@ -2,6 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     { "name": "dev", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 3000 },
-    { "name": "orderat-static", "runtimeExecutable": "npx", "runtimeArgs": ["serve", "public/orderat", "-l", "5500"], "port": 5500 }
+    { "name": "orderat-static", "runtimeExecutable": "npx", "runtimeArgs": ["serve", "public/orderat", "-l", "5500"], "port": 5500 },
+    { "name": "orderat-v3-static", "runtimeExecutable": "npx", "runtimeArgs": ["serve", "C:/Users/alial/Desktop/orderat-v3/public/orderat", "-l", "5530"], "port": 5530 }
   ]
 }
