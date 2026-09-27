@@ -22,6 +22,8 @@ const SITE_ORIGIN = SITE_URL.replace(/\/+$/, "");
 
 let errors = [];
 let pagesChecked = 0;
+const titlesSeen = new Map(); // title -> [urls], to catch accidental duplicates
+const descriptionsSeen = new Map();
 
 function fail(where, message) {
   errors.push(`${where}: ${message}`);
@@ -65,9 +67,17 @@ function checkPage(file) {
 
   const title = html.match(/<title>([^<]*)<\/title>/);
   if (!title || !title[1].trim()) fail(url, "missing or empty <title>");
+  else {
+    if (!titlesSeen.has(title[1])) titlesSeen.set(title[1], []);
+    titlesSeen.get(title[1]).push(url);
+  }
 
   const description = html.match(/<meta name="description" content="([^"]*)"/);
   if (!description || !description[1].trim()) fail(url, "missing or empty meta description");
+  else {
+    if (!descriptionsSeen.has(description[1])) descriptionsSeen.set(description[1], []);
+    descriptionsSeen.get(description[1]).push(url);
+  }
 
   const canonical = html.match(/<link rel="canonical" href="([^"]*)">/);
   if (!canonical) fail(url, "missing canonical link");
@@ -146,6 +156,15 @@ function checkSitemap(allPageUrls) {
   }
 }
 
+function checkUniqueness() {
+  for (const [title, urls] of titlesSeen) {
+    if (urls.length > 1) fail("uniqueness", `title "${title}" reused on ${urls.length} pages: ${urls.join(", ")}`);
+  }
+  for (const [desc, urls] of descriptionsSeen) {
+    if (urls.length > 1) fail("uniqueness", `meta description reused on ${urls.length} pages: ${urls.join(", ")}`);
+  }
+}
+
 function checkRobots() {
   const file = path.join(DIST, "robots.txt");
   if (!fs.existsSync(file)) return fail("robots.txt", "file missing");
@@ -179,6 +198,7 @@ function main() {
   const allPageUrls = pageFiles.map(toUrlPath);
   for (const file of pageFiles) checkPage(file);
 
+  checkUniqueness();
   checkSitemap(allPageUrls);
   checkRobots();
   checkManifest();
