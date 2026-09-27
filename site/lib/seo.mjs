@@ -20,7 +20,7 @@ export function headTags({ lang, slug, title, description, ogImage, noEnglish })
     ? ogImage.startsWith("http")
       ? ogImage
       : `${SITE_URL.replace(/\/+$/, "")}${ogImage}`
-    : `${SITE_URL.replace(/\/+$/, "")}/assets/img/og/home-${lang}.png`;
+    : `${SITE_URL.replace(/\/+$/, "")}/assets/img/og/home-${lang}.jpg`;
 
   const alternates = [
     `<link rel="alternate" hreflang="ar" href="${escAttr(absUrl("ar", slug))}">`,
@@ -142,7 +142,7 @@ export function articleLd({ lang, slug, title, description, datePublished, ogIma
     ? ogImage.startsWith("http")
       ? ogImage
       : `${SITE_URL.replace(/\/+$/, "")}${ogImage}`
-    : `${SITE_URL.replace(/\/+$/, "")}/assets/img/og/home-${lang}.png`;
+    : `${SITE_URL.replace(/\/+$/, "")}/assets/img/og/home-${lang}.jpg`;
   return {
     "@context": "https://schema.org",
     "@type": "Article",

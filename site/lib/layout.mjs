@@ -118,7 +118,7 @@ export function renderPage({ lang, slug, title, description, bodyHtml, jsonLd: e
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="${escAttr(BRAND.themeColor)}">
 ${headTags({ lang, slug, title, description, ogImage, noEnglish })}
-<link rel="icon" type="image/png" href="/assets/img/icons/icon-192.png">
+<link rel="icon" type="image/png" href="/assets/img/icons/favicon-32.png">
 <link rel="apple-touch-icon" href="/assets/img/icons/apple-touch-icon.png">
 <link rel="manifest" href="/site.webmanifest">
 <link rel="preconnect" href="https://fonts.googleapis.com">
