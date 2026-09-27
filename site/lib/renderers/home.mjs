@@ -110,7 +110,7 @@ export function renderHome(lang) {
   <div class="wrap">
     ${sectionHeading(null, t.pricing)}
     <div class="pricing-teaser__card">
-      <p class="pricing-teaser__trial">${lang === "ar" ? `تجربة مجانية ${PRICING.trialDays} يوماً` : `${PRICING.trialDays}-day free trial`}</p>
+      <p class="pricing-teaser__trial">${lang === "ar" ? `تجربة مجانية ${PRICING.trialAr}` : `${PRICING.trialDays}-day free trial`}</p>
       <p class="pricing-teaser__price">
         <strong>$${esc(PRICING.monthly.amountUSD)}</strong> ${lang === "ar" ? "شهرياً" : "/ month"}
         <span class="pricing-teaser__or">${lang === "ar" ? "أو" : "or"}</span>

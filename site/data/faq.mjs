@@ -25,11 +25,11 @@ export const FAQS = [
   {
     ar: {
       q: "كم سعر اوردرات؟",
-      a: "تجربة مجانية 14 يوماً، وبعدها 9.99 دولار شهرياً أو 79.99 دولار سنوياً. المتاجر تعرض السعر بعملتك المحلية.",
+      a: "تجربة مجانية 7 أيام، وبعدها 9.99 دولار شهرياً أو 79.99 دولار سنوياً. المتاجر تعرض السعر بعملتك المحلية.",
     },
     en: {
       q: "How much does Orderat cost?",
-      a: "A 14-day free trial, then $9.99 a month or $79.99 a year. App stores show local pricing for your country.",
+      a: "A 7-day free trial, then $9.99 a month or $79.99 a year. App stores show local pricing for your country.",
     },
   },
   {

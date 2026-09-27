@@ -29,7 +29,9 @@ export const BRAND = {
 };
 
 export const PRICING = {
-  trialDays: 14,
+  trialDays: 7,
+  // Arabic counts 3-10 take the plural "أيام"; keep this in step with trialDays.
+  trialAr: "7 أيام",
   monthly: { amountUSD: "9.99" },
   yearly: { amountUSD: "79.99" },
   note: {

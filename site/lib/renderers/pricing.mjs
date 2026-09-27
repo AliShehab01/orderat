@@ -34,20 +34,20 @@ const INCLUDED = {
 
 const COPY = {
   ar: {
-    metaTitle: "أسعار اوردرات: تجربة مجانية 14 يوماً | اوردرات",
-    metaDescription: "جرّب اوردرات مجاناً 14 يوماً، ثم 9.99 دولار شهرياً أو 79.99 دولار سنوياً. كل المزايا في اشتراك واحد، وتقدر تلغي في أي وقت.",
+    metaTitle: "أسعار اوردرات: تجربة مجانية 7 أيام | اوردرات",
+    metaDescription: "جرّب اوردرات مجاناً 7 أيام، ثم 9.99 دولار شهرياً أو 79.99 دولار سنوياً. كل المزايا في اشتراك واحد، وتقدر تلغي في أي وقت.",
     h1: "سعر واحد بسيط، لكل مزايا اوردرات",
-    lead: `${PRICING.trialDays} يوماً تجربة مجانية كاملة المزايا، وبعدها اشتراك واحد يفتح لك كل شي. لا باقات متعددة ولا مزايا مقفولة خلف اشتراك أعلى.`,
+    lead: `${PRICING.trialAr} تجربة مجانية كاملة المزايا، وبعدها اشتراك واحد يفتح لك كل شي. لا باقات متعددة ولا مزايا مقفولة خلف اشتراك أعلى.`,
     monthlyLabel: "شهري",
     yearlyLabel: "سنوي",
     yearlySave: "وفّر تقريباً 33% مع الاشتراك السنوي",
     includedTitle: "كل هذا داخل اشتراكك",
-    trialBadge: `تجربة مجانية ${PRICING.trialDays} يوماً`,
+    trialBadge: `تجربة مجانية ${PRICING.trialAr}`,
     faqTitle: "أسئلة عن السعر",
   },
   en: {
-    metaTitle: "Orderat pricing: a 14-day free trial | Orderat",
-    metaDescription: "Try Orderat free for 14 days, then $9.99 a month or $79.99 a year. Every feature in one subscription, cancel anytime.",
+    metaTitle: "Orderat pricing: a 7-day free trial | Orderat",
+    metaDescription: "Try Orderat free for 7 days, then $9.99 a month or $79.99 a year. Every feature in one subscription, cancel anytime.",
     h1: "One simple price for every Orderat feature",
     lead: `A ${PRICING.trialDays}-day free trial with every feature unlocked, then a single subscription opens everything. No tiers, no features locked behind a higher plan.`,
     monthlyLabel: "Monthly",

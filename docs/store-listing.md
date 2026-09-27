@@ -52,7 +52,7 @@ Each store shows the local price.
 
 بياناتك على جوالك، إلا إذا فعّلت المزامنة السحابية بنفسك. اوردرات ما يدخل حسابات الواتساب أو الإنستقرام حقتك.
 
-جرّب التطبيق ببيانات تجريبية قبل ما تشترك. بعدها 14 يوم مجاناً، ثم اشتراك شهري أو سنوي بالسعر اللي يظهر لك في المتجر. تقدر تلغي أي وقت.
+جرّب التطبيق ببيانات تجريبية قبل ما تشترك. بعدها 7 أيام مجاناً، ثم اشتراك شهري أو سنوي بالسعر اللي يظهر لك في المتجر. تقدر تلغي أي وقت.
 
 عربي وإنجليزي، فاتح وداكن، والعملات الخليجية.
 
@@ -106,7 +106,7 @@ Market your business
 
 Your data stays on your phone unless you turn on cloud sync yourself. Orderat never logs in to your WhatsApp or Instagram.
 
-Try it with sample data before you subscribe. Then 14 days free, followed by a monthly or yearly subscription at the price shown in the store. Cancel anytime.
+Try it with sample data before you subscribe. Then 7 days free, followed by a monthly or yearly subscription at the price shown in the store. Cancel anytime.
 
 Arabic and English, light and dark, and Gulf currencies.
 
@@ -124,7 +124,7 @@ orders,whatsapp,invoice,vat,stock,small business,shop,sales,profit,expenses,cust
 ## App Review notes (App Store)
 
 The app opens with a sample (demo) shop, so no account is needed to review it. The subscription
-(Orderat Basic, monthly or yearly, 14-day free trial) is offered from Settings. Sign in with Apple is
+(Orderat Basic, monthly or yearly, 7-day free trial) is offered from Settings. Sign in with Apple is
 only used for the optional "Cloud backup & sync" in Settings; everything else works without it.
 AI features (Ask Orderat, AI order entry, photo studio) call our own server, which uses Google
 Gemini; nothing is stored by them.
