@@ -18,7 +18,10 @@
     "hosting:deploy": "node scripts/hosting-deploy.mjs",
     "whatsapp:live": "tsx server/live.ts",
     "pages:publish": "node scripts/publish-pages.mjs",
-    "content:build": "node scripts/content/gen-campaigns.mjs && node scripts/content/build-styles.mjs"
+    "content:build": "node scripts/content/gen-campaigns.mjs && node scripts/content/build-styles.mjs",
+    "site:build": "node site/build.mjs",
+    "site:check": "node site/build.mjs && node site/check.mjs",
+    "site:deploy": "npx wrangler pages deploy site/dist --project-name orderat-app --branch preview"
   },
   "dependencies": {
     "next": "16.3.5",
