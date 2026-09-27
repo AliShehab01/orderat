@@ -25,7 +25,10 @@ const googleJwks = createJwksCache(GOOGLE_JWKS_URL);
 // docs/sme-phase-2-cloud.md: "ORDERAT_APPLE_AUDIENCES (default com.ams.orderat) and
 // ORDERAT_GOOGLE_AUDIENCES (comma lists)".
 const appleAudiences = resolveAudiences(env("APPLE_AUDIENCES"), ["com.ams.orderat"]);
-const googleAudiences = resolveAudiences(env("GOOGLE_AUDIENCES"));
+// Default: the Orderat project's Web OAuth client (Google Cloud project gen-lang-client-0326595565). The
+// Android app requests ID tokens with it as serverClientId, so it is the token audience. Client IDs
+// are public identifiers, not secrets.
+const googleAudiences = resolveAudiences(env("GOOGLE_AUDIENCES"), ["799835600648-rj4qq9ia615jfob5eg6k4lgop3aq3i6l.apps.googleusercontent.com"]);
 
 const handler = createAuthHandler({ sql, appleJwks, googleJwks, appleAudiences, googleAudiences });
 
