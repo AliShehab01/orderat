@@ -425,7 +425,7 @@
       bio: state.lang === "ar" ? "حلويات بيتية طازجة كل يوم 🍰" : "Fresh homemade desserts every day 🍰",
       lang: "ar",
       currency: "BHD",
-      whatsapp: "97300000000",
+      whatsapp: "97337776616",
       instagram: "orderat.demo",
       area: state.lang === "ar" ? "الرفاع" : "Riffa",
       pickupHours: "4:00 PM - 8:00 PM",
