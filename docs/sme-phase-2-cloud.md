@@ -102,3 +102,33 @@ Cloud sync stays **optional**: a seller can keep using the app offline-only, as 
 2. **AI order entry** in both apps first. It is independent of accounts and gives quick value.
 3. Sign-in and sync in both apps: iOS (JSON store records) and Android (drift tables, plus a `dirty`/`seq` column per synced table).
 4. Staff: invite, join, the permissions UI, and role-gated screens.
+
+## Record formats (shared by both apps)
+
+One shop can be used from an iPhone and an Android phone at the same time, so `data` in every
+sync record uses this **canonical JSON**, never a platform's local shape. Each app maps its local
+model to and from it.
+
+- **IDs:** lowercase UUID strings. iOS already uses UUID strings. Android keeps its integer primary keys and adds a
+  `sync_id TEXT UNIQUE` column (UUID) to every synced table. It maps foreign keys (customer, product,
+  order) through those UUIDs.
+- **Formats:**
+  - Dates: ISO 8601 UTC with milliseconds (`2026-09-27T14:05:00.000Z`).
+  - Money: integer minor units.
+  - Unknown keys: kept as-is and ignored, never dropped. Keep the raw JSON and merge your fields over it, so a newer app on another phone does not lose fields an older one does not know.
+- **Entities:**
+
+| entity | id | data |
+|---|---|---|
+| `shop` | the shop id | `nameAr, nameEn?, phone, currencyCode, pickupHours?, dailyCapacity?, businessType, vat:{enabled, trn, rateBps, pricesIncludeVat}, stock:{enabled, defaultLowStockThreshold}, createdAt` |
+| `product` | uuid | `nameAr, nameEn?, aliases[], priceMinor, costMinor, dailyCapacity?, active, photoId?, trackStock, stockQuantity, lowStockThreshold, stockMoves:[{id, delta, reason, orderId?, note?, at}] (last 50), createdAt` |
+| `customer` | uuid | `name, phone, area?, notes?, createdAt` |
+| `order` | uuid | `customerId, status, fulfillmentType, dueAt, address:{area?, block?, road?, building?, notes?}, deliveryFeeMinor, paymentStatus, items:[{id, productId?, nameSnapshot, quantity, unitPriceMinor, unitCostMinor}], payments:[{id, amountMinor, method, note?, paidAt}], changes:[{id, field, oldValue?, newValue?, note?, at}], notes?, vatRateBps?, vatIncluded?, vatMinor?, invoiceNumber?, createdAt, updatedAt` |
+| `expense` | uuid | `amountMinor, category, note?, receiptPhotoId?, recurring, date, createdAt` |
+| `occasion` | uuid | `kind, nameAr, nameEn?, startDate, endDate, preOrderOpensAt?, dailyCapacityOverride?, blocked, notes?` |
+| `setting` | the key | `{ value }` for shop-level settings only, e.g. `whatsappTemplates`. Per-device prefs (language, theme, address form, Ask consent) never sync. |
+
+- **Enum values** are the existing lowercase codes both apps already use (status, payment status, fulfillment, expense category, occasion kind, stock reason). A code an app does not know is shown as "other" and kept unchanged on write.
+- **Stock with several phones:** each order's stock moves are recorded on the phone that confirmed the order. `stockQuantity` is last-writer-wins like any field. This is acceptable for v1.
+- **Invoice numbers:** with sync on, each device prefixes its sequence with a short device code taken from the session (for example `INV-A7-000123`), so two phones never issue the same number. Without sync, numbering stays as it is today.
+- **Photos:** product and receipt photos travel as `photoId` (SHA-256 of the JPEG). Upload with `photo_upload`, fetch with `photo_url`, and cache locally by photoId.
