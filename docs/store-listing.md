@@ -1,8 +1,9 @@
 # Store listing: Orderat 1.0 (App Store) / 1.4.0 (Google Play)
 
 Arabic first, masculine address, for every small business (not only home sellers). Only features
-that ship in this version. Prices: 14-day free trial, then $9.99/month or $79.99/year (stores show
-local prices).
+that ship in this version. No exact prices in the descriptions: the App Store yearly plan is priced
+from Bahrain (VAT-inclusive), so the US store shows $69.99 while Bahrain sees the $79.99-equivalent.
+Each store shows the local price.
 
 ## Arabic
 
@@ -51,7 +52,7 @@ local prices).
 
 بياناتك على جوالك، إلا إذا فعّلت المزامنة السحابية بنفسك. اوردرات ما يدخل حسابات الواتساب أو الإنستقرام حقتك.
 
-جرّب التطبيق ببيانات تجريبية قبل ما تشترك. بعدها 14 يوم مجاناً، ثم 9.99$ شهرياً أو 79.99$ سنوياً (يظهر السعر بعملتك في المتجر). تقدر تلغي أي وقت.
+جرّب التطبيق ببيانات تجريبية قبل ما تشترك. بعدها 14 يوم مجاناً، ثم اشتراك شهري أو سنوي بالسعر اللي يظهر لك في المتجر. تقدر تلغي أي وقت.
 
 عربي وإنجليزي، فاتح وداكن، والعملات الخليجية.
 
@@ -105,7 +106,7 @@ Market your business
 
 Your data stays on your phone unless you turn on cloud sync yourself. Orderat never logs in to your WhatsApp or Instagram.
 
-Try it with sample data before you subscribe. Then 14 days free, followed by $9.99 a month or $79.99 a year (shown in your currency in the store). Cancel anytime.
+Try it with sample data before you subscribe. Then 14 days free, followed by a monthly or yearly subscription at the price shown in the store. Cancel anytime.
 
 Arabic and English, light and dark, and Gulf currencies.
 
