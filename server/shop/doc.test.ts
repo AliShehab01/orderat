@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeWhatsapp, referencedPhotoIds, resolveShopDoc, validateShopDoc, type ShopDocRequest } from "./doc";
+import { isValidIban, normalizeIban, normalizeWhatsapp, referencedPhotoIds, resolveShopDoc, validateShopDoc, type ShopDocRequest } from "./doc";
 
 const PHOTO_ID_A = "a".repeat(64);
 const PHOTO_ID_B = "b".repeat(64);
@@ -48,6 +48,46 @@ describe("normalizeWhatsapp", () => {
 
   it("does not mistake an interior 00 for the international prefix", () => {
     expect(normalizeWhatsapp("97300334444")).toBe("97300334444");
+  });
+});
+
+describe("normalizeIban", () => {
+  it("passes through an uppercase, no-space IBAN", () => {
+    expect(normalizeIban("BH67BMAG00001299123456")).toBe("BH67BMAG00001299123456");
+  });
+
+  it("strips spaces", () => {
+    expect(normalizeIban("BH67 BMAG 0000 1299 1234 56")).toBe("BH67BMAG00001299123456");
+  });
+
+  it("strips dashes", () => {
+    expect(normalizeIban("BH67-BMAG-0000-1299-1234-56")).toBe("BH67BMAG00001299123456");
+  });
+
+  it("uppercases a lowercase IBAN", () => {
+    expect(normalizeIban("bh67bmag00001299123456")).toBe("BH67BMAG00001299123456");
+  });
+
+  it("normalizes spaces and lowercase together", () => {
+    expect(normalizeIban("bh67 bmag 0000 1299 1234 56")).toBe("BH67BMAG00001299123456");
+  });
+});
+
+describe("isValidIban", () => {
+  it("accepts a valid IBAN", () => {
+    expect(isValidIban("BH67BMAG00001299123456")).toBe(true);
+  });
+
+  it("rejects a bad checksum", () => {
+    expect(isValidIban("BH68BMAG00001299123456")).toBe(false);
+  });
+
+  it("rejects a string that's too short to be an IBAN", () => {
+    expect(isValidIban("BH67BMAG0001")).toBe(false);
+  });
+
+  it("rejects an empty string", () => {
+    expect(isValidIban("")).toBe(false);
   });
 });
 
@@ -148,6 +188,45 @@ describe("validateShopDoc", () => {
     expect(validateShopDoc(validDoc({ items }))).toBeUndefined();
   });
 
+  it("accepts a valid iban and holder name", () => {
+    const result = validateShopDoc(validDoc({ iban: "BH67BMAG00001299123456", ibanName: "Sweets Studio" }));
+    expect(result?.iban).toBe("BH67BMAG00001299123456");
+    expect(result?.ibanName).toBe("Sweets Studio");
+  });
+
+  it("normalizes a spaced, lowercase iban", () => {
+    const result = validateShopDoc(validDoc({ iban: "bh67 bmag 0000 1299 1234 56" }));
+    expect(result?.iban).toBe("BH67BMAG00001299123456");
+  });
+
+  it("rejects an iban with a bad checksum", () => {
+    expect(validateShopDoc(validDoc({ iban: "BH68BMAG00001299123456" }))).toBeUndefined();
+  });
+
+  it("rejects an iban that's too short", () => {
+    expect(validateShopDoc(validDoc({ iban: "BH67BMAG0001" }))).toBeUndefined();
+  });
+
+  it("rejects an empty-string iban", () => {
+    expect(validateShopDoc(validDoc({ iban: "" }))).toBeUndefined();
+  });
+
+  it("rejects an ibanName longer than 70 characters", () => {
+    expect(validateShopDoc(validDoc({ iban: "BH67BMAG00001299123456", ibanName: "a".repeat(71) }))).toBeUndefined();
+  });
+
+  it("rejects an empty-string ibanName", () => {
+    expect(validateShopDoc(validDoc({ ibanName: "" }))).toBeUndefined();
+  });
+
+  it("omits iban and ibanName from the stored doc when not sent", () => {
+    const result = validateShopDoc(validDoc());
+    expect(result).toBeTruthy();
+    const serialized = JSON.parse(JSON.stringify(result));
+    expect(serialized).not.toHaveProperty("iban");
+    expect(serialized).not.toHaveProperty("ibanName");
+  });
+
   it("rejects a body that isn't an object", () => {
     expect(validateShopDoc("nope")).toBeUndefined();
     expect(validateShopDoc(null)).toBeUndefined();
@@ -189,5 +268,19 @@ describe("resolveShopDoc / referencedPhotoIds", () => {
     const resolved = resolveShopDoc(doc, "sweetstudio", urls) as unknown as Record<string, unknown>;
     expect(resolved).not.toHaveProperty("logoId");
     expect((resolved.items as Record<string, unknown>[])[0]).not.toHaveProperty("photoId");
+  });
+
+  it("carries a present iban and ibanName through unchanged", () => {
+    const withIban: ShopDocRequest = { ...doc, iban: "BH67BMAG00001299123456", ibanName: "Sweets Studio" };
+    const resolved = resolveShopDoc(withIban, "sweetstudio", new Map());
+    expect(resolved.iban).toBe("BH67BMAG00001299123456");
+    expect(resolved.ibanName).toBe("Sweets Studio");
+  });
+
+  it("omits iban and ibanName from the resolved doc when absent on the input", () => {
+    const resolved = resolveShopDoc(doc, "sweetstudio", new Map());
+    const serialized = JSON.parse(JSON.stringify(resolved));
+    expect(serialized).not.toHaveProperty("iban");
+    expect(serialized).not.toHaveProperty("ibanName");
   });
 });

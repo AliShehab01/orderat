@@ -14,10 +14,14 @@ const MAX_PICKUP_HOURS_CHARS = 100;
 const MAX_INSTAGRAM_CHARS = 60;
 const MAX_LEAD_TIME_DAYS = 60;
 const MAX_ITEM_ID_CHARS = 64;
+const MAX_IBAN_NAME_CHARS = 70;
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
 /** A photoId/logoId is always a SHA-256 hex digest (server/shop/photos.ts). */
 const PHOTO_ID_RE = /^[0-9a-f]{64}$/;
+/** ISO 13616 shape: 2-letter country code + 2 check digits + 11-30 alphanumeric BBAN characters
+ * (15-34 total). Checked against an already-normalized (normalizeIban) string. */
+const IBAN_RE = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/;
 
 export type ShopLang = "ar" | "en";
 export type Delivery = "pickup" | "delivery" | "pickup_and_delivery";
@@ -55,6 +59,10 @@ export interface ShopDocRequest {
   acceptsWebOrders: boolean;
   accent: string;
   logoId?: string;
+  /** Already normalized (uppercase, no spaces/dashes) and checksum-validated by validateShopDoc (see
+   * normalizeIban/isValidIban) — callers never need to normalize or re-validate it. */
+  iban?: string;
+  ibanName?: string;
   items: ShopItemRequest[];
 }
 
@@ -84,6 +92,8 @@ export interface ShopDocPublic {
   acceptsWebOrders: boolean;
   accent: string;
   logoUrl?: string;
+  iban?: string;
+  ibanName?: string;
   items: ShopItemPublic[];
 }
 
@@ -99,6 +109,30 @@ export function normalizeWhatsapp(raw: string): string {
   const cleaned = raw.replace(/[\s-]/g, "");
   const withoutPrefix = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned.startsWith("00") ? cleaned.slice(2) : cleaned;
   return withoutPrefix.replace(/\D/g, "");
+}
+
+/** Strips spaces and dashes and uppercases, so "bh67 bmag 0000 1299 1234 56" and
+ * "BH67BMAG00001299123456" normalize to the same value before validation and storage. */
+export function normalizeIban(raw: string): string {
+  return raw.replace(/[\s-]/g, "").toUpperCase();
+}
+
+/**
+ * ISO 13616: the country-code/check-digit/BBAN shape (`IBAN_RE`, 15-34 characters) plus the mod-97
+ * checksum — move the first 4 characters to the end, replace each letter with its position after 9
+ * (A=10 .. Z=35), and reduce the result mod 97 one digit (or one two-digit letter value) at a time so
+ * the running remainder never needs more than a few digits (no BigInt). A valid IBAN's checksum
+ * reduces to exactly 1. Expects an already normalized (normalizeIban) string.
+ */
+export function isValidIban(iban: string): boolean {
+  if (!IBAN_RE.test(iban)) return false;
+  const rearranged = iban.slice(4) + iban.slice(0, 4);
+  let remainder = 0;
+  for (const ch of rearranged) {
+    const value = ch >= "0" && ch <= "9" ? ch.charCodeAt(0) - 48 : ch.charCodeAt(0) - 65 + 10;
+    remainder = value >= 10 ? (remainder * 100 + value) % 97 : (remainder * 10 + value) % 97;
+  }
+  return remainder === 1;
 }
 
 function isNonEmptyString(value: unknown, maxLength: number): value is string {
@@ -164,6 +198,19 @@ export function validateShopDoc(raw: unknown): ShopDocRequest | undefined {
   if (typeof o.acceptsWebOrders !== "boolean") return undefined;
   if (!(typeof o.accent === "string" && HEX_COLOR_RE.test(o.accent))) return undefined;
   if (o.logoId !== undefined && !isPhotoIdFormat(o.logoId)) return undefined;
+
+  // Both `iban` and `ibanName` are independent, optional fields (docs/marketing-tools.md's "Public
+  // shop document"). `iban` is normalized first (see normalizeIban) so "bh67 bmag ..." and
+  // "BH67BMAG..." both validate and are stored the same way; an invalid or empty-string IBAN fails
+  // the whole document, same as every other malformed field here.
+  let iban: string | undefined;
+  if (o.iban !== undefined) {
+    if (typeof o.iban !== "string") return undefined;
+    iban = normalizeIban(o.iban);
+    if (!isValidIban(iban)) return undefined;
+  }
+  if (!isOptionalString(o.ibanName, MAX_IBAN_NAME_CHARS)) return undefined;
+
   if (!Array.isArray(o.items) || o.items.length > MAX_ITEMS) return undefined;
 
   const items: ShopItemRequest[] = [];
@@ -178,7 +225,7 @@ export function validateShopDoc(raw: unknown): ShopDocRequest | undefined {
     instagram: o.instagram as string | undefined, area: o.area as string | undefined,
     pickupHours: o.pickupHours as string | undefined, leadTimeDays: o.leadTimeDays,
     delivery: o.delivery, acceptsWebOrders: o.acceptsWebOrders, accent: o.accent,
-    logoId: o.logoId as string | undefined, items,
+    logoId: o.logoId as string | undefined, iban, ibanName: o.ibanName as string | undefined, items,
   };
 }
 
@@ -205,6 +252,8 @@ export function resolveShopDoc(doc: ShopDocRequest, slug: string, photoUrls: Rea
     acceptsWebOrders: doc.acceptsWebOrders,
     accent: doc.accent,
     logoUrl: doc.logoId ? photoUrls.get(doc.logoId) : undefined,
+    iban: doc.iban,
+    ibanName: doc.ibanName,
     items: doc.items.map((item) => ({
       id: item.id,
       name: item.name,
