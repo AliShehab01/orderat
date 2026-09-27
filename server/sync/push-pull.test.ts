@@ -119,6 +119,22 @@ describe("pushChanges / staff permission filtering", () => {
     expect((await findRecord(sql, SHOP_ID, "order", "order-1"))?.data).toEqual({ status: "prepped", customerName: "Sara", items: [{ id: "p1", qty: 2 }] });
   });
 
+  it("a rejected change carries the server's current copy so the phone can revert exactly", async () => {
+    await upsertRecord(sql, SHOP_ID, "product", "p1", { name: "Cake", priceMinor: 5000 }, false, OWNER_ID);
+    const staffNoProducts: Member = { role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, orders: true } };
+    const result = await pushChanges(sql, SHOP_ID, staffNoProducts, [change({ entity: "product", id: "p1", data: { name: "Hacked", priceMinor: 1 } })], STAFF_ID);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0]).toMatchObject({ entity: "product", id: "p1", reason: "forbidden", record: { data: { name: "Cake", priceMinor: 5000 }, deleted: false } });
+    expect(result.rejected[0]!.record!.seq).toBeGreaterThan(0);
+  });
+
+  it("a rejected change never leaks a record the member may not see", async () => {
+    await upsertRecord(sql, SHOP_ID, "expense", "e1", { amount: 99 }, false, OWNER_ID);
+    const staffNoMoney: Member = { role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, orders: true } };
+    const result = await pushChanges(sql, SHOP_ID, staffNoMoney, [change({ entity: "expense", id: "e1", data: { amount: 1 } })], STAFF_ID);
+    expect(result.rejected).toEqual([{ entity: "expense", id: "e1", reason: "forbidden" }]);
+  });
+
   it("rejects a prepare-only staff member's attempt to create a brand-new order", async () => {
     const prepareOnly: Member = { role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, prepare: true } };
     const result = await pushChanges(sql, SHOP_ID, prepareOnly, [change({ id: "brand-new-order" })], STAFF_ID);

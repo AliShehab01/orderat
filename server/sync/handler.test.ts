@@ -99,6 +99,9 @@ describe("createSyncHandler / sync", () => {
     expect(body.rejected).toEqual([]);
     expect(body.more).toBe(false);
     expect(body.changes.some((c: { entity: string; id: string }) => c.entity === "product" && c.id === "p1")).toBe(true);
+    // The caller's current membership rides along on every sync.
+    expect(body.membership.role).toBe("owner");
+    expect(body.membership.permissions).toMatchObject({ orders: true, prepare: true, money: true, products: true });
   });
 
   it("is forbidden for a signed-in user who isn't a member of the shop", async () => {

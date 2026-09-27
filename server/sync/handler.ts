@@ -143,6 +143,10 @@ export function createSyncHandler(deps: SyncHandlerDeps): (req: Request) => Prom
         more: pulled.more,
         conflicts,
         rejected,
+        // The caller's CURRENT role and permissions, re-read on every sync, so an owner's change to a
+        // staff member's toggles reaches that phone's screens on its next sync instead of only after
+        // re-joining. The server-side checks above are the real enforcement either way.
+        membership: { role: membership.role, permissions: membership.permissions },
       },
       200,
     );

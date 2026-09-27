@@ -58,7 +58,9 @@ Cloud sync stays **optional**: a seller can keep using the app offline-only, as 
 ```
 - The server applies each change in a transaction. Each accepted change gets a new `seq`.
 - A change whose `baseSeq` is older than the record's current seq still wins (last writer wins). The server reports it in `conflicts` so the app can show "updated on another phone" if it wants.
-- The response is `{ "changes": [records with seq > cursor, up to 500], "cursor": newMax, "more": bool }`.
+- The response is `{ "changes": [records with seq > cursor, up to 500], "cursor": newMax, "more": bool, "conflicts": [...], "rejected": [...], "membership": { "role", "permissions" } }`.
+- `membership` is the caller's current role and permissions, re-read on every sync, so an owner's change to a staff member's permissions reaches that phone on its next sync.
+- Each `rejected` entry is `{ entity, id, reason: "forbidden", record? }`. `record` (`{ data, deleted, seq, updatedAt }`) is the server's current copy: the phone replaces its refused local edit with it. With no `record` (the server has no copy, or the member may not see it), the phone drops its local copy.
 - The app loops while `more` is true.
 
 **Permissions.**

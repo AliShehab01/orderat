@@ -19,6 +19,10 @@ export interface Rejected {
   entity: Entity;
   id: string;
   reason: "forbidden";
+  /** The server's current copy, so the phone can put its refused edit back exactly (there is no
+   * "fetch one record" action). Absent when the record does not exist on the server yet, or when this
+   * member may not see it (canPull) - then the phone should drop its local copy. */
+  record?: { data: Record<string, unknown>; deleted: boolean; seq: number; updatedAt: string };
 }
 
 export interface PushResult {
@@ -47,7 +51,13 @@ export async function pushChanges(sql: SqlClient, shopId: string, member: Member
     const existing = await findRecord(sql, shopId, change.entity, change.id);
     const decision = decidePush(member, change.entity, change.data, change.deleted, existing?.data);
     if (!decision.allowed) {
-      rejected.push({ entity: change.entity, id: change.id, reason: decision.reason });
+      const visible = existing && canPull(member, change.entity);
+      rejected.push({
+        entity: change.entity,
+        id: change.id,
+        reason: decision.reason,
+        ...(visible ? { record: { data: existing.data, deleted: existing.deleted, seq: existing.seq, updatedAt: existing.updatedAt } } : {}),
+      });
       continue;
     }
 
