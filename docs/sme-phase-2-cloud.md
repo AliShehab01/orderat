@@ -72,6 +72,16 @@ Cloud sync stays **optional**: a seller can keep using the app offline-only, as 
 - The app offers to upload this phone's shop, creating the cloud shop as owner, or to join an existing shop with an invite code.
 - Uploading pushes every local record in batches of 200.
 
+**Finding a shop again on a new phone (no local data yet).**
+- `shops_list` (no fields beyond the action) returns every shop the signed-in user belongs to, owner
+  or staff, newest first: `{ "shops": [{ "shopId", "role": "owner"|"staff", "name", "updatedAt" }] }`,
+  an empty array when the user has none.
+- `name`/`updatedAt` come from the shop's own `shop` entity record (see "Record formats" below) — never
+  from the bootstrap name given once at `create_shop` time — so both are `null` until that record has
+  synced at least once.
+- The app shows this list so the seller can pick which shop to restore, then calls `sync` with
+  `cursor: 0` for that `shopId` to pull everything down.
+
 **Photos.**
 - Product photos go to the Storage bucket `orderat-photos` at `<shopId>/<sha256>.jpg`. They are content-addressed, written by the function (same exception as the shop link), and private.
 - Apps fetch them through `orderat-sync` action `photo` (short-lived signed URL).

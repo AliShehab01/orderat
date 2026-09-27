@@ -119,6 +119,16 @@ describe("validateSyncBody / photos", () => {
   });
 });
 
+describe("validateSyncBody / shops_list", () => {
+  it("accepts shops_list with no other fields", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "shops_list" }))).toEqual({ ok: true, body: { action: "shops_list" } });
+  });
+
+  it("ignores extra fields on shops_list (the body carries nothing but the action)", () => {
+    expect(validateSyncBody(JSON.stringify({ action: "shops_list", shopId: SHOP_ID }))).toEqual({ ok: true, body: { action: "shops_list" } });
+  });
+});
+
 describe("validateSyncBody / general", () => {
   it("rejects an unknown action", () => {
     expect(validateSyncBody(JSON.stringify({ action: "nope" }))).toEqual({ ok: false, error: "invalid_body" });

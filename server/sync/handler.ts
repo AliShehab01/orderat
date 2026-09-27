@@ -25,6 +25,7 @@ import {
   insertMembership,
   insertShopCloud,
   listMembers,
+  listShopsForUser,
   markInviteUsed,
   removeMembership,
   updateMembershipPermissions,
@@ -116,6 +117,19 @@ export function createSyncHandler(deps: SyncHandlerDeps): (req: Request) => Prom
     await insertMembership(deps.sql, { shopId: body.shopId, userId, role: "owner", permissions: OWNER_PERMISSIONS });
     log({ event: "sync_create_shop", status: 200, firstUpload: true });
     return jsonResponse({ shop: { id: body.shopId, name: body.name, role: "owner", permissions: OWNER_PERMISSIONS } }, 200);
+  }
+
+  /** So a signed-in owner (or staff member) can find and restore an existing cloud shop on a new
+   * phone: every shop `userId` belongs to, without needing to already know a shopId — unlike every
+   * other action here, which takes one. No permission check beyond a valid session: this only ever
+   * reads back shops the caller is already a member of (server/sync/store.ts's listShopsForUser scopes
+   * the query to `userId` itself), the same posture as sync's own membership-scoped pull. Not rate
+   * limited, matching every other read-only action here (members_list, photo_url) — only `sync` itself
+   * is (docs/sme-phase-2-cloud.md: "60 syncs per minute per session"). */
+  async function handleShopsList(userId: string): Promise<Response> {
+    const shops = await listShopsForUser(deps.sql, userId);
+    log({ event: "sync_shops_list", status: 200, count: shops.length });
+    return jsonResponse({ shops }, 200);
   }
 
   async function handleSync(userId: string, sessionTokenHash: string, body: SyncBody): Promise<Response> {
@@ -311,6 +325,7 @@ export function createSyncHandler(deps: SyncHandlerDeps): (req: Request) => Prom
 
     switch (body.action) {
       case "create_shop": return handleCreateShop(userId, body);
+      case "shops_list": return handleShopsList(userId);
       case "sync": return handleSync(userId, resolved.session.tokenHash, body);
       case "invite_create": return handleInviteCreate(userId, body);
       case "invite_join": return handleInviteJoin(userId, body);

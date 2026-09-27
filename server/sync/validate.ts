@@ -64,6 +64,9 @@ export interface MembersUpdateBody { action: "members_update"; shopId: string; u
 export interface MembersRemoveBody { action: "members_remove"; shopId: string; userId: string; }
 export interface PhotoUploadBody { action: "photo_upload"; shopId: string; mimeType: string; data: string; }
 export interface PhotoUrlBody { action: "photo_url"; shopId: string; photoId: string; }
+/** No fields beyond the action itself — every shop the caller belongs to is derived entirely from
+ * their session's userId (server/sync/store.ts's listShopsForUser), never from anything in the body. */
+export interface ShopsListBody { action: "shops_list"; }
 
 export type SyncRequestBody =
   | CreateShopBody
@@ -74,7 +77,8 @@ export type SyncRequestBody =
   | MembersUpdateBody
   | MembersRemoveBody
   | PhotoUploadBody
-  | PhotoUrlBody;
+  | PhotoUrlBody
+  | ShopsListBody;
 
 export type SyncValidationResult = { ok: true; body: SyncRequestBody } | { ok: false; error: "invalid_body" | "too_large" };
 
@@ -184,6 +188,7 @@ export function validateSyncBody(raw: string): SyncValidationResult {
     case "members_remove": return validateMembersRemove(json);
     case "photo_upload": return validatePhotoUpload(json);
     case "photo_url": return validatePhotoUrl(json);
+    case "shops_list": return { ok: true, body: { action: "shops_list" } };
     default: return invalid();
   }
 }

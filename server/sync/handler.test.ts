@@ -80,6 +80,74 @@ describe("createSyncHandler / create_shop", () => {
   });
 });
 
+describe("createSyncHandler / shops_list", () => {
+  it("is an empty array for a signed-in user with no shops", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("owner-1");
+    const res = await handler(post({ action: "shops_list" }, session));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ shops: [] });
+  });
+
+  it("lists a shop right after create_shop, with name/updatedAt null until a real sync pushes its own record", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("owner-1");
+    const shopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, session));
+
+    const res = await handler(post({ action: "shops_list" }, session));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ shops: [{ shopId, role: "owner", name: null, updatedAt: null }] });
+  });
+
+  it("picks up the shop's name and updatedAt once its own 'shop' entity has been synced", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("owner-1");
+    const shopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, session));
+    await handler(post({ action: "sync", shopId, cursor: 0, changes: [{ entity: "shop", id: shopId, data: { nameAr: "كيكس سارة" } }] }, session));
+
+    const res = await handler(post({ action: "shops_list" }, session));
+    expect(await res.json()).toEqual({ shops: [{ shopId, role: "owner", name: "كيكس سارة", updatedAt: expect.any(String) }] });
+  });
+
+  it("includes shops the caller is staff on, alongside ones they own", async () => {
+    const handler = makeHandler();
+    const { session: ownerSession } = await signUp("owner-1");
+    const ownedShopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId: ownedShopId, name: "Owner's shop" }, ownerSession));
+
+    const { session: staffSession } = await signUp("staff-1");
+    const staffShopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId: staffShopId, name: "Someone else's shop" }, staffSession));
+    const { code } = await (await handler(post({ action: "invite_create", shopId: staffShopId }, staffSession))).json();
+    await handler(post({ action: "invite_join", code }, ownerSession)); // The owner also staffs another shop.
+
+    const res = await handler(post({ action: "shops_list" }, ownerSession));
+    const { shops } = await res.json();
+    expect(shops).toHaveLength(2);
+    expect(shops.map((s: { shopId: string; role: string }) => ({ shopId: s.shopId, role: s.role }))).toEqual(
+      expect.arrayContaining([{ shopId: ownedShopId, role: "owner" }, { shopId: staffShopId, role: "staff" }]),
+    );
+  });
+
+  it("never returns another user's shop", async () => {
+    const handler = makeHandler();
+    const { session: ownerSession } = await signUp("owner-1");
+    await handler(post({ action: "create_shop", shopId: crypto.randomUUID(), name: "Sara's Cakes" }, ownerSession));
+
+    const { session: strangerSession } = await signUp("stranger-1");
+    const res = await handler(post({ action: "shops_list" }, strangerSession));
+    expect(await res.json()).toEqual({ shops: [] });
+  });
+
+  it("requires a valid session", async () => {
+    const handler = makeHandler();
+    const res = await handler(post({ action: "shops_list" }));
+    expect(res.status).toBe(401);
+  });
+});
+
 describe("createSyncHandler / sync", () => {
   async function createShop(handler: (req: Request) => Promise<Response>, session: string) {
     const shopId = crypto.randomUUID();
