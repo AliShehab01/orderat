@@ -214,6 +214,8 @@ the base so it can move to a custom domain later).
   "acceptsWebOrders": true,
   "accent": "#7C4DFF",
   "logoUrl": "https://.../orderat-shop/<shopId>/<photoId>.jpg",
+  "iban": "BH67BMAG00001299123456",
+  "ibanName": "Sweet Studio",
   "items": [
     {
       "id": "p1",
@@ -228,6 +230,15 @@ the base so it can move to a custom domain later).
 ```
 Limits: 60 items, name 60 chars, description 200, bio 300, each photo at most 400 KB (the apps
 resize to 1080 px, JPEG 0.8). `delivery`: `pickup` | `delivery` | `pickup_and_delivery`.
+
+`iban` and `ibanName` (1-70 chars, the account holder's name as the bank shows it) are both
+optional and, like every other optional field here, left out entirely rather than sent empty —
+never `""` or `null`. When sent, `iban` is normalized (uppercased, spaces/dashes stripped) and
+must match `^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$` (15-34 characters) and pass the ISO 13616 mod-97
+checksum (server/shop/doc.ts's `normalizeIban`/`isValidIban`); example `BH67BMAG00001299123456`.
+When present, the shop page shows a "Pay by bank transfer" card with the IBAN and a copy button,
+and the same on the order-sent screen with a reminder to send the receipt on WhatsApp — no
+BenefitPay or any other country-specific wallet, since the page is for every country.
 
 ### Endpoints (`orderat-shop`)
 
@@ -255,6 +266,9 @@ Publish rules:
   is dropped from the item.
 - Slug: `^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$`, not in the reserved list (`admin api app help orderat
   s shop shops store support www` …). 409 `slug_taken` when used by another shop.
+- `iban`, when sent, is normalized and checksummed the same way as the public document above; a
+  non-empty value that isn't a valid IBAN fails the whole publish with 400 `invalid_body`, same as
+  any other malformed field in `shop`.
 - 30 publishes per shop per day. Body at most 6 MB.
 
 Order rules (from the page):
@@ -290,6 +304,10 @@ Order rules (from the page):
 - "Send order": `POST order`, then a confirmation screen with the order number and a WhatsApp
   button that opens `https://wa.me/<whatsapp>?text=<whatsappText>`. When the shop does not accept
   web orders, the cart button opens WhatsApp directly with the summary.
+- Bank transfer: when the shop has an `iban`, a "Pay by bank transfer" card sits under the shop
+  info (IBAN grouped in fours, the holder name, a copy button), and the same IBAN plus a copy
+  button appear again on the order confirmation screen with a reminder to transfer the total and
+  send the receipt to the shop on WhatsApp.
 - Footer: "Powered by Orderat · Make your own free shop link" linking to the Orderat landing page
   (store links), plus a "Report" mailto link.
 - Not found / unpublished: a friendly message and the Orderat link.
