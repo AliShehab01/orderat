@@ -514,7 +514,10 @@ describe("createShopHandler / shared", () => {
       action: "order", slug: "sweetstudio", customer: { name: "Sara", phone: "97300001111" },
       items: [{ id: "p1", qty: 1 }], pickupDate: "2026-09-28",
     }));
-    await sql.query("update orderat.shop_orders set created_at = now() - interval '31 days'");
+    // Relative to the handler's fixed clock (2026-09-26T12:00Z), not the database's real now():
+    // with now() the row's time of day decided whether it fell past the cutoff, so the test failed
+    // whenever it ran after noon UTC.
+    await sql.query("update orderat.shop_orders set created_at = timestamptz '2026-09-26T12:00:00Z' - interval '31 days'");
 
     await handler(req({ action: "stats", token })); // any request opportunistically purges first
     const inboxRes = await handler(req({ action: "inbox", token }));
