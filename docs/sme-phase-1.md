@@ -10,7 +10,7 @@ phone (cloud sync is phase 2).
 
 ## A. Business type
 
-- Shop setup (onboarding) asks "What kind of business?" with five cards:
+- Shop setup (onboarding) asks "What kind of business?" with one card per type:
 
   | Value | Arabic | English | Examples |
   |---|---|---|---|
@@ -18,13 +18,17 @@ phone (cloud sync is phase 2).
   | `shop` | متجر / محل | Shop or boutique | perfumes, abayas, gifts, accessories |
   | `services` | خدمات | Services | salon, tailoring, repairs, cleaning |
   | `food` | مطعم / كافيه | Restaurant or café | catering, coffee, trays |
+  | `food_truck` | عربة طعام (فود ترك) | Food truck | karak, burgers, snacks, coffee |
   | `other` | غير ذلك | Other | anything else |
+
+  `food_truck` was added after the first release (food trucks, "العربات", are common in Bahrain).
+  Its demo shop is a street-food truck (karak, burgers, fries, shawarma, mojito).
 
 - Stored on the Shop (`businessType`, default `home` for existing installs, so old data keeps working).
   Editable later in Settings.
-- The demo shop (before subscribing) is seeded to match the chosen type: 4 demo catalogs (home
+- The demo shop (before subscribing) is seeded to match the chosen type: 5 demo catalogs (home
   sweets = today's demo; shop = perfumes/abayas/gifts; services = salon/tailoring services; food =
-  café/catering) with the same customers/orders structure. `other` uses the shop catalog.
+  café/catering; food_truck = street food) with the same customers/orders structure. `other` uses the shop catalog.
 - Ask Orderat's snapshot gets `"businessType"` so answers fit (server ignores unknown fields safely;
   prompt improvement is optional).
 - Wording stays neutral everywhere ("مشروعك", "منتجاتك وخدماتك"); nothing assumes food.
