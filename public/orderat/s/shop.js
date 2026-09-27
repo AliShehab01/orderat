@@ -11,6 +11,9 @@
   var REPORT_EMAIL = "alishehab.tech@gmail.com";
   var SLUG_RE = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
   var PHOTO_RE = /^https:\/\/[a-z0-9]+\.supabase\.co\/storage\/v1\/object\/public\//;
+  // Shape-only check (no mod-97): the server (server/shop/doc.ts) already checksums an IBAN before
+  // storing it, so this is just defense against a malformed API response.
+  var IBAN_RE = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/;
   var DECIMALS = { BHD: 3, KWD: 3, OMR: 3, JOD: 3, SAR: 2, AED: 2, QAR: 2, USD: 2 };
   var CURRENCY_AR = { BHD: "د.ب", KWD: "د.ك", OMR: "ر.ع", SAR: "ر.س", AED: "د.إ", QAR: "ر.ق", USD: "$" };
   var MAX_QTY = 99;
@@ -88,6 +91,10 @@
       waDelivery: "توصيل إلى",
       waPickup: "استلام",
       waNotes: "ملاحظات",
+      ibanTitle: "الدفع بالتحويل البنكي",
+      ibanTransferHint: "حوّل {total} على هذا الآيبان وأرسل الإيصال للمتجر على الواتساب.",
+      copyIban: "نسخ الآيبان",
+      ibanCopied: "تم نسخ الآيبان",
     },
     en: {
       title: "Order online",
@@ -160,6 +167,10 @@
       waDelivery: "Deliver to",
       waPickup: "Pickup",
       waNotes: "Notes",
+      ibanTitle: "Pay by bank transfer",
+      ibanTransferHint: "Transfer {total} to this IBAN and send the receipt to the shop on WhatsApp.",
+      copyIban: "Copy IBAN",
+      ibanCopied: "IBAN copied",
     },
   };
 
@@ -174,6 +185,7 @@
     whatsapp: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.3-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.1 5.1 0 0 0 1.1 2.7 11.6 11.6 0 0 0 4.4 3.9c1.6.7 2.3.8 3.1.6a2.7 2.7 0 0 0 1.8-1.3 2.2 2.2 0 0 0 .2-1.3c-.1-.1-.3-.2-.5-.3z"/></svg>',
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>',
   };
 
   var app = document.getElementById("app");
@@ -266,6 +278,55 @@
     toastEl.classList.add("show");
     clearTimeout(toast.timer);
     toast.timer = setTimeout(function () { toastEl.classList.remove("show"); }, 2600);
+  }
+
+  // ---------- IBAN (bank transfer) ----------
+
+  function groupIban(iban) {
+    return (String(iban || "").match(/.{1,4}/g) || []).join(" ");
+  }
+
+  function legacyCopyText(text, onDone) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand("copy"); } catch (e) { /* unsupported; nothing more we can do */ }
+    document.body.removeChild(ta);
+    if (onDone) onDone();
+  }
+
+  function copyPlainText(text, onDone) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(onDone, function () { legacyCopyText(text, onDone); });
+      return;
+    }
+    legacyCopyText(text, onDone);
+  }
+
+  function copyIban(iban) {
+    copyPlainText(String(iban || "").replace(/\s+/g, ""), function () { toast(t("ibanCopied")); });
+  }
+
+  function ibanCopyButton(iban) {
+    return h("button", { class: "icon-btn", type: "button", "aria-label": t("copyIban"), icon: "copy", onclick: function () { copyIban(iban); } });
+  }
+
+  /** The IBAN (grouped in fours) plus the holder name (when given) and a copy button — shared by the
+   * shop info card and the order-sent screen so both render it exactly the same way. */
+  function ibanBlock(iban, holderName) {
+    return h("div", { class: "iban-row" }, [
+      h("div", null, [
+        h("div", { class: "iban-num num", text: groupIban(iban) }),
+        holderName ? h("div", { class: "iban-holder", text: holderName }) : null,
+      ]),
+      ibanCopyButton(iban),
+    ]);
   }
 
   function inkFor(hex) {
@@ -373,6 +434,8 @@
       acceptsWebOrders: true,
       accent: "#B5476B",
       logoUrl: null,
+      iban: "BH67BMAG00001299123456",
+      ibanName: "Sweets Studio",
       items: [
         { id: "p1", name: { ar: "كب تشيز كيك", en: "Cheesecake cups" }, description: state.lang === "ar" ? "علبة 6 حبات، نكهات مشكلة" : "Box of 6, mixed flavors", priceMinor: 4500, photoUrl: null, available: true },
         { id: "p2", name: { ar: "كيكة شوكولاتة", en: "Chocolate cake" }, description: state.lang === "ar" ? "تكفي 8 أشخاص" : "Serves 8", priceMinor: 12000, photoUrl: null, available: true },
@@ -384,11 +447,18 @@
     };
   }
 
+  function sanitizeIban(raw) {
+    var cleaned = String(raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    return IBAN_RE.test(cleaned) ? cleaned : null;
+  }
+
   function sanitizeShop(raw) {
     var shop = raw || {};
     shop.accent = /^#[0-9a-fA-F]{6}$/.test(shop.accent || "") ? shop.accent : "#15171c";
     shop.logoUrl = PHOTO_RE.test(shop.logoUrl || "") ? shop.logoUrl : null;
     shop.instagram = /^[A-Za-z0-9._]{1,30}$/.test(shop.instagram || "") ? shop.instagram : null;
+    shop.iban = sanitizeIban(shop.iban);
+    shop.ibanName = shop.iban && typeof shop.ibanName === "string" && shop.ibanName.trim() ? shop.ibanName.trim().slice(0, 70) : null;
     shop.whatsapp = String(shop.whatsapp || "").replace(/\D/g, "");
     shop.leadTimeDays = Math.max(0, Math.min(60, Number(shop.leadTimeDays) || 0));
     shop.delivery = ["pickup", "delivery", "pickup_and_delivery"].indexOf(shop.delivery) >= 0 ? shop.delivery : "pickup";
@@ -542,6 +612,10 @@
         h("div", null, [h("h1", { text: name }), shop.bio ? h("p", { class: "bio", text: shop.bio }) : null]),
       ]),
       h("ul", { class: "chips" }, chips),
+      shop.iban ? h("section", { class: "iban-card" }, [
+        h("h2", { text: t("ibanTitle") }),
+        ibanBlock(shop.iban, shop.ibanName),
+      ]) : null,
       h("h2", { class: "section-title", text: t("menu") }),
       grid,
       footer(),
@@ -790,6 +864,9 @@
 
   function showDone(data, values) {
     var text = data.whatsappText || buildWhatsappText(values);
+    // The total the shop info card and checkout sheet already show (money()'s formatting) — captured
+    // before the cart is cleared just below.
+    var totalText = money(cartTotal());
     state.cart = {};
     saveCart();
     sheet.replaceChildren(
@@ -805,6 +882,10 @@
           h("div", { class: "ref num", text: data.orderRef }),
           h("p", { class: "note", text: t("doneBody") }),
         ]),
+        state.shop.iban ? h("div", { class: "iban-card" }, [
+          h("p", { class: "note", text: t("ibanTransferHint", { total: totalText }) }),
+          ibanBlock(state.shop.iban, null),
+        ]) : null,
         state.shop.whatsapp ? h("a", { class: "btn wa", href: whatsappLink(text), target: "_blank", rel: "noopener", icon: "whatsapp" }, [t("sendWa")]) : null,
         h("button", { class: "btn", type: "button", onclick: closeSheet, text: t("backToMenu") }),
       ])

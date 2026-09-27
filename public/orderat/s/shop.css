@@ -72,6 +72,16 @@ img { display: block; max-width: 100%; }
 .chip svg { width: 15px; height: 15px; flex: none; }
 .chip a { text-decoration: none; color: var(--ink); font-weight: 700; }
 
+/* Bank transfer */
+.iban-card {
+  background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 14px 16px; margin: 0 0 18px; display: grid; gap: 10px;
+}
+.iban-card h2 { margin: 0; font-size: 15px; font-weight: 700; }
+.iban-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.iban-num { font-size: 17px; font-weight: 700; letter-spacing: .03em; }
+.iban-holder { margin-top: 2px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+
 /* Products */
 .section-title { font-size: 17px; font-weight: 700; margin: 6px 0 12px; }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
