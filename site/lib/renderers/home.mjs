@@ -69,7 +69,7 @@ export function renderHome(lang) {
     ${SCREENSHOTS.map(
       (s) => `
     <figure class="screenshots__item">
-      <img src="/assets/img/screenshots/${s.file}.webp" alt="${escAttr(s[lang])}" width="270" height="600" loading="lazy">
+      <img src="/assets/img/screenshots/${s.file}.webp" alt="${escAttr(s[lang])}" width="276" height="600" loading="lazy">
       <figcaption>${esc(s[lang])}</figcaption>
     </figure>`
     ).join("")}
