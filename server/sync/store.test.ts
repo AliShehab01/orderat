@@ -19,6 +19,7 @@ import {
   insertMembership,
   insertShopCloud,
   listMembers,
+  listShopsForUser,
   markInviteUsed,
   pullRecords,
   removeMembership,
@@ -192,5 +193,82 @@ describe("records", () => {
     await upsertRecord(sql, otherShopId, "order", "order-1", {}, false, OWNER_ID);
     expect(await pullRecords(sql, SHOP_ID, 0, 500)).toHaveLength(1);
     expect(await pullRecords(sql, otherShopId, 0, 500)).toHaveLength(1);
+  });
+});
+
+describe("listShopsForUser", () => {
+  const OTHER_SHOP_ID = "66666666-6666-6666-6666-666666666666";
+
+  it("returns an empty array for a user with no shop memberships", async () => {
+    expect(await listShopsForUser(sql, OWNER_ID)).toEqual([]);
+  });
+
+  it("lists a shop the user owns, with name/updatedAt null before any 'shop' record is synced", async () => {
+    await insertShopCloud(sql, { id: SHOP_ID, ownerUserId: OWNER_ID, name: "Sara's Cakes" });
+    await insertMembership(sql, { shopId: SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+
+    expect(await listShopsForUser(sql, OWNER_ID)).toEqual([{ shopId: SHOP_ID, role: "owner", name: null, updatedAt: null }]);
+  });
+
+  it("takes name and updatedAt from the shop's own 'shop' entity record, not shops_cloud.name", async () => {
+    await insertShopCloud(sql, { id: SHOP_ID, ownerUserId: OWNER_ID, name: "Sara's Cakes (signup name)" });
+    await insertMembership(sql, { shopId: SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+    const record = await upsertRecord(sql, SHOP_ID, "shop", SHOP_ID, { nameAr: "كيكس سارة", nameEn: "Sara's Cakes" }, false, OWNER_ID);
+
+    expect(await listShopsForUser(sql, OWNER_ID)).toEqual([{ shopId: SHOP_ID, role: "owner", name: "كيكس سارة", updatedAt: record.updatedAt }]);
+  });
+
+  it("falls back to nameEn when the shop record has no nameAr", async () => {
+    await insertShopCloud(sql, { id: SHOP_ID, ownerUserId: OWNER_ID, name: "Sara's Cakes" });
+    await insertMembership(sql, { shopId: SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+    await upsertRecord(sql, SHOP_ID, "shop", SHOP_ID, { nameEn: "Sara's Cakes EN only" }, false, OWNER_ID);
+
+    const shops = await listShopsForUser(sql, OWNER_ID);
+    expect(shops[0]?.name).toBe("Sara's Cakes EN only");
+  });
+
+  it("treats a tombstoned shop record the same as no record at all", async () => {
+    await insertShopCloud(sql, { id: SHOP_ID, ownerUserId: OWNER_ID, name: "Sara's Cakes" });
+    await insertMembership(sql, { shopId: SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+    await upsertRecord(sql, SHOP_ID, "shop", SHOP_ID, { nameAr: "كيكس سارة" }, false, OWNER_ID);
+    await upsertRecord(sql, SHOP_ID, "shop", SHOP_ID, { nameAr: "كيكس سارة" }, true, OWNER_ID);
+
+    expect(await listShopsForUser(sql, OWNER_ID)).toEqual([{ shopId: SHOP_ID, role: "owner", name: null, updatedAt: null }]);
+  });
+
+  it("includes a shop the user is staff on, reporting role: staff", async () => {
+    await insertShopCloud(sql, { id: SHOP_ID, ownerUserId: OWNER_ID, name: "Sara's Cakes" });
+    await insertMembership(sql, { shopId: SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+    await insertMembership(sql, { shopId: SHOP_ID, userId: STAFF_ID, role: "staff", permissions: DEFAULT_STAFF_PERMISSIONS });
+
+    expect(await listShopsForUser(sql, STAFF_ID)).toEqual([{ shopId: SHOP_ID, role: "staff", name: null, updatedAt: null }]);
+  });
+
+  it("sorts a shop with real synced activity ahead of a more-recently-created but never-synced shop", async () => {
+    await insertShopCloud(sql, { id: SHOP_ID, ownerUserId: OWNER_ID, name: "Older shop" });
+    await insertMembership(sql, { shopId: SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+    await insertShopCloud(sql, { id: OTHER_SHOP_ID, ownerUserId: OWNER_ID, name: "Newer shop" });
+    await insertMembership(sql, { shopId: OTHER_SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+    await upsertRecord(sql, SHOP_ID, "shop", SHOP_ID, { nameAr: "Older" }, false, OWNER_ID);
+
+    const shops = await listShopsForUser(sql, OWNER_ID);
+    expect(shops.map((s) => s.shopId)).toEqual([SHOP_ID, OTHER_SHOP_ID]);
+  });
+
+  it("falls back to created_at (newest first) when neither shop has synced a shop record yet", async () => {
+    await insertShopCloud(sql, { id: SHOP_ID, ownerUserId: OWNER_ID, name: "Older shop" });
+    await insertMembership(sql, { shopId: SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+    await insertShopCloud(sql, { id: OTHER_SHOP_ID, ownerUserId: OWNER_ID, name: "Newer shop" });
+    await insertMembership(sql, { shopId: OTHER_SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+
+    const shops = await listShopsForUser(sql, OWNER_ID);
+    expect(shops.map((s) => s.shopId)).toEqual([OTHER_SHOP_ID, SHOP_ID]);
+  });
+
+  it("never returns a shop belonging only to another user", async () => {
+    await insertShopCloud(sql, { id: SHOP_ID, ownerUserId: OWNER_ID, name: "Sara's Cakes" });
+    await insertMembership(sql, { shopId: SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+
+    expect(await listShopsForUser(sql, STAFF_ID)).toEqual([]);
   });
 });

@@ -119,6 +119,62 @@ export async function countStaff(sql: SqlClient, shopId: string): Promise<number
   return rows[0]?.count ?? 0;
 }
 
+export interface ShopListEntry {
+  shopId: string;
+  role: Role;
+  name: string | null;
+  updatedAt: string | null;
+}
+
+/** `name`'s source, per the entity table in docs/sme-phase-2-cloud.md's "Record formats": the shop's
+ * canonical `shop` record (`nameAr` required, `nameEn` optional) — never `shops_cloud.name`, which is
+ * only ever the value given once at create_shop time and is never touched again as the seller renames
+ * their shop through an ordinary sync. `nameAr` wins when both are present, matching the Arabic-first
+ * convention the rest of this codebase uses for display (server/agent/reply.ts). */
+function shopNameFromRecordData(data: unknown): string | null {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+  const obj = data as Record<string, unknown>;
+  if (typeof obj.nameAr === "string" && obj.nameAr.trim().length > 0) return obj.nameAr;
+  if (typeof obj.nameEn === "string" && obj.nameEn.trim().length > 0) return obj.nameEn;
+  return null;
+}
+
+/**
+ * Every shop `userId` is a member of, owner or staff — for server/sync/handler.ts's `shops_list`
+ * action, which exists so a signed-in owner (or staff member) can find and restore an existing cloud
+ * shop on a new phone. `name` and `updatedAt` both come from the shop's own `shop` entity record in
+ * `orderat.records` (id = the shop's id, per the entity table in docs/sme-phase-2-cloud.md), not from
+ * `shops_cloud`: that record is the seller's actual, currently-synced shop data, kept up to date by
+ * every ordinary sync, while `shops_cloud.name`/`created_at` are only ever set once, at create_shop
+ * time. Both are null until that record exists — e.g. between create_shop and the first real sync — or
+ * if it was ever pushed as a tombstone (excluded by `r.deleted = false` in the join, though nothing in
+ * server/sync ever deletes a shop's own record in practice).
+ *
+ * Ordered newest-first by that same record's `updated_at`, so the shop the seller most recently
+ * touched from any device sorts first — the natural default when picking which shop to restore.
+ * Shops with no `shop` record yet (nulls, sorted last by `nulls last`) fall back to
+ * `shops_cloud.created_at` so freshly created, not-yet-synced shops still sort newest-first among
+ * themselves.
+ */
+export async function listShopsForUser(sql: SqlClient, userId: string): Promise<ShopListEntry[]> {
+  const rows = await sql.query<Record<string, unknown>>(
+    `select m.shop_id, m.role, r.data as shop_data, r.updated_at as shop_updated_at
+     from orderat.shop_members m
+     join orderat.shops_cloud s on s.id = m.shop_id
+     left join orderat.records r
+       on r.shop_id = m.shop_id and r.entity = 'shop' and r.id = m.shop_id::text and r.deleted = false
+     where m.user_id = $1
+     order by r.updated_at desc nulls last, s.created_at desc`,
+    [userId],
+  );
+  return rows.map((row) => ({
+    shopId: row.shop_id as string,
+    role: row.role as Role,
+    name: shopNameFromRecordData(row.shop_data),
+    updatedAt: row.shop_updated_at ? String(row.shop_updated_at) : null,
+  }));
+}
+
 // --- Invites -----------------------------------------------------------------------------------
 
 /** Whether an active (unused, unexpired) invite already uses `codeHash` — checked by
