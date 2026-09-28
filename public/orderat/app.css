@@ -181,7 +181,6 @@ a.card.row { padding: 0.8rem 1.1rem; }
 .row-end { display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem; }
 .row-ic { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 0.7rem; background: var(--brand-soft); color: var(--accent); flex: none; }
 .row .chev { color: var(--muted); width: 18px; height: 18px; }
-.row:hover .row-main > b { color: var(--accent); }
 .row.dim { opacity: 0.55; }
 .row.danger, .row.danger:hover .row-main > b { color: var(--bad); }
 .row.danger .row-ic { background: var(--bad-soft); color: var(--bad); }
@@ -368,7 +367,6 @@ textarea { resize: vertical; line-height: 1.6; }
   display: flex; align-items: center; gap: 0.75rem; padding: 0.9rem; cursor: pointer; text-align: start; color: var(--text);
   border-radius: var(--radius-md); border: 1.5px solid var(--border); background: var(--surface-2);
 }
-.type:hover { border-color: var(--accent); background: var(--brand-soft); }
 .type-ic, .ask-ic { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 0.9rem; background: var(--brand-grad); color: #fff; flex: none; }
 @media (max-width: 520px) { .types { grid-template-columns: minmax(0, 1fr); } }
 
@@ -494,6 +492,12 @@ dialog#modal::backdrop { background: rgba(12, 14, 36, 0.45); }
 }
 .toast.show { opacity: 1; transform: none; }
 @media (min-width: 900px) { .toast { bottom: 2rem; } }
+
+/* Hover styles only where a pointer really hovers, so a tap on a phone doesn't leave them stuck. */
+@media (hover: hover) {
+  .row:hover .row-main > b { color: var(--accent); }
+  .type:hover { border-color: var(--accent); background: var(--brand-soft); }
+}
 
 @media print {
   body { background: #fff; }
