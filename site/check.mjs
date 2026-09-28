@@ -194,7 +194,10 @@ function main() {
     process.exit(1);
   }
 
-  const pageFiles = walk(DIST).filter((f) => f.endsWith("index.html"));
+  // dist/s/ is the public shop page copied from public/orderat/s (build.mjs): an app page for
+  // customers, not a marketing page, so the SEO checks don't apply to it.
+  const shopPageDir = path.join(DIST, "s") + path.sep;
+  const pageFiles = walk(DIST).filter((f) => f.endsWith("index.html") && !f.startsWith(shopPageDir));
   const allPageUrls = pageFiles.map(toUrlPath);
   for (const file of pageFiles) checkPage(file);
 

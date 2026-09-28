@@ -9,7 +9,14 @@ function handlerReturning(body: string, headers: Record<string, string> = {}) {
 }
 
 describe("withPublicCors", () => {
-  it("reflects the published GitHub Pages origin", async () => {
+  it("reflects the site's origin, where shop links point", async () => {
+    const wrapped = withPublicCors(handlerReturning("ok"));
+    const site = "https://orderat-app.pages.dev";
+    const res = await wrapped(new Request("https://x.supabase.co/functions/v1/orderat-shop", { headers: { origin: site } }));
+    expect(res.headers.get("access-control-allow-origin")).toBe(site);
+  });
+
+  it("still reflects the old GitHub Pages origin, for links shared before the move", async () => {
     const wrapped = withPublicCors(handlerReturning("ok"));
     const res = await wrapped(new Request("https://x.supabase.co/functions/v1/orderat-shop", { headers: { origin: PUBLISHED } }));
     expect(res.status).toBe(200);

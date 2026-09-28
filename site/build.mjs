@@ -26,6 +26,10 @@ import { BLOG_POSTS } from "./data/blog-posts.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(__dirname, "dist");
 const SRC_ASSETS = path.join(__dirname, "src", "assets");
+// The public shop page (orderat-shop's links point at SITE_URL/s/?<slug>) and the data-deletion page
+// the Meta app and store listings link to live in public/orderat/ and ship with the site as they are.
+const PUBLIC_ORDERAT = path.join(__dirname, "..", "public", "orderat");
+const PUBLIC_PAGES = ["data-deletion.html", "legal.css", "favicon.svg"];
 const LANGS = ["ar", "en"];
 const BUILD_DATE = new Date().toISOString().slice(0, 10);
 
@@ -128,6 +132,10 @@ function main() {
     copyDir(SRC_ASSETS, assetsDest);
     console.log(`  copied static assets from ${path.relative(__dirname, SRC_ASSETS)}`);
   }
+
+  copyDir(path.join(PUBLIC_ORDERAT, "s"), path.join(DIST, "s"));
+  for (const file of PUBLIC_PAGES) fs.copyFileSync(path.join(PUBLIC_ORDERAT, file), path.join(DIST, file));
+  console.log("  copied the shop page (s/) and the data-deletion page from public/orderat");
 
   fs.writeFileSync(path.join(DIST, "sitemap.xml"), buildSitemap(pages), "utf8");
   fs.writeFileSync(path.join(DIST, "robots.txt"), buildRobots(), "utf8");

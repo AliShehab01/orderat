@@ -24,7 +24,7 @@ export const BRAND = {
   instagramUrl: "https://instagram.com/orderat.app",
   tiktokHandle: "orderat.app",
   tiktokUrl: "https://tiktok.com/@orderat.app",
-  demoShopUrl: "https://alishehab01.github.io/orderat/s/?demo",
+  demoShopUrl: `${SITE_URL}/s/?demo`,
   themeColor: "#2f3fb0",
 };
 

@@ -9,51 +9,66 @@ import { breadcrumbLd, softwareApplicationLd } from "../seo.mjs";
 
 const PRICING_FAQ_QS = ["كم سعر اوردرات؟", "أقدر ألغي الاشتراك في أي وقت؟", "هل \"اسأل اوردرات\" و ميزات الذكاء الاصطناعي الأخرى مجانية؟"];
 
-const INCLUDED = {
+const FREE = {
   ar: [
     "طلبات واتساب وإنستغرام غير محدودة",
     "شاشة اليوم، العملاء، والربح والمصاريف",
     "فاتورة ضريبية اختيارية مع رمز ZATCA",
     "تتبّع مخزون اختياري",
-    "تسجيل طلب بالذكاء الاصطناعي واسأل اوردرات",
-    "رابط متجر عام لعملائك",
-    "موظفين ومزامنة سحابية بين الأجهزة",
-    "استوديو الصور وحملات المناسبات",
+    "تسجيل طلب بالذكاء الاصطناعي من رسالة العميل",
+    "3 أسئلة يومياً لـ \"اسأل اوردرات\"",
   ],
   en: [
     "Unlimited WhatsApp and Instagram orders",
     "The Today screen, customers, and profit and expenses",
     "Optional tax invoices with a ZATCA QR code",
     "Optional stock tracking",
-    "AI order entry and Ask Orderat",
+    "AI order entry from your customer's message",
+    "3 Ask Orderat questions a day",
+  ],
+};
+
+const PAID = {
+  ar: [
+    "اسأل اوردرات بأسئلة أكثر بكثير",
+    "رابط متجر عام لعملائك",
+    "موظفين ومزامنة سحابية بين الأجهزة",
+    "استوديو الصور",
+    "حملات المناسبات",
+  ],
+  en: [
+    "Far more Ask Orderat questions",
     "A public shop link for your customers",
     "Staff and cloud sync across devices",
-    "The photo studio and occasion campaigns",
+    "The photo studio",
+    "Occasion campaigns",
   ],
 };
 
 const COPY = {
   ar: {
-    metaTitle: "أسعار اوردرات: تجربة مجانية 7 أيام | اوردرات",
-    metaDescription: "جرّب اوردرات مجاناً 7 أيام، ثم 9.99 دولار شهرياً أو 79.99 دولار سنوياً. كل المزايا في اشتراك واحد، وتقدر تلغي في أي وقت.",
-    h1: "سعر واحد بسيط، لكل مزايا اوردرات",
-    lead: `${PRICING.trialAr} تجربة مجانية كاملة المزايا، وبعدها اشتراك واحد يفتح لك كل شي. لا باقات متعددة ولا مزايا مقفولة خلف اشتراك أعلى.`,
+    metaTitle: "أسعار اوردرات: متجرك مجاني، والاشتراك يضيف أكثر | اوردرات",
+    metaDescription: "متجرك في اوردرات مجاني: الطلبات والعملاء والفلوس والفواتير. والاشتراك (7 أيام مجاناً، ثم 9.99 دولار شهرياً أو 79.99 دولار سنوياً) يضيف رابط المتجر والمزامنة والموظفين ومزايا الذكاء الاصطناعي.",
+    h1: "متجرك مجاني، والاشتراك يضيف لك أكثر",
+    lead: `الطلبات والعملاء والمصاريف والتقارير والفواتير مجانية بدون اشتراك. والاشتراك، مع ${PRICING.trialAr} تجربة مجانية، يضيف رابط متجرك والمزامنة والموظفين والمزيد من الذكاء الاصطناعي. تقدر تلغي في أي وقت.`,
     monthlyLabel: "شهري",
     yearlyLabel: "سنوي",
     yearlySave: "وفّر تقريباً 33% مع الاشتراك السنوي",
-    includedTitle: "كل هذا داخل اشتراكك",
+    freeTitle: "مجاني لمتجرك",
+    includedTitle: "الاشتراك يضيف لك",
     trialBadge: `تجربة مجانية ${PRICING.trialAr}`,
     faqTitle: "أسئلة عن السعر",
   },
   en: {
-    metaTitle: "Orderat pricing: a 7-day free trial | Orderat",
-    metaDescription: "Try Orderat free for 7 days, then $9.99 a month or $79.99 a year. Every feature in one subscription, cancel anytime.",
-    h1: "One simple price for every Orderat feature",
-    lead: `A ${PRICING.trialDays}-day free trial with every feature unlocked, then a single subscription opens everything. No tiers, no features locked behind a higher plan.`,
+    metaTitle: "Orderat pricing: your shop is free | Orderat",
+    metaDescription: "Your Orderat shop is free: orders, customers, money and receipts. The subscription (7 days free, then $9.99 a month or $79.99 a year) adds your shop link, cloud sync, staff and more AI.",
+    h1: "Your shop is free. The subscription adds more.",
+    lead: `Orders, customers, expenses, reports and receipts are free, with no subscription. The subscription, with a ${PRICING.trialDays}-day free trial, adds your shop link, cloud sync, staff and more AI. Cancel anytime.`,
     monthlyLabel: "Monthly",
     yearlyLabel: "Yearly",
     yearlySave: "Save about 33% with the yearly plan",
-    includedTitle: "Everything included",
+    freeTitle: "Free for your shop",
+    includedTitle: "The subscription adds",
     trialBadge: `${PRICING.trialDays}-day free trial`,
     faqTitle: "Pricing questions",
   },
@@ -85,9 +100,16 @@ ${breadcrumbsHtml(lang, [{ name: t.breadcrumbHome, slug: "" }, { name: t.pricing
 <p class="pricing-note">${esc(PRICING.note[lang])}</p>
 
 <section class="section">
+  <h2>${esc(c.freeTitle)}</h2>
+  <ul class="highlight-list highlight-list--check">
+    ${FREE[lang].map((i) => `<li>${icon("check")}${esc(i)}</li>`).join("")}
+  </ul>
+</section>
+
+<section class="section">
   <h2>${esc(c.includedTitle)}</h2>
   <ul class="highlight-list highlight-list--check">
-    ${INCLUDED[lang].map((i) => `<li>${icon("check")}${esc(i)}</li>`).join("")}
+    ${PAID[lang].map((i) => `<li>${icon("check")}${esc(i)}</li>`).join("")}
   </ul>
 </section>
 

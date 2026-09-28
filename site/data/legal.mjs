@@ -5,7 +5,7 @@
 
 import { BRAND } from "../config.mjs";
 
-const DATA_DELETION_URL = "https://alishehab01.github.io/orderat/data-deletion.html";
+const DATA_DELETION_URL = "https://orderat-app.pages.dev/data-deletion.html";
 
 export const PRIVACY = {
   lastUpdated: { ar: "27 سبتمبر 2026", en: "27 September 2026" },

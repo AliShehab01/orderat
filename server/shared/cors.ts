@@ -3,7 +3,7 @@
 // reading orderat-campaigns. Same shape as server/owner/cors.ts (answer OPTIONS itself, reflect only
 // an allow-listed Origin, never set Access-Control-Allow-Credentials since these calls carry no
 // cookie) but a different allow-list policy: owner's is a runtime env allow-list of exact origins;
-// this one is fixed — the published GitHub Pages origin plus any localhost/127.0.0.1 port, so the
+// this one is fixed — the published site origins plus any localhost/127.0.0.1 port, so the
 // page and its own dev server both work without an env var to maintain. Not configurable by env
 // because, unlike the owner page, docs/marketing-tools.md pins the allow-list itself.
 
@@ -11,12 +11,14 @@ const ALLOWED_METHODS = "GET, POST, OPTIONS";
 // Lower-case per docs/marketing-tools.md's exact wording; header names are case-insensitive on the
 // wire, so this is only ever compared/read case-insensitively, never relied on verbatim.
 const ALLOWED_HEADERS = "apikey, authorization, content-type";
-const PUBLISHED_ORIGIN = "https://alishehab01.github.io";
+// The site (orderat-app.pages.dev, where shop links point since 2026-09-29) and the old GitHub
+// Pages copy, so shop links sellers shared before the move keep working.
+const PUBLISHED_ORIGINS: readonly string[] = ["https://orderat-app.pages.dev", "https://alishehab01.github.io"];
 // http only (not https), per docs/marketing-tools.md — a local dev server for the shop page.
 const LOCAL_ORIGIN_RE = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/;
 
 function isAllowedOrigin(origin: string | null): origin is string {
-  return origin !== null && (origin === PUBLISHED_ORIGIN || LOCAL_ORIGIN_RE.test(origin));
+  return origin !== null && (PUBLISHED_ORIGINS.includes(origin) || LOCAL_ORIGIN_RE.test(origin));
 }
 
 /**

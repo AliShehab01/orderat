@@ -25,11 +25,11 @@ export const FAQS = [
   {
     ar: {
       q: "كم سعر اوردرات؟",
-      a: "تجربة مجانية 7 أيام، وبعدها 9.99 دولار شهرياً أو 79.99 دولار سنوياً. المتاجر تعرض السعر بعملتك المحلية.",
+      a: "متجرك نفسه مجاني: الطلبات والعملاء والمصاريف والتقارير والفواتير. الاشتراك يضيف رابط المتجر والمزامنة والموظفين والمزيد من الذكاء الاصطناعي: 7 أيام مجاناً، وبعدها 9.99 دولار شهرياً أو 79.99 دولار سنوياً. المتاجر تعرض السعر بعملتك المحلية.",
     },
     en: {
       q: "How much does Orderat cost?",
-      a: "A 7-day free trial, then $9.99 a month or $79.99 a year. App stores show local pricing for your country.",
+      a: "Your shop itself is free: orders, customers, expenses, reports and receipts. The subscription adds your shop link, cloud sync, staff and more AI: 7 days free, then $9.99 a month or $79.99 a year. App stores show local pricing for your country.",
     },
   },
   {
@@ -105,11 +105,11 @@ export const FAQS = [
   {
     ar: {
       q: "هل \"اسأل اوردرات\" و ميزات الذكاء الاصطناعي الأخرى مجانية؟",
-      a: "تعمل خلال التجربة المجانية ولمشتركي اوردرات. في النسخة التجريبية بدون اشتراك، تقدر تجرّب عدداً محدوداً من الأسئلة أو الصور لتشوف كيف تعمل.",
+      a: "تسجيل الطلب من رسالة العميل مجاني، ومعه 3 أسئلة يومياً لـ \"اسأل اوردرات\". الاشتراك (مع 7 أيام تجربة مجانية) يفتح أسئلة أكثر بكثير واستوديو الصور وحملات المناسبات.",
     },
     en: {
       q: "Are Ask Orderat and the other AI features free?",
-      a: "They work during the free trial and for subscribers. In demo mode without a subscription, you can try a small number of questions or photos to see how they work.",
+      a: "AI order entry from your customer's message is free, with 3 Ask Orderat questions a day. The subscription (with a 7-day free trial) opens far more questions, the photo studio and occasion campaigns.",
     },
   },
   {
