@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "public/orderat/**",
+    // The built site (git-ignored); site/build.mjs copies public/orderat's web app into dist/app/.
+    "site/dist/**",
     "next-env.d.ts",
   ]),
 ]);

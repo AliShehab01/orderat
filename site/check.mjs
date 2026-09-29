@@ -194,10 +194,11 @@ function main() {
     process.exit(1);
   }
 
-  // dist/s/ is the public shop page copied from public/orderat/s (build.mjs): an app page for
-  // customers, not a marketing page, so the SEO checks don't apply to it.
-  const shopPageDir = path.join(DIST, "s") + path.sep;
-  const pageFiles = walk(DIST).filter((f) => f.endsWith("index.html") && !f.startsWith(shopPageDir));
+  // dist/s/ is the public shop page copied from public/orderat/s and dist/app/ is the web app (both
+  // from build.mjs): app pages, not marketing pages, so the SEO checks don't apply to them.
+  const appDirs = [path.join(DIST, "s") + path.sep, path.join(DIST, "app") + path.sep];
+  if (!fs.existsSync(path.join(DIST, "app", "index.html"))) fail("app/", "the web app was not copied to dist/app/");
+  const pageFiles = walk(DIST).filter((f) => f.endsWith("index.html") && !appDirs.some((dir) => f.startsWith(dir)));
   const allPageUrls = pageFiles.map(toUrlPath);
   for (const file of pageFiles) checkPage(file);
 

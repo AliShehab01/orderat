@@ -42,6 +42,7 @@ function header(lang, activeSlug, langSwitchSlug) {
       <img src="/assets/img/icons/icon-192.png" width="32" height="32" alt="" loading="eager">
       <span class="brand__ar">${esc(BRAND.nameAr)}</span>
     </a>
+    <a class="login-link" href="${escAttr(lang === "en" ? "/app/?lang=en" : "/app/")}">${esc(t.logIn)}</a>
     <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" id="nav-toggle">
       <span></span><span></span><span></span>
       <span class="sr-only">Menu</span>

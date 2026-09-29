@@ -90,9 +90,17 @@ p { margin: 0 0 1em; }
   font-size: 0.9rem;
 }
 .lang-switch:hover { text-decoration: none; border-color: var(--brand-end); }
+/* "Log in" / "دخول" to the web app, visible on every screen size */
+.site-nav { margin-inline-start: auto; }
+.login-link {
+  order: 3; flex: none; border-radius: 999px; padding: 0.4rem 1rem; font-weight: 600; font-size: 0.92rem;
+  background: var(--brand-end); color: #fff;
+}
+.login-link:hover { text-decoration: none; opacity: 0.92; }
 
 @media (max-width: 820px) {
   .nav-toggle { display: flex; }
+  .login-link { order: 0; margin-inline-start: auto; }
   .site-nav {
     position: absolute; inset-inline: 0; top: 100%; background: var(--surface);
     flex-direction: column; align-items: stretch; padding: 1rem 1.25rem 1.4rem;

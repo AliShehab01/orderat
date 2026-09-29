@@ -30,6 +30,12 @@ const SRC_ASSETS = path.join(__dirname, "src", "assets");
 // the Meta app and store listings link to live in public/orderat/ and ship with the site as they are.
 const PUBLIC_ORDERAT = path.join(__dirname, "..", "public", "orderat");
 const PUBLIC_PAGES = ["data-deletion.html", "legal.css", "favicon.svg"];
+// The web app (the demo and, after signing in, the seller's cloud shop) is served from /app/.
+const WEB_APP_FILES = [
+  "index.html", "app.js", "app.css", "i18n.js", "demo.js", "config.js", "cloud-map.js", "cloud-api.js", "cloud-sync.js",
+  "cloud-auth.js", "live-core.js", "live.js", "sw.js", "manifest.webmanifest", "favicon.svg", "icon-192.png", "icon-512.png",
+  "apple-touch-icon.png",
+];
 const LANGS = ["ar", "en"];
 const BUILD_DATE = new Date().toISOString().slice(0, 10);
 
@@ -136,6 +142,12 @@ function main() {
   copyDir(path.join(PUBLIC_ORDERAT, "s"), path.join(DIST, "s"));
   for (const file of PUBLIC_PAGES) fs.copyFileSync(path.join(PUBLIC_ORDERAT, file), path.join(DIST, file));
   console.log("  copied the shop page (s/) and the data-deletion page from public/orderat");
+
+  const appDest = path.join(DIST, "app");
+  fs.mkdirSync(appDest, { recursive: true });
+  for (const file of WEB_APP_FILES) fs.copyFileSync(path.join(PUBLIC_ORDERAT, file), path.join(appDest, file));
+  copyDir(path.join(PUBLIC_ORDERAT, "vendor"), path.join(appDest, "vendor"));
+  console.log("  copied the web app to app/");
 
   fs.writeFileSync(path.join(DIST, "sitemap.xml"), buildSitemap(pages), "utf8");
   fs.writeFileSync(path.join(DIST, "robots.txt"), buildRobots(), "utf8");
