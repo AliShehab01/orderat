@@ -43,7 +43,8 @@
 // After a failure the changes stay pending (see `pending`) and the next commit() or pull() sends them.
 // commit() and pull() resolve true when their round went through, false when it failed or could not
 // run (before start(), after stop()). start() again reloads from cursor 0 and keeps changes not sent
-// yet, edits on the state last handed over included. stop() is for good (sign-out, another shop): later answers are ignored and nothing runs any more.
+// yet, edits on the state last handed over included; a start() again that fails changes nothing.
+// stop() is for good (sign-out, another shop): later answers are ignored and nothing runs any more.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -368,10 +369,15 @@
         try {
           answer = await api.sync({ shopId, cursor, changes });
         } catch (error) {
+          if (stopped) {
+            inFlight = new Set();
+            return false;
+          }
+          // Edits made while this call was out, taken while its changes still count as in flight: the
+          // server may have applied them, so a record removed meanwhile needs a tombstone.
+          capture(liveState());
           inFlight = new Set();
-          if (stopped) return false;
           if (changed) {
-            capture(liveState()); // edits made while this call was out
             publish(); // the pages this round did apply
             reportTooLarge();
           }
@@ -414,9 +420,21 @@
     }
 
     // Changes not sent yet survive a reload: they stay pending and are laid over the fresh records.
+    // The pages are fetched first and swapped in only once all of them came: a failed reload changes
+    // nothing, and the sync keeps running on the copy it had.
     function start() {
       const run = chain.then(async () => {
-        if (started && !stopped) capture(liveState()); // edits on S not handed over yet become pending
+        const pages = [];
+        let at = 0;
+        for (;;) {
+          const answer = await api.sync({ shopId, cursor: at, changes: [] });
+          if (stopped) return null;
+          pages.push(answer);
+          const next = isObj(answer) && Number.isInteger(answer.cursor) && answer.cursor > at ? answer.cursor : at;
+          if (!(isObj(answer) && answer.more && next > at)) break;
+          at = next;
+        }
+        if (started) capture(liveState()); // edits on S not handed over yet become pending
         records.clear();
         keyedMeta.clear();
         buildKeys.clear();
@@ -424,15 +442,8 @@
         builtLists = new WeakMap();
         cursor = 0;
         membership = null;
-        started = false;
         committed = built = null;
-        for (;;) {
-          const from = cursor;
-          const answer = await api.sync({ shopId, cursor, changes: [] });
-          if (stopped) return null;
-          applyAnswer(answer, [], null);
-          if (!(isObj(answer) && answer.more && cursor > from)) break;
-        }
+        pages.forEach(answer => applyAnswer(answer, [], null));
         started = true;
         const state = buildState();
         onChange(state);

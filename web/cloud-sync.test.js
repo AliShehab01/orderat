@@ -904,3 +904,63 @@ describe('fix round 1 follow-ups', () => {
     expect(server.row('customer', NOORA_ID).deleted).toBe(true);
   });
 });
+
+describe('fix round 2 follow-ups', () => {
+  it('a failed start() again leaves the sync running on the old copy: an edit made after it is pushed (I-new)', async () => {
+    const server = seeded();
+    const app = await started(server);
+    server.fail = new CloudError('offline', 0, 'network');
+    await expect(app.sync.start()).rejects.toBe(server.fail);
+    product(app, CAKE_ID).price = 7;
+    app.S.customers = app.S.customers.filter(c => c.id !== NOORA_ID);
+    server.fail = null;
+    await expect(app.sync.commit(app.S)).resolves.toBe(true);
+    expect(server.row('product', CAKE_ID).data.priceMinor).toBe(7000);
+    expect(server.row('customer', NOORA_ID).deleted).toBe(true);
+    expect(app.sync.pending).toBe(0);
+  });
+
+  it('an edit made after a failed start() survives the next start() and is pushed (I-new)', async () => {
+    const server = seeded({ pageSize: 4 });
+    const app = await started(server);
+    await app.sync.pull(app.S); // hands S over, so a list replaced on S is seen
+    server.onAnswer = () => { server.fail = new CloudError('offline', 0, 'network'); }; // the second page never comes
+    await expect(app.sync.start()).rejects.toBeInstanceOf(CloudError);
+    server.onAnswer = null;
+    product(app, CAKE_ID).price = 7;
+    app.S.customers = app.S.customers.filter(c => c.id !== NOORA_ID);
+    server.fail = null;
+    await app.sync.start();
+    expect(product(app, CAKE_ID).price).toBe(7);
+    expect(app.S.customers.map(c => c.id)).toEqual([FATIMA_ID]);
+    await app.sync.commit(app.S);
+    expect(server.row('product', CAKE_ID).data.priceMinor).toBe(7000);
+    expect(server.row('customer', NOORA_ID).deleted).toBe(true);
+    expect(app.sync.pending).toBe(0);
+  });
+
+  it('a new record removed while its push is out gets a tombstone even when that push fails after the server took it (m1)', async () => {
+    const server = seeded();
+    const app = await started(server);
+    app.S.customers.push({ id: NEW_ID, name: 'ريم سعيد', nameEn: '', phone: '+97333001099', area: '', notes: '' });
+    const serverSync = server.api.sync;
+    const gate = deferred();
+    let calls = 0;
+    server.api.sync = async body => {
+      calls += 1;
+      if (calls !== 1) return serverSync(body);
+      await serverSync(body); // applied on the server
+      await gate.promise;
+      throw new CloudError('offline', 0, 'timeout'); // the answer is lost
+    };
+    const committing = app.sync.commit(app.S);
+    await until(() => calls === 1 && server.row('customer', NEW_ID) !== undefined);
+    app.S.customers = app.S.customers.filter(c => c.id !== NEW_ID);
+    gate.resolve();
+    await expect(committing).resolves.toBe(false);
+    await app.sync.commit(app.S);
+    expect(server.row('customer', NEW_ID).deleted).toBe(true);
+    expect(server.calls.at(-1).changes.map(c => [c.id, c.deleted])).toEqual([[NEW_ID, true]]);
+    expect(app.S.customers.map(c => c.id)).toEqual([FATIMA_ID, NOORA_ID]);
+  });
+});
