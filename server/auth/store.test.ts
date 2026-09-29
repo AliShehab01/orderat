@@ -16,7 +16,10 @@ import {
   resolveSession,
   revokeSession,
   upsertUser,
+  WEB_SESSION_DAYS,
 } from "./store.ts";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 let sql: SqlClient;
 
@@ -105,6 +108,66 @@ describe("sessions", () => {
     const rows = await sql.query<{ token_hash: string }>(`select token_hash from orderat.sessions`);
     expect(rows[0]!.token_hash).toBe(tokenHash);
     expect(rows[0]!.token_hash).not.toBe(token);
+  });
+});
+
+describe("session expiry (web sessions)", () => {
+  const CREATED = new Date("2026-09-27T12:00:00Z");
+
+  async function newSession(expiresAt?: Date) {
+    const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1" });
+    const { token, tokenHash } = await newSessionToken();
+    await createSession(sql, { tokenHash, userId: user.id, expiresAt });
+    return { user, token, tokenHash };
+  }
+
+  it("keeps a browser session for 30 days", () => {
+    expect(WEB_SESSION_DAYS).toBe(30);
+  });
+
+  it("a session created without an expiry (a phone's) never expires, however long ago it was made", async () => {
+    const { user, token, tokenHash } = await newSession();
+
+    const rows = await sql.query<{ expires_at: Date | null }>(`select expires_at from orderat.sessions where token_hash = $1`, [tokenHash]);
+    expect(rows[0]!.expires_at).toBeNull();
+    const resolved = await resolveSession(sql, token, new Date(CREATED.getTime() + 400 * DAY_MS));
+    expect(resolved?.user.id).toBe(user.id);
+    expect(resolved?.session.expiresAt).toBeUndefined();
+  });
+
+  it("resolves a session until its expiry instant and not at or after it", async () => {
+    const expiresAt = new Date(CREATED.getTime() + WEB_SESSION_DAYS * DAY_MS);
+    const { user, token } = await newSession(expiresAt);
+
+    const before = await resolveSession(sql, token, new Date(expiresAt.getTime() - 1));
+    expect(before?.user.id).toBe(user.id);
+    expect(before?.session.expiresAt).toEqual(expiresAt);
+    // The instant itself already counts as expired (expires_at <= now), as does anything later.
+    expect(await resolveSession(sql, token, expiresAt)).toBeUndefined();
+    expect(await resolveSession(sql, token, new Date(expiresAt.getTime() + 1))).toBeUndefined();
+  });
+
+  it("does not touch last_seen_at when the session has expired", async () => {
+    const expiresAt = new Date(CREATED.getTime() + WEB_SESSION_DAYS * DAY_MS);
+    const { token, tokenHash } = await newSession(expiresAt);
+    const seenBefore = await sql.query<{ last_seen_at: Date }>(`select last_seen_at from orderat.sessions where token_hash = $1`, [tokenHash]);
+
+    await resolveSession(sql, token, new Date(expiresAt.getTime() + DAY_MS));
+
+    const seenAfter = await sql.query<{ last_seen_at: Date }>(`select last_seen_at from orderat.sessions where token_hash = $1`, [tokenHash]);
+    expect(new Date(seenAfter[0]!.last_seen_at).getTime()).toBe(new Date(seenBefore[0]!.last_seen_at).getTime());
+  });
+
+  it("an expired session's user and other sessions are unaffected", async () => {
+    const expiresAt = new Date(CREATED.getTime() + WEB_SESSION_DAYS * DAY_MS);
+    const { user, token: webToken } = await newSession(expiresAt);
+    const phone = await newSessionToken();
+    await createSession(sql, { tokenHash: phone.tokenHash, userId: user.id, deviceName: "iPhone" });
+
+    const later = new Date(expiresAt.getTime() + DAY_MS);
+    expect(await resolveSession(sql, webToken, later)).toBeUndefined();
+    expect((await resolveSession(sql, phone.token, later))?.user.id).toBe(user.id);
+    expect(await findUserById(sql, user.id)).toBeDefined();
   });
 });
 

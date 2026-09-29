@@ -1,7 +1,7 @@
 // Database access for accounts and sessions (docs/sme-phase-2-cloud.md's "Accounts"), backed by
-// db/migrations/0004_cloud.sql's orderat.users / sessions. Every query is parameterized;
-// server/auth/handler.ts is the only caller, always after server/auth/verify-token.ts has already
-// verified whatever it's about to trust.
+// db/migrations/0004_cloud.sql's orderat.users / sessions (and 0005's sessions.expires_at). Every
+// query is parameterized; server/auth/handler.ts is the only caller, always after
+// server/auth/verify-token.ts has already verified whatever it's about to trust.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { constantTimeEqualHex, sha256HexOfString } from "../shared/crypto.ts";
@@ -91,10 +91,20 @@ export async function newSessionToken(): Promise<NewSessionToken> {
   return { token, tokenHash: await sha256HexOfString(token) };
 }
 
-export async function createSession(sql: SqlClient, input: { tokenHash: string; userId: string; deviceName?: string }): Promise<void> {
+/** How long a browser's session lasts, counted from its signin (docs/superpowers/specs/
+ * 2026-09-29-orderat-web-design.md). A browser keeps its session in localStorage, where a forgotten or
+ * stolen one would otherwise stay valid for good; the phones' sessions have no expiry at all. */
+export const WEB_SESSION_DAYS = 30;
+
+/** `expiresAt` is set only for a browser's session (server/auth/handler.ts passes WEB_SESSION_DAYS from
+ * now); left out, the session never expires, which is every phone's. */
+export async function createSession(
+  sql: SqlClient,
+  input: { tokenHash: string; userId: string; deviceName?: string; expiresAt?: Date },
+): Promise<void> {
   await sql.query(
-    `insert into orderat.sessions (token_hash, user_id, device_name) values ($1, $2, $3)`,
-    [input.tokenHash, input.userId, input.deviceName ?? null],
+    `insert into orderat.sessions (token_hash, user_id, device_name, expires_at) values ($1, $2, $3, $4)`,
+    [input.tokenHash, input.userId, input.deviceName ?? null, input.expiresAt?.toISOString() ?? null],
   );
 }
 
@@ -103,6 +113,8 @@ export interface SessionRow {
   userId: string;
   deviceName?: string;
   revokedAt?: string;
+  /** The instant this session stops working; absent for one that never expires (every phone's). */
+  expiresAt?: Date;
 }
 
 function toSessionRow(row: Record<string, unknown>): SessionRow {
@@ -111,12 +123,15 @@ function toSessionRow(row: Record<string, unknown>): SessionRow {
     userId: row.user_id as string,
     deviceName: (row.device_name as string | null) ?? undefined,
     revokedAt: (row.revoked_at as string | null) ?? undefined,
+    // `new Date(...)` takes the Date both SQL drivers hand a timestamptz back as, and the ISO text a
+    // driver configured otherwise would.
+    expiresAt: row.expires_at == null ? undefined : new Date(row.expires_at as string | Date),
   };
 }
 
 async function findSessionByTokenHash(sql: SqlClient, tokenHash: string): Promise<SessionRow | undefined> {
   const rows = await sql.query<Record<string, unknown>>(
-    `select token_hash, user_id, device_name, revoked_at from orderat.sessions where token_hash = $1`,
+    `select token_hash, user_id, device_name, revoked_at, expires_at from orderat.sessions where token_hash = $1`,
     [tokenHash],
   );
   return rows[0] ? toSessionRow(rows[0]) : undefined;
@@ -129,8 +144,9 @@ export interface ResolvedSession {
 
 /**
  * Resolves a raw session token (the app's X-Orderat-Session header) to its session + user, or
- * undefined for anything that doesn't authenticate: unknown, revoked, or belonging to a
- * since-deleted user. Hashes the token, looks the hash up, then re-checks the found row's own hash
+ * undefined for anything that doesn't authenticate: unknown, revoked, expired (a browser session past
+ * its WEB_SESSION_DAYS, from `expires_at <= now` on), or belonging to a since-deleted user. Hashes
+ * the token, looks the hash up, then re-checks the found row's own hash
  * against the computed one with a constant-time comparison before trusting it — the same
  * belt-and-suspenders pattern as server/shop/store.ts's findShopByToken (see that file's comment for
  * the full reasoning: the lookup already matched on equality, so this can only ever agree with it,
@@ -144,6 +160,10 @@ export async function resolveSession(sql: SqlClient, token: string, now: Date): 
   const session = await findSessionByTokenHash(sql, tokenHash);
   if (!session || !constantTimeEqualHex(session.tokenHash, tokenHash)) return undefined;
   if (session.revokedAt) return undefined;
+  // From its expiry instant on, a web session is treated exactly like an unknown token (the browser is
+  // simply signed out). Checked before the user lookup and the last_seen_at bump, so an expired
+  // session does no more work than a revoked one.
+  if (session.expiresAt && session.expiresAt.getTime() <= now.getTime()) return undefined;
 
   const user = await findUserById(sql, session.userId);
   if (!user) return undefined; // Should be unreachable (FK cascade removes sessions with their user); defensive.

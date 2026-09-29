@@ -18,6 +18,10 @@ export interface SigninBody {
    * provider-specific expected claim value from it (Apple hashes it, Google doesn't). */
   nonce?: string;
   deviceName?: string;
+  /** "web" for the browser web app, whose session then expires after WEB_SESSION_DAYS (see
+   * server/auth/store.ts); "app", or nothing at all (every phone build so far), for the phones, whose
+   * sessions never expire. */
+  client?: "web" | "app";
 }
 
 export interface SignoutBody { action: "signout"; }
@@ -45,6 +49,7 @@ function validateSignin(json: Record<string, unknown>): AuthValidationResult {
   if (!isNonEmptyString(json.idToken, MAX_ID_TOKEN_CHARS)) return invalid();
   if (json.nonce !== undefined && !isNonEmptyString(json.nonce, MAX_NONCE_CHARS)) return invalid();
   if (json.deviceName !== undefined && !isNonEmptyString(json.deviceName, MAX_DEVICE_NAME_CHARS)) return invalid();
+  if (json.client !== undefined && json.client !== "web" && json.client !== "app") return invalid();
 
   return {
     ok: true,
@@ -54,6 +59,7 @@ function validateSignin(json: Record<string, unknown>): AuthValidationResult {
       idToken: json.idToken,
       nonce: json.nonce as string | undefined,
       deviceName: json.deviceName as string | undefined,
+      client: json.client as "web" | "app" | undefined,
     },
   };
 }

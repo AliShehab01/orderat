@@ -7,11 +7,15 @@
 // Authorization: Bearer <anon key> ... plus X-Orderat-Session: <session token>") rather than from
 // anything in the body — server/sync/handler.ts and server/parse/handler.ts follow the same header
 // convention for the actions that need a signed-in caller.
+//
+// A `signin` body may say `client: "web"` (the browser app): that session then expires
+// WEB_SESSION_DAYS after signin (server/auth/store.ts). Without it, or with `client: "app"` (the
+// phones), the session never expires.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 import type { JwksCache } from "./jwks.ts";
 import { appleConfig, googleConfig } from "./providers.ts";
-import { createSession, deleteAccount, newSessionToken, resolveSession, revokeSession, upsertUser, type UserRow } from "./store.ts";
+import { createSession, deleteAccount, newSessionToken, resolveSession, revokeSession, upsertUser, WEB_SESSION_DAYS, type UserRow } from "./store.ts";
 import { validateAuthBody, type SigninBody } from "./validate.ts";
 import { expectedNonceFor, verifyIdToken } from "./verify-token.ts";
 
@@ -36,6 +40,8 @@ const tooLargeResponse = () => jsonResponse({ error: "too_large" }, 413);
 const invalidTokenResponse = () => jsonResponse({ error: "invalid_token" }, 401);
 const unauthorizedResponse = () => jsonResponse({ error: "unauthorized" }, 401);
 const providerUnavailableResponse = () => jsonResponse({ error: "provider_unavailable" }, 502);
+
+const WEB_SESSION_MS = WEB_SESSION_DAYS * 24 * 60 * 60 * 1000;
 
 function userJson(user: UserRow) {
   return { id: user.id, provider: user.provider, email: user.email, name: user.name };
@@ -73,7 +79,10 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
     // signs in — store.ts's upsertUser keeps the original id on every signin after that.
     const user = await upsertUser(deps.sql, { id: crypto.randomUUID(), provider: body.provider, providerSub: verified.token.sub, email: verified.token.email, name: verified.token.name });
     const { token, tokenHash } = await newSessionToken();
-    await createSession(deps.sql, { tokenHash, userId: user.id, deviceName: body.deviceName });
+    // Only a browser's session ends (WEB_SESSION_DAYS from this signin); a phone's, whose body says
+    // `client: "app"` or nothing at all, has no end.
+    const expiresAt = body.client === "web" ? new Date(now().getTime() + WEB_SESSION_MS) : undefined;
+    await createSession(deps.sql, { tokenHash, userId: user.id, deviceName: body.deviceName, expiresAt });
 
     log({ event: "auth_signin", status: 200, provider: body.provider });
     return jsonResponse({ session: token, user: userJson(user) }, 200);

@@ -272,3 +272,55 @@ describe("listShopsForUser", () => {
     expect(await listShopsForUser(sql, STAFF_ID)).toEqual([]);
   });
 });
+
+// Every timestamp this store hands back is ISO 8601 UTC with milliseconds ("2026-09-29T12:00:00.000Z"),
+// the format the phones already write and a browser's Date reads back exactly. The SQL drivers give a
+// timestamptz as a JS Date, and String(Date) of that ("Tue Sep 29 2026 …") is neither.
+describe("timestamps", () => {
+  const ISO_WITH_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+  beforeEach(async () => {
+    await insertShopCloud(sql, { id: SHOP_ID, ownerUserId: OWNER_ID, name: "Sara's Cakes" });
+    await insertMembership(sql, { shopId: SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+  });
+
+  it("findMembership and listMembers report joinedAt as ISO 8601 with milliseconds", async () => {
+    const membership = await findMembership(sql, SHOP_ID, OWNER_ID);
+    const [member] = await listMembers(sql, SHOP_ID);
+    expect(membership?.joinedAt).toMatch(ISO_WITH_MS);
+    expect(member?.joinedAt).toBe(membership?.joinedAt);
+  });
+
+  it("listShopsForUser reports updatedAt as ISO 8601 with milliseconds", async () => {
+    const record = await upsertRecord(sql, SHOP_ID, "shop", SHOP_ID, { nameAr: "كيكس سارة" }, false, OWNER_ID);
+    const [shop] = await listShopsForUser(sql, OWNER_ID);
+    expect(shop?.updatedAt).toMatch(ISO_WITH_MS);
+    expect(shop?.updatedAt).toBe(record.updatedAt);
+  });
+
+  it("upsertRecord, findRecord and pullRecords report updatedAt as ISO 8601 with milliseconds, for the instant stored", async () => {
+    const written = await upsertRecord(sql, SHOP_ID, "order", "order-1", {}, false, OWNER_ID);
+    expect(written.updatedAt).toMatch(ISO_WITH_MS);
+    expect((await findRecord(sql, SHOP_ID, "order", "order-1"))?.updatedAt).toBe(written.updatedAt);
+    expect((await pullRecords(sql, SHOP_ID, 0, 10))[0]?.updatedAt).toBe(written.updatedAt);
+
+    const stored = await sql.query<{ ms: string }>(
+      `select floor(extract(epoch from updated_at) * 1000)::text as ms from orderat.records where shop_id = $1 and entity = 'order' and id = 'order-1'`,
+      [SHOP_ID],
+    );
+    expect(new Date(written.updatedAt).getTime()).toBe(Number(stored[0]!.ms));
+  });
+
+  it("also normalizes a driver that returns timestamps as text instead of Date objects", async () => {
+    const textDriver: SqlClient = {
+      async query<T = Record<string, unknown>>(text: string): Promise<T[]> {
+        const row = text.includes("from orderat.shop_members")
+          ? { shop_id: SHOP_ID, user_id: OWNER_ID, role: "owner", permissions: {}, joined_at: "2026-09-29 12:00:00.123+00" }
+          : { entity: "order", id: "order-1", data: {}, deleted: false, seq: "7", updated_at: "2026-09-29 12:00:00.456+00" };
+        return [row as unknown as T];
+      },
+    };
+    expect((await findMembership(textDriver, SHOP_ID, OWNER_ID))?.joinedAt).toBe("2026-09-29T12:00:00.123Z");
+    expect((await findRecord(textDriver, SHOP_ID, "order", "order-1"))?.updatedAt).toBe("2026-09-29T12:00:00.456Z");
+  });
+});

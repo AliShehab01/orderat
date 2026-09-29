@@ -8,6 +8,15 @@ import type { SqlClient } from "../agent/postgres-store.ts";
 import type { Entity } from "./record-access.ts";
 import { normalizePermissions, type Permissions, type Role } from "./permissions.ts";
 
+/** A timestamptz as ISO 8601 UTC with milliseconds ("2026-09-29T12:00:00.000Z") — the format the
+ * phones write and a browser's Date reads back exactly. Both SQL drivers (and PGlite in tests) hand a
+ * timestamptz back as a JS Date, whose String() form ("Tue Sep 29 2026 …") is neither ISO nor
+ * parseable the same way everywhere; a value that arrives as text is parsed and re-emitted, so the
+ * wire format never depends on how a driver is configured. Only for a value known to be set. */
+function toIso(value: unknown): string {
+  return value instanceof Date ? value.toISOString() : new Date(String(value)).toISOString();
+}
+
 export interface ShopCloudRow {
   id: string;
   ownerUserId: string;
@@ -42,7 +51,7 @@ function toMembershipRow(row: Record<string, unknown>): MembershipRow {
     userId: row.user_id as string,
     role: row.role as Role,
     permissions: normalizePermissions(row.permissions),
-    joinedAt: String(row.joined_at),
+    joinedAt: toIso(row.joined_at),
   };
 }
 
@@ -108,7 +117,7 @@ export async function listMembers(sql: SqlClient, shopId: string): Promise<Membe
     userId: row.user_id as string,
     role: row.role as Role,
     permissions: normalizePermissions(row.permissions),
-    joinedAt: String(row.joined_at),
+    joinedAt: toIso(row.joined_at),
     email: (row.email as string | null) ?? undefined,
     name: (row.name as string | null) ?? undefined,
   }));
@@ -171,7 +180,7 @@ export async function listShopsForUser(sql: SqlClient, userId: string): Promise<
     shopId: row.shop_id as string,
     role: row.role as Role,
     name: shopNameFromRecordData(row.shop_data),
-    updatedAt: row.shop_updated_at ? String(row.shop_updated_at) : null,
+    updatedAt: row.shop_updated_at ? toIso(row.shop_updated_at) : null,
   }));
 }
 
@@ -234,7 +243,7 @@ function toRecordRow(row: Record<string, unknown>): RecordRow {
     data: row.data as Record<string, unknown>,
     deleted: row.deleted as boolean,
     seq: Number(row.seq),
-    updatedAt: String(row.updated_at),
+    updatedAt: toIso(row.updated_at),
   };
 }
 

@@ -7,6 +7,7 @@ import { createJwksCache } from "./jwks.ts";
 import { fakeJwksFetch, generateTestKeyPair, signTestToken, type TestKeyPair } from "./jwt-test-support.ts";
 
 const NOW = new Date("2026-09-27T12:00:00Z");
+const DAY_MS = 24 * 60 * 60 * 1000;
 const APPLE_AUD = "com.ams.orderat";
 const GOOGLE_AUD = "google-client-id";
 
@@ -14,14 +15,14 @@ let sql: SqlClient;
 let appleKeyPair: TestKeyPair;
 let googleKeyPair: TestKeyPair;
 
-function makeHandler() {
+function makeHandler(now: () => Date = () => NOW) {
   return createAuthHandler({
     sql,
     appleJwks: createJwksCache("https://appleid.apple.com/auth/keys", { fetchImpl: fakeJwksFetch([appleKeyPair]) }),
     googleJwks: createJwksCache("https://www.googleapis.com/oauth2/v3/certs", { fetchImpl: fakeJwksFetch([googleKeyPair]) }),
     appleAudiences: [APPLE_AUD],
     googleAudiences: [GOOGLE_AUD],
-    now: () => NOW,
+    now,
     log: () => {},
   });
 }
@@ -173,6 +174,89 @@ describe("createAuthHandler / session-authenticated actions", () => {
 
     const meRes = await handler(post({ action: "me" }, { "x-orderat-session": session }));
     expect(meRes.status).toBe(401);
+  });
+});
+
+// A browser signs in with client: "web" and its session lasts 30 days; the phones send no client (or
+// "app") and their sessions never expire (docs/superpowers/specs/2026-09-29-orderat-web-design.md).
+describe("createAuthHandler / session lifetime", () => {
+  async function signInAs(handler: (req: Request) => Promise<Response>, extra: Record<string, unknown>): Promise<string> {
+    const res = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken(), ...extra }));
+    expect(res.status).toBe(200);
+    return (await res.json()).session as string;
+  }
+
+  const me = (handler: (req: Request) => Promise<Response>, session: string) => handler(post({ action: "me" }, { "x-orderat-session": session }));
+
+  it("a web session works now and after 29 days, but is unauthorized 31 days after signin", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const session = await signInAs(handler, { client: "web" });
+
+    expect((await me(handler, session)).status).toBe(200);
+    clock = new Date(NOW.getTime() + 29 * DAY_MS);
+    expect((await me(handler, session)).status).toBe(200);
+    clock = new Date(NOW.getTime() + 31 * DAY_MS);
+    const expired = await me(handler, session);
+    expect(expired.status).toBe(401);
+    expect(await expired.json()).toEqual({ error: "unauthorized" });
+  });
+
+  it("stores a web session's expiry as exactly 30 days after signin", async () => {
+    const handler = makeHandler();
+    await signInAs(handler, { client: "web" });
+    const rows = await sql.query<{ expires_at: Date }>(`select expires_at from orderat.sessions`);
+    expect(new Date(rows[0]!.expires_at).toISOString()).toBe(new Date(NOW.getTime() + 30 * DAY_MS).toISOString());
+  });
+
+  it("an expired web session cannot sign out or delete the account either", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const session = await signInAs(handler, { client: "web" });
+    clock = new Date(NOW.getTime() + 31 * DAY_MS);
+
+    expect((await handler(post({ action: "signout" }, { "x-orderat-session": session }))).status).toBe(401);
+    expect((await handler(post({ action: "delete_account" }, { "x-orderat-session": session }))).status).toBe(401);
+    expect((await sql.query(`select 1 from orderat.users`)).length).toBe(1); // The account is still there.
+  });
+
+  it("a session from a signin with no client (a phone's) never expires", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const session = await signInAs(handler, {});
+
+    clock = new Date(NOW.getTime() + 400 * DAY_MS);
+    expect((await me(handler, session)).status).toBe(200);
+    const rows = await sql.query<{ expires_at: Date | null }>(`select expires_at from orderat.sessions`);
+    expect(rows[0]!.expires_at).toBeNull();
+  });
+
+  it("client: \"app\" is a phone too: no expiry", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const session = await signInAs(handler, { client: "app", deviceName: "iPhone" });
+
+    clock = new Date(NOW.getTime() + 400 * DAY_MS);
+    expect((await me(handler, session)).status).toBe(200);
+  });
+
+  it("a web signin does not shorten the same user's phone session", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const phone = await signInAs(handler, {});
+    const web = await signInAs(handler, { client: "web" });
+
+    clock = new Date(NOW.getTime() + 31 * DAY_MS);
+    expect((await me(handler, web)).status).toBe(401);
+    expect((await me(handler, phone)).status).toBe(200);
+  });
+
+  it("rejects an unknown client with invalid_body and issues no session", async () => {
+    const handler = makeHandler();
+    const res = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken(), client: "x" }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_body" });
+    expect((await sql.query(`select 1 from orderat.sessions`)).length).toBe(0);
   });
 });
 

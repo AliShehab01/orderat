@@ -2,9 +2,10 @@
 // (server/auth/*.test.ts, server/sync/*.test.ts, server/parse/*.test.ts) — same approach as
 // server/marketing-pglite-test-support.ts and server/ask/pglite-test-support.ts, pulled out to this
 // top-level file (alongside server/test-setup.ts) since db/migrations/0004_cloud.sql's tables are
-// shared by all three feature folders and no single one owns it. Applies 0001, 0002, 0003, then 0004,
-// the same order scripts/hosting-migrate.mjs applies them in (0004 assumes schema "orderat" and role
-// "orderat_app" already exist from 0001, and is otherwise independent of 0002/0003's own tables).
+// shared by all three feature folders and no single one owns it. Applies 0001, 0002, 0003, 0004, then
+// 0005 (web sessions' expires_at column), the same order scripts/hosting-migrate.mjs applies them in
+// (0004 assumes schema "orderat" and role "orderat_app" already exist from 0001, and is otherwise
+// independent of 0002/0003's own tables; 0005 alters 0004's sessions table).
 // One instance per process, truncated between tests — starting a fresh WASM instance per test is what
 // made these suites slow before (see server/ask/pglite-test-support.ts's own note).
 
@@ -19,6 +20,7 @@ const MIGRATION_0001 = readFileSync(join(MIGRATIONS_DIR, "0001_orderat_isolation
 const MIGRATION_0002 = readFileSync(join(MIGRATIONS_DIR, "0002_ai_usage.sql"), "utf8");
 const MIGRATION_0003 = readFileSync(join(MIGRATIONS_DIR, "0003_marketing.sql"), "utf8");
 const MIGRATION_0004 = readFileSync(join(MIGRATIONS_DIR, "0004_cloud.sql"), "utf8");
+const MIGRATION_0005 = readFileSync(join(MIGRATIONS_DIR, "0005_web_sessions.sql"), "utf8");
 
 const CLOUD_TABLES = [
   "orderat.sessions",
@@ -44,6 +46,7 @@ function getDb() {
     await db.exec(MIGRATION_0002);
     await db.exec(MIGRATION_0003);
     await db.exec(MIGRATION_0004);
+    await db.exec(MIGRATION_0005);
     return db;
   })();
   return dbPromise;

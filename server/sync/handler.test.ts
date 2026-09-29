@@ -7,6 +7,9 @@ import { MAX_SYNCS_PER_MINUTE } from "./rate-limit.ts";
 
 const NOW = new Date("2026-09-27T12:00:00Z");
 const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+// The timestamp format on the wire (docs/sme-phase-2-cloud.md "Record formats"): ISO 8601 UTC with
+// milliseconds — what a browser's Date parses, unlike the String(Date) form the driver's Date gives.
+const ISO_WITH_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 let sql: SqlClient;
 let uploadedPhotos: { shopId: string; photoId: string; mimeType: string }[];
@@ -111,6 +114,18 @@ describe("createSyncHandler / shops_list", () => {
     expect(await res.json()).toEqual({ shops: [{ shopId, role: "owner", name: "كيكس سارة", updatedAt: expect.any(String) }] });
   });
 
+  it("reports updatedAt as ISO 8601 UTC with milliseconds", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("owner-1");
+    const shopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, session));
+    await handler(post({ action: "sync", shopId, cursor: 0, changes: [{ entity: "shop", id: shopId, data: { nameAr: "كيكس سارة" } }] }, session));
+
+    const { shops } = await (await handler(post({ action: "shops_list" }, session))).json();
+    expect(shops[0].updatedAt).toMatch(ISO_WITH_MS);
+    expect(new Date(shops[0].updatedAt).toISOString()).toBe(shops[0].updatedAt); // A browser reads it back exactly.
+  });
+
   it("includes shops the caller is staff on, alongside ones they own", async () => {
     const handler = makeHandler();
     const { session: ownerSession } = await signUp("owner-1");
@@ -170,6 +185,17 @@ describe("createSyncHandler / sync", () => {
     // The caller's current membership rides along on every sync.
     expect(body.membership.role).toBe("owner");
     expect(body.membership.permissions).toMatchObject({ orders: true, prepare: true, money: true, products: true });
+  });
+
+  it("reports each pulled change's updatedAt as ISO 8601 UTC with milliseconds", async () => {
+    const handler = makeHandler();
+    const { session } = await signUp("owner-1");
+    const shopId = await createShop(handler, session);
+
+    const res = await handler(post({ action: "sync", shopId, cursor: 0, changes: [{ entity: "product", id: "p1", data: { name: "Cake" } }] }, session));
+    const { changes } = await res.json();
+    expect(changes.length).toBeGreaterThan(0);
+    for (const change of changes) expect(change.updatedAt).toMatch(ISO_WITH_MS);
   });
 
   it("is forbidden for a signed-in user who isn't a member of the shop", async () => {
@@ -321,6 +347,13 @@ describe("createSyncHandler / members", () => {
     const { members } = await res.json();
     expect(members.map((m: { role: string }) => m.role)).toEqual(["owner", "staff"]);
     expect(members[1].userId).toBe(staffId);
+  });
+
+  it("reports each member's joinedAt as ISO 8601 UTC with milliseconds", async () => {
+    const { handler, ownerSession, shopId } = await setUpShopWithStaff();
+    const { members } = await (await handler(post({ action: "members_list", shopId }, ownerSession))).json();
+    expect(members).toHaveLength(2);
+    for (const member of members) expect(member.joinedAt).toMatch(ISO_WITH_MS);
   });
 
   it("refuses members_list from staff", async () => {
