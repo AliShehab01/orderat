@@ -138,6 +138,10 @@ p { margin: 0 0 1em; }
 .screenshots__item {
   flex: none; width: 180px; margin: 0; scroll-snap-align: start; text-align: center;
 }
+/* Centred when the strip is wider than the shots; auto margins (not justify-content) keep the
+   first shot reachable when the strip scrolls on a phone. */
+.screenshots__item:first-child { margin-inline-start: auto; }
+.screenshots__item:last-child { margin-inline-end: auto; }
 .screenshots__item img {
   width: 100%; border-radius: 1.4rem; border: 6px solid var(--surface); box-shadow: var(--shadow);
 }
