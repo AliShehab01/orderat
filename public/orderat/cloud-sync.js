@@ -8,7 +8,8 @@
 //   sync.pull(S);         // on a timer and on focus: send what changed, apply what others changed
 //
 // The app adopts each onChange state into its own S in place (Object.assign(S, state)), keeps editing
-// S, and hands S itself to both commit() and pull(): a list or value replaced on S is only seen through S.
+// S, and hands S itself to both commit() and pull(): a list or value replaced on S is only seen through S
+// (called without a state, they use the last one handed over, else the last one built).
 // Edit web objects in place (or replace a list); an object replaced by a copy has no origin and is judged
 // against the latest record. A state is
 //   { shop, vat, stockEnabled, products, customers, orders, expenses, occasions, waTemplates, subscription }
@@ -23,8 +24,8 @@
 //   arrived meanwhile is reported as a conflict. Diffing each object against its own origin, never against
 //   a newer record, means a copy of the state from before a pull cannot undo another device's change.
 // - Deletions: a record in the build a list came from (its oldest member's build) but gone from the list
-//   becomes a tombstone (with its last data); a record the server never had is simply dropped. A list from
-//   an older build never deletes records that came later.
+//   becomes a tombstone (with its last data); a record the server never had (and not on its way there) is
+//   simply dropped. A list from an older build never deletes records that came later.
 // - The server's limits: a record over 32 KB of JSON is never sent; the server copy is put back (a new
 //   record is dropped) and onNotice('invalid') says so. A call carries at most 500 changes and ~1.8 MB.
 // - Changes go out in map.ENTITY_ORDER. The same call pulls: pages are applied while `more`, then the
@@ -42,7 +43,7 @@
 // After a failure the changes stay pending (see `pending`) and the next commit() or pull() sends them.
 // commit() and pull() resolve true when their round went through, false when it failed or could not
 // run (before start(), after stop()). start() again reloads from cursor 0 and keeps changes not sent
-// yet. stop() is for good (sign-out, another shop): later answers are ignored and nothing runs any more.
+// yet, edits on the state last handed over included. stop() is for good (sign-out, another shop): later answers are ignored and nothing runs any more.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -113,6 +114,7 @@
     let started = false, stopped = false;
     let committed = null, built = null; // the state last handed to commit()/pull(), the state last built
     let chain = Promise.resolve(), queued = null, queuedPull = false;
+    let inFlight = new Set(); // keys of the changes in the call that is out
 
     // A record as the web sees it: its pending change if there is one, else the server's copy.
     function local(key) {
@@ -268,8 +270,9 @@
         const view = seen.has(key) ? undefined : local(key);
         if (!view) return;
         const r = records.get(key), p = pending.get(key);
-        if (!r || r.deleted) pending.delete(key); // the server never had it (or no longer has it)
-        else pending.set(key, { entity, id: r.id, data: view.data, deleted: true, baseSeq: p ? p.baseSeq : r.seq, gen: lastBuild });
+        // The server never had it (or no longer has it), and it is not on its way there: just drop it.
+        if ((!r || r.deleted) && !inFlight.has(key)) pending.delete(key);
+        else pending.set(key, { entity, id: (r || p).id, data: view.data, deleted: true, baseSeq: view.seq, gen: lastBuild });
       });
     }
 
@@ -297,16 +300,18 @@
         records.set(key, { entity: p.entity, id: p.id, data: p.data, deleted: p.deleted, seq: r ? r.seq : 0 });
         const now = pending.get(key);
         if (now === p) pending.delete(key);
-        else if (now) now.afterOwn = true;
+        else if (now) now.afterOwn = p; // made on top of this push: based on its copy once that comes back
       });
       (Array.isArray(a.changes) ? a.changes : []).forEach(c => {
         if (!isObj(c) || typeof c.entity !== 'string' || typeof c.id !== 'string') return;
         const key = keyOf(c.entity, c.id);
         records.set(key, { entity: c.entity, id: c.id, data: isObj(c.data) ? c.data : {}, deleted: c.deleted === true, seq: seqOf(c.seq) });
         const p = pending.get(key);
-        if (p && p.afterOwn) { // the copy of the web's own push that this change was made on top of
-          p.baseSeq = seqOf(c.seq);
-          p.afterOwn = false;
+        if (p && p.afterOwn) {
+          // The copy of the web's own push this change was made on top of. Anything else is another
+          // device's write, and the old base keeps it a conflict.
+          if (p.afterOwn.deleted === (c.deleted === true) && same(p.afterOwn.data, c.data)) p.baseSeq = seqOf(c.seq);
+          p.afterOwn = null;
         }
         changed = true;
       });
@@ -356,12 +361,14 @@
       let changed = tooLarge.size > 0;
       for (;;) {
         const batch = nextBatch(due, sent);
-        const changes = batch.map(p => ({ entity: p.entity, id: p.id, data: p.data, deleted: p.deleted, baseSeq: (records.get(keyOf(p.entity, p.id)) || { seq: 0 }).seq }));
+        const changes = batch.map(p => ({ entity: p.entity, id: p.id, data: p.data, deleted: p.deleted, baseSeq: p.baseSeq }));
         const from = cursor;
         let answer;
+        inFlight = new Set(batch.map(p => keyOf(p.entity, p.id)));
         try {
           answer = await api.sync({ shopId, cursor, changes });
         } catch (error) {
+          inFlight = new Set();
           if (stopped) return false;
           if (changed) {
             capture(liveState()); // edits made while this call was out
@@ -377,6 +384,7 @@
         // edit would come straight back). Only needed when this round will rebuild the state; otherwise
         // they stay on S for the next commit or pull.
         if (changed || hasNews(answer)) capture(liveState());
+        inFlight = new Set();
         batch.forEach(p => sent.add(keyOf(p.entity, p.id)));
         if (applyAnswer(answer, batch, notices)) changed = true;
         const unsent = due.some(key => !sent.has(key) && pending.has(key));
@@ -408,9 +416,9 @@
     // Changes not sent yet survive a reload: they stay pending and are laid over the fresh records.
     function start() {
       const run = chain.then(async () => {
+        if (started && !stopped) capture(liveState()); // edits on S not handed over yet become pending
         records.clear();
         keyedMeta.clear();
-        tooLarge.clear();
         buildKeys.clear();
         origins = new WeakMap();
         builtLists = new WeakMap();
@@ -428,6 +436,7 @@
         started = true;
         const state = buildState();
         onChange(state);
+        reportTooLarge();
         return state;
       });
       chain = run.catch(() => {});

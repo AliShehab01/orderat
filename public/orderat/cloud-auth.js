@@ -16,7 +16,9 @@
 //   onCode({ code, qrText: 'orderat://pair?code=' + code, expiresAt }), polls until the phone approves
 //   (done resolves { session, user }, already stored), the code expires (done rejects with CloudError
 //   kind 'not_found', code 'expired'), or cancel() (done rejects with an AbortError). A dropped
-//   connection or a busy server does not end it; the expiry time does.
+//   connection or a busy server does not end it; the expiry time does. When asking for the code fails,
+//   done rejects with that CloudError: pair_start answers 429 (kind 'rate_limited') when too many codes
+//   are out. The screen offers "try again" (a new startPairing) on any rejection but an AbortError.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./cloud-api.js'));
   else root.OrderatCloudAuth = factory(root.OrderatCloudApi);

@@ -230,4 +230,19 @@ describe('pairing with the phone', () => {
     await expect(auth.startPairing(api, { onCode }).done).rejects.toMatchObject({ kind: 'rate_limited' });
     expect(onCode).not.toHaveBeenCalled();
   });
+
+  it('a rate-limited pair_start (429) rejects so the screen can try again, and a new try works', async () => {
+    vi.useFakeTimers({ now: NOW });
+    const api = pairingApi(async () => ({ status: 'approved', session: 'web-session-2', user: null }));
+    api.pairStart.mockRejectedValueOnce(new CloudError('rate_limited', 429, 'rate_limited'));
+    const onCode = vi.fn();
+    const first = auth.startPairing(api, { onCode });
+    await expect(first.done).rejects.toMatchObject({ name: 'CloudError', kind: 'rate_limited', status: 429, code: 'rate_limited' });
+    expect(api.pairPoll).not.toHaveBeenCalled();
+    const again = auth.startPairing(api, { onCode });
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(again.done).resolves.toEqual({ session: 'web-session-2', user: null });
+    expect(onCode).toHaveBeenCalledTimes(1);
+    expect(auth.getSession()).toBe('web-session-2');
+  });
 });

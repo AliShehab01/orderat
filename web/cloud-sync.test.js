@@ -111,6 +111,7 @@ function fakeServer({ pageSize = 500 } = {}) {
           server.put(c.entity, c.id, c.data, c.deleted === true);
           if (previous > (c.baseSeq || 0)) conflicts.push({ entity: c.entity, id: c.id, seq: previous });
         }
+        if (server.afterPush) server.afterPush(req); // another device writes between the push and the pull
         const page = [...rows.values()].filter(r => r.seq > req.cursor).sort((a, b) => a.seq - b.seq).slice(0, pageSize);
         // record-access.ts canPull: only a member with `money` sees expenses; the cursor still moves past them.
         const { role, permissions } = server.membership;
@@ -842,5 +843,64 @@ describe('starting again (M3)', () => {
     await app.sync.pull(app.S);
     expect(server.row('product', CAKE_ID).data.priceMinor).toBe(7000);
     expect(app.sync.pending).toBe(0);
+  });
+});
+
+describe('fix round 1 follow-ups', () => {
+  it('a copy that is not the web own push keeps the edit made on top of it a conflict (M1)', async () => {
+    const server = seeded();
+    const app = await started(server);
+    const cake = product(app, CAKE_ID);
+    cake.price = 7;
+    let phoneSeq;
+    server.afterPush = () => { server.afterPush = null; phoneSeq = server.put('product', CAKE_ID, { ...CAKE(), priceMinor: 7000, nameEn: 'Cake (phone)' }); };
+    const gate = deferred();
+    server.gate = gate.promise;
+    const committing = app.sync.commit(app.S);
+    await until(() => server.inFlight === 1);
+    cake.price = 9; // edited again while the first push is out
+    server.gate = null;
+    gate.resolve();
+    await committing;
+    await app.sync.commit(app.S);
+    expect(server.calls.at(-1).changes.map(c => [c.id, c.baseSeq])).toEqual([[CAKE_ID, 2]]);
+    expect(app.notices).toEqual([['conflict', [{ entity: 'product', id: CAKE_ID, seq: phoneSeq }]]]);
+  });
+
+  it('a new record removed while its push is out is deleted on the server, not brought back (M2)', async () => {
+    const server = seeded();
+    const app = await started(server);
+    app.S.customers.push({ id: NEW_ID, name: 'ريم سعيد', nameEn: '', phone: '+97333001099', area: '', notes: '' });
+    const gate = deferred();
+    server.gate = gate.promise;
+    const committing = app.sync.commit(app.S);
+    await until(() => server.inFlight === 1);
+    app.S.customers = app.S.customers.filter(c => c.id !== NEW_ID);
+    server.gate = null;
+    gate.resolve();
+    await committing;
+    expect(app.S.customers.map(c => c.id)).toEqual([FATIMA_ID, NOORA_ID]);
+    expect(app.sync.pending).toBe(1);
+    await app.sync.commit(app.S);
+    expect(server.row('customer', NEW_ID).deleted).toBe(true);
+    expect(server.calls.at(-1).changes.map(c => [c.id, c.deleted, c.baseSeq])).toEqual([[NEW_ID, true, 11]]);
+    expect(app.notices).toEqual([]);
+    expect(app.sync.pending).toBe(0);
+  });
+
+  it('start() again keeps edits made on S that were not committed yet (M3)', async () => {
+    const server = seeded();
+    const app = await started(server);
+    product(app, CAKE_ID).price = 7;
+    app.S.customers = app.S.customers.filter(c => c.id !== NOORA_ID);
+    await app.sync.pull(app.S); // hands S over; nothing new, the edits go out
+    product(app, COOKIE_ID).price = 4; // not handed over yet
+    await app.sync.start();
+    expect(product(app, COOKIE_ID).price).toBe(4);
+    expect(app.sync.pending).toBe(1);
+    await app.sync.commit(app.S);
+    expect(server.row('product', COOKIE_ID).data.priceMinor).toBe(4000);
+    expect(server.row('product', CAKE_ID).data.priceMinor).toBe(7000);
+    expect(server.row('customer', NOORA_ID).deleted).toBe(true);
   });
 });
