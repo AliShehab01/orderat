@@ -78,6 +78,11 @@ describe('money, ids and entity order', () => {
     expect(map.newId()).toMatch(UUID_V4);
   });
 
+  it("accepts the phones' ids (UUIDs in either case, setting keys) and refuses ids that are not safe in HTML", () => {
+    for (const id of [SHOP_ID, SHOP_ID.toUpperCase(), 'whatsappTemplates', 'subscription', 'a_b-1']) expect(map.safeId(id)).toBe(true);
+    for (const id of ['', '"><img src=x onerror=alert(1)>', 'a b', 'a/b', 'x'.repeat(129), null, 7, undefined]) expect(map.safeId(id)).toBe(false);
+  });
+
   it('lists the entities in push order', () => {
     expect(map.ENTITY_ORDER).toEqual(['shop', 'customer', 'product', 'occasion', 'order', 'expense', 'setting']);
   });
@@ -413,6 +418,19 @@ describe('order', () => {
     const reopened = map.orderToCloud(back, confirmed, { ...BHD, now: LATER });
     expect(reopened.status).toBe('newOrder');
     expect(reopened.changes.at(-1)).toStrictEqual({ id: anId(), field: 'status', oldValue: 'confirmed', newValue: 'newOrder', at: '2026-09-29T07:52:00.000Z' });
+  });
+
+  it("reads source as a known code: an unknown or malicious one shows as 'manual' and is kept on write", () => {
+    for (const s of ['whatsapp', 'instagram', 'link', 'manual']) expect(map.orderToWeb(ORDER_ID, { ...orderRecord(), source: s }, BHD).source).toBe(s);
+    const evil = '"><img src=x onerror=alert(1)>';
+    const raw = frozen({ ...orderRecord(), source: evil });
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
+    expect(web.source).toBe('manual');
+    expect(map.orderToCloud(web, raw, BHD)).toEqual(raw);
+    web.notes = 'Moved to Friday';
+    expect(map.orderToCloud(web, raw, BHD).source).toBe(evil);
+    web.source = 'instagram';
+    expect(map.orderToCloud(web, raw, BHD).source).toBe('instagram');
   });
 
   it("shows an unknown status as 'other' and keeps it on write", () => {

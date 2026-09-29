@@ -10,6 +10,7 @@
 //     resolves to a real file in dist/
 //   - sitemap.xml lists every page that was built, with no stale entries
 //   - robots.txt references the sitemap, and site.webmanifest is valid JSON with icons
+//   - dist/app/ (the web app) and 404.html exist
 
 import fs from "node:fs";
 import path from "node:path";
@@ -198,6 +199,8 @@ function main() {
   // from build.mjs): app pages, not marketing pages, so the SEO checks don't apply to them.
   const appDirs = [path.join(DIST, "s") + path.sep, path.join(DIST, "app") + path.sep];
   if (!fs.existsSync(path.join(DIST, "app", "index.html"))) fail("app/", "the web app was not copied to dist/app/");
+  // Without a 404.html Cloudflare Pages answers every unknown path with the home page.
+  if (!fs.existsSync(path.join(DIST, "404.html"))) fail("404.html", "file missing");
   const pageFiles = walk(DIST).filter((f) => f.endsWith("index.html") && !appDirs.some((dir) => f.startsWith(dir)));
   const allPageUrls = pageFiles.map(toUrlPath);
   for (const file of pageFiles) checkPage(file);

@@ -97,6 +97,14 @@ const Live = (() => {
 
   function viewStart() {
     const busy = info.busy;
+    // Signed in but in the demo (say from "no shops"): back to the account, not the sign-in buttons.
+    if (Auth().getSession()) {
+      return card(`<h1>${esc(t('start.title'))}</h1>
+      <p class="muted small">${esc(t('live.signedInAs', accountName()))}</p>
+      <button class="btn primary block big" data-act="live-account">${esc(t('start.openShop'))}</button>
+      <button class="btn ghost block" data-act="live-demo">${esc(t(S.onboarded ? 'start.backToDemo' : 'start.demo'))}</button>
+      <button class="btn ghost block" data-act="live-sign-out">${esc(t('cloud.signOut'))}</button>`, 'start');
+    }
     return card(`<h1>${esc(t('start.title'))}</h1>
       <p class="muted">${esc(t('start.subtitle'))}</p>
       <div class="signin">
@@ -110,7 +118,23 @@ const Live = (() => {
       <button class="btn primary block big" data-act="live-demo">${esc(t(S.onboarded ? 'start.backToDemo' : 'start.demo'))}</button>
       <p class="note">${esc(t('start.note'))}</p>`, 'start');
   }
+  // Google's and Apple's sign-in scripts load the first time the sign-in buttons show, so demo visitors
+  // make no third-party requests.
+  const SDKS = ['https://accounts.google.com/gsi/client', 'https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js'];
+  let sdksLoaded = false;
+  function loadSdks() {
+    if (sdksLoaded) return;
+    sdksLoaded = true;
+    SDKS.forEach(src => {
+      const el = document.createElement('script');
+      el.src = src;
+      el.async = true;
+      document.head.append(el);
+    });
+  }
   function afterStart() {
+    if (!$('#g-btn')) return;
+    loadSdks();
     let tries = 0;
     const mount = () => {
       const el = $('#g-btn');
@@ -280,7 +304,11 @@ const Live = (() => {
     screen = null;
     info = {};
     listen();
-    pullTimer = setInterval(() => { if (document.visibilityState !== 'hidden') pull(); }, PULL_EVERY);
+    pullTimer = setInterval(() => {
+      if (!on) return;
+      if (!core().subscriptionAllowed(S.subscription, new Date())) return endShop(); // the grace ended while open
+      if (document.visibilityState !== 'hidden') pull();
+    }, PULL_EVERY);
     lastPath = '';
     const tab = route()[0];
     if (!tab || tab === 'start' || !VIEWS[tab]) go('today'); else render();
@@ -314,13 +342,29 @@ const Live = (() => {
     write(SHOP_KEY, null);
     shops = [];
     S = loadState();
-    D = null;
-    ST.left = 3; // the demo studio's own count
+    D = null; E = null;
+    // Nothing of the shop stays in memory for the demo (or the next person on this computer).
+    ASK.msgs = []; askHistory.length = 0;
+    Object.assign(ST, { photo: null, result: null, busy: false, left: 3, campaign: null }); // 3: the demo studio's own count
+    Object.assign(CAP, { ai: '', busy: false });
+    photoUrls.clear();
+    photoLoading.clear();
+    team = null;
     lastPath = '';
     show('start', message ? { error: message } : {});
   }
-  function signOut() {
+  // The last edit goes out while the session is still valid; changes that still could not be sent
+  // (offline, a server error) are only thrown away if the seller says so.
+  async function signOut() {
     if (!confirm(t('live.signOutConfirm'))) return;
+    const s = sync;
+    if (s && on) {
+      clearTimeout(saveTimer);
+      saveTimer = 0;
+      await commit();
+      if (sync !== s) return; // signed out (401) or left the shop meanwhile
+      if (s.pending > 0 && !confirm(t('live.signOutPending'))) return;
+    }
     const out = api().signout().catch(() => {});
     signedOut();
     return out;
@@ -387,7 +431,11 @@ const Live = (() => {
   function listen() {
     if (listening) return;
     listening = true;
-    document.addEventListener('visibilitychange', () => { if (on && document.visibilityState === 'visible') pull(); });
+    document.addEventListener('visibilitychange', () => {
+      if (!on) return;
+      if (document.visibilityState === 'visible') pull();
+      else if (saveTimer) { clearTimeout(saveTimer); saveTimer = 0; commit(); } // a hidden tab may be killed without beforeunload
+    });
     window.addEventListener('online', () => { if (on) pull(); });
     window.addEventListener('beforeunload', e => {
       if (!on || !sync) return;

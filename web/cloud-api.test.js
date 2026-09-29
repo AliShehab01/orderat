@@ -58,6 +58,14 @@ describe('requests', () => {
     expect(body).toEqual({ action: 'me' });
   });
 
+  it('marks a small sync call keepalive (it survives the tab closing), never a large one or another call', async () => {
+    const { api, calls } = signedIn(() => json({ changes: [], cursor: 0, more: false }));
+    await api.sync({ shopId: SHOP_ID, cursor: 0, changes: [{ entity: 'order', id: SHOP_ID, data: { notes: 'x' }, deleted: false, baseSeq: 0 }] });
+    await api.sync({ shopId: SHOP_ID, cursor: 0, changes: [{ entity: 'order', id: SHOP_ID, data: { notes: 'x'.repeat(70 * 1024) }, deleted: false, baseSeq: 0 }] });
+    await api.me();
+    expect(calls.map(c => c.init.keepalive === true)).toEqual([true, false, false]);
+  });
+
   it('sends no session header when signed out', async () => {
     const { fetchImpl, calls } = fakeFetch();
     await createApi({ baseUrl: BASE, getSession: () => null, fetchImpl }).shopsList();

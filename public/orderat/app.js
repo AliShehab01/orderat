@@ -218,10 +218,10 @@ function periodStats(a, b) {
   return { os, revenue, vat, cogs, expenses, profit: revenue - vat - cogs - expenses, count: os.length, avg: os.length ? revenue / os.length : 0 };
 }
 
-const badge = (tone, label) => `<span class="badge ${tone}">${esc(label)}</span>`;
+const badge = (tone, label) => `<span class="badge ${esc(tone || '')}">${esc(label)}</span>`;
 const statusBadge = s => badge(STATUS_TONE[s], t('order.status.' + s));
 const payBadge = s => badge(PAY_TONE[s], t('payment.status.' + s));
-const sourceTag = s => `<span class="src src-${s}" title="${esc(t('source.' + s))}">${icon(s)}</span>`;
+const sourceTag = s => `<span class="src src-${esc(s)}" title="${esc(t('source.' + s))}">${icon(s)}</span>`;
 const empty = msg => `<p class="empty">${esc(msg)}</p>`;
 const kpi = (v, label, tone = '', delta = null) => `<div class="kpi${tone ? ' ' + tone : ''}"><b class="kpi-v">${esc(v)}</b><span class="kpi-l">${esc(label)}</span>${delta === null ? '' : `<span class="delta ${delta >= 0 ? 'up' : 'down'}" dir="ltr">${delta >= 0 ? '+' : ''}${delta}%</span>`}</div>`;
 const addBtn = (act, label) => `<button class="icon-btn" data-act="${act}" aria-label="${esc(label)}">${icon('plus')}</button>`;
@@ -385,13 +385,13 @@ function capacityCard(booked, cap) {
 function orderRow(o, withDay = false) {
   const d = new Date(o.dueAt);
   const when = withDay ? `${fmtShort(d)} · ${fmtTime(d)}` : fmtTime(d);
-  return `<a class="row order-row" href="#/orders/${o.id}"><span class="row-main"><b>${esc(cName(customerOf(o)))}</b><small>${sourceTag(o.source)}<span>${esc(when)}${o.fulfillment === 'delivery' ? ' · ' + esc(t('orders.delivery')) : ''}</span></small></span><span class="row-end"><b class="amt">${esc(money(totals(o).total))}</b>${statusBadge(o.status)}</span>${icon('chev', 'chev')}</a>`;
+  return `<a class="row order-row" href="#/orders/${esc(o.id)}"><span class="row-main"><b>${esc(cName(customerOf(o)))}</b><small>${sourceTag(o.source)}<span>${esc(when)}${o.fulfillment === 'delivery' ? ' · ' + esc(t('orders.delivery')) : ''}</span></small></span><span class="row-end"><b class="amt">${esc(money(totals(o).total))}</b>${statusBadge(o.status)}</span>${icon('chev', 'chev')}</a>`;
 }
 
 function occasionRow(x, withDelete = false) {
   const range = x.start === x.end ? fmtShort(parseDay(x.start)) : `${fmtShort(parseDay(x.start))} – ${fmtShort(parseDay(x.end))}`;
   const meta = [range, x.cap ? t('occasion.capacity', x.cap) : '', x.blocked ? t('occasion.blocked') : ''].filter(Boolean).join(' · ');
-  return `<div class="row"><span class="row-ic">${icon('calendar')}</span><span class="row-main"><b>${esc(pick(x.nameAr, x.nameEn))}</b><small>${esc(meta)}</small></span>${withDelete ? `<button class="icon-btn" data-act="delete-occasion" data-id="${x.id}" aria-label="${esc(t('common.delete'))}">${icon('trash')}</button>` : ''}</div>`;
+  return `<div class="row"><span class="row-ic">${icon('calendar')}</span><span class="row-main"><b>${esc(pick(x.nameAr, x.nameEn))}</b><small>${esc(meta)}</small></span>${withDelete ? `<button class="icon-btn" data-act="delete-occasion" data-id="${esc(x.id)}" aria-label="${esc(t('common.delete'))}">${icon('trash')}</button>` : ''}</div>`;
 }
 
 function webOrdersCard() {
@@ -399,7 +399,7 @@ function webOrdersCard() {
   const rows = S.webOrders.map(w => {
     const d = new Date(w.dueAt);
     const items = w.items.map(it => { const p = productOf(it.pid); return p ? `${it.qty}× ${pName(p)}` : ''; }).filter(Boolean).join(S.lang === 'en' ? ', ' : '، ');
-    return `<div class="row web-order"><span class="row-main"><b>${esc(pick(w.name, w.nameEn))}</b><small>${esc(items)} · ${esc(fmtShort(d))} ${esc(fmtTime(d))}</small></span><span class="row-actions"><button class="btn primary small" data-act="web-add" data-id="${w.id}">${esc(t('today.webOrderAdd'))}</button><button class="btn ghost small" data-act="web-dismiss" data-id="${w.id}">${esc(t('today.webOrderDismiss'))}</button></span></div>`;
+    return `<div class="row web-order"><span class="row-main"><b>${esc(pick(w.name, w.nameEn))}</b><small>${esc(items)} · ${esc(fmtShort(d))} ${esc(fmtTime(d))}</small></span><span class="row-actions"><button class="btn primary small" data-act="web-add" data-id="${esc(w.id)}">${esc(t('today.webOrderAdd'))}</button><button class="btn ghost small" data-act="web-dismiss" data-id="${esc(w.id)}">${esc(t('today.webOrderDismiss'))}</button></span></div>`;
   }).join('');
   return `<section class="card"><h3 class="card-title">${icon('link')} ${esc(t('today.webOrders'))}</h3>${rows}</section>`;
 }
@@ -442,7 +442,7 @@ function campaignCard(c) {
 
 function viewOrders(rest) {
   if (rest[0]) return viewOrder(rest[0]);
-  const chips = ['all', ...STATUSES].map(s => `<button class="chip${ordersFilter === s ? ' on' : ''}" data-act="orders-filter" data-v="${s}">${esc(s === 'all' ? t('orders.filterAll') : t('order.status.' + s))}</button>`).join('');
+  const chips = ['all', ...STATUSES].map(s => `<button class="chip${ordersFilter === s ? ' on' : ''}" data-act="orders-filter" data-v="${esc(s)}">${esc(s === 'all' ? t('orders.filterAll') : t('order.status.' + s))}</button>`).join('');
   return {
     title: t('tab.orders'),
     actions: can('orders') ? `<a class="icon-btn" href="#/new" aria-label="${esc(t('tab.new'))}">${icon('plus')}</a>` : '',
@@ -494,7 +494,7 @@ function viewOrder(id) {
     orderVatRate(o) ? line(t('orders.subtotal'), money(T.subtotal), 'muted') + line(t('orders.vatPercent', orderVatRate(o) + '%'), money(T.vat), 'muted') : '',
     line(t('orders.total'), money(T.total), 'total'),
     `<div class="line pay"><span>${esc(t('orders.paid'))} ${esc(money(T.paid))}</span>${o.status === 'cancelled' ? '' : payBadge(payStatus(o))}</div>`,
-    T.due > 0 && o.status !== 'cancelled' && can('orders') ? `<button class="link-btn" data-act="pay" data-id="${o.id}">${esc(t('recordPayment'))} · ${esc(t('orders.remaining'))} ${esc(money(T.due))}</button>` : '',
+    T.due > 0 && o.status !== 'cancelled' && can('orders') ? `<button class="link-btn" data-act="pay" data-id="${esc(o.id)}">${esc(t('recordPayment'))} · ${esc(t('orders.remaining'))} ${esc(money(T.due))}</button>` : '',
   ].join('');
   const wa = c?.phone
     ? `<div class="chips wrap">${WA_TEMPLATES.map(k => `<a class="chip" href="${esc(waLink(c.phone, waMessage(k, o)))}" target="_blank" rel="noopener">${icon('whatsapp')} ${esc(t('whatsapp.template.' + k))}</a>`).join('')}</div>`
@@ -508,12 +508,12 @@ function viewOrder(id) {
       ${o.notes ? `<p class="od-notes">${esc(o.notes)}</p>` : ''}
     </section>
     <section class="card lines">${lines}</section>
-    ${open && can('status') ? `<div class="btn-col">${NEXT[o.status] ? `<button class="btn primary block big" data-act="advance" data-id="${o.id}">${esc(t(NEXT_LABEL[o.status]))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${o.id}">${esc(t('orders.cancel'))}</button></div>` : ''}
+    ${open && can('status') ? `<div class="btn-col">${NEXT[o.status] ? `<button class="btn primary block big" data-act="advance" data-id="${esc(o.id)}">${esc(t(NEXT_LABEL[o.status]))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${esc(o.id)}">${esc(t('orders.cancel'))}</button></div>` : ''}
     <section class="card"><h3 class="card-title">${icon('whatsapp')} ${esc(t('orders.sendWhatsApp'))}</h3>${wa}</section>
-    <a class="card row" href="#/shop/receipts/${o.id}"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('shop.receipt'))}</b><small><bdi dir="ltr">${esc(invoiceNo(o))}</bdi></small></span>${icon('chev', 'chev')}</a>
+    <a class="card row" href="#/shop/receipts/${esc(o.id)}"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('shop.receipt'))}</b><small><bdi dir="ltr">${esc(invoiceNo(o))}</bdi></small></span>${icon('chev', 'chev')}</a>
     <section class="card"><h3 class="card-title">${esc(t('changeHistory'))}</h3>${history}</section>
   </div>`;
-  const actions = o.status === 'cancelled' || !can('orders') ? '' : `<button class="icon-btn" data-act="edit-items" data-id="${o.id}" aria-label="${esc(t('orders.editItems'))}">${icon('edit')}</button>`;
+  const actions = o.status === 'cancelled' || !can('orders') ? '' : `<button class="icon-btn" data-act="edit-items" data-id="${esc(o.id)}" aria-label="${esc(t('orders.editItems'))}">${icon('edit')}</button>`;
   return { title: t('tab.orders'), back: 'orders', actions, body };
 }
 
@@ -532,7 +532,7 @@ function setStatus(o, status) {
 
 function openPayment(o) {
   const dec = currency()[0];
-  openModal(t('recordPayment'), `<form data-form="payment" data-id="${o.id}" class="stack">
+  openModal(t('recordPayment'), `<form data-form="payment" data-id="${esc(o.id)}" class="stack">
     ${field(t('payment.amount'), `<input name="amount" type="number" inputmode="decimal" step="any" min="0" value="${totals(o).due.toFixed(dec)}" required>`)}
     <div class="field"><span>${esc(t('payment.method'))}</span>${seg('method', METHODS, 'benefit', k => t('payment.method.' + k))}</div>
     ${field(t('payment.note'), '<input name="note">')}
@@ -552,7 +552,7 @@ function itemsEditor(items, p) {
   const products = S.products.filter(x => x.active);
   const attrs = i => `data-p="${p}" data-i="${i}"`;
   return `<div class="items-ed">${items.map((it, i) => `<div class="item-row">
-    <select data-live="item" ${attrs(i)} data-f="pid" aria-label="${esc(t('neworder.menuItem'))}">${products.map(x => `<option value="${x.id}"${x.id === it.pid ? ' selected' : ''}>${esc(pName(x))}</option>`).join('')}<option value="custom"${it.pid === 'custom' ? ' selected' : ''}>${esc(t('neworder.customItem'))}</option></select>
+    <select data-live="item" ${attrs(i)} data-f="pid" aria-label="${esc(t('neworder.menuItem'))}">${products.map(x => `<option value="${esc(x.id)}"${x.id === it.pid ? ' selected' : ''}>${esc(pName(x))}</option>`).join('')}<option value="custom"${it.pid === 'custom' ? ' selected' : ''}>${esc(t('neworder.customItem'))}</option></select>
     ${it.pid === 'custom' ? `<input data-live="item" ${attrs(i)} data-f="name" value="${esc(it.name)}" placeholder="${esc(t('neworder.itemName'))}" aria-label="${esc(t('neworder.itemName'))}">` : ''}
     <div class="item-controls">
       <div class="stepper"><button type="button" data-act="item-qty" ${attrs(i)} data-d="-1" aria-label="−">${icon('minus')}</button><b aria-label="${esc(t('neworder.quantity'))}">${it.qty}</b><button type="button" data-act="item-qty" ${attrs(i)} data-d="1" aria-label="+">${icon('plus')}</button></div>
@@ -850,31 +850,31 @@ function viewMenu() {
   const rows = S.products.map(p => {
     const stock = S.stockEnabled && p.track ? badge(p.qty <= 0 ? 'bad' : p.qty <= p.low ? 'warn' : 'neutral', t('stock.qtyBadge', p.qty)) : '';
     const thumb = Live.on && p.photoId ? `<img class="thumb" data-photo="${esc(p.photoId)}" alt="">` : '';
-    return `<button class="row${p.active ? '' : ' dim'}" data-act="edit-product" data-id="${p.id}"${can('products') ? '' : ' disabled'}>${thumb}<span class="row-main"><b>${esc(pName(p))}</b><small>${esc(money(p.price))}${p.cap ? ' · ' + esc(t('shop.capacityPerDay', p.cap)) : ''}</small></span>${stock}${icon('chev', 'chev')}</button>`;
+    return `<button class="row${p.active ? '' : ' dim'}" data-act="edit-product" data-id="${esc(p.id)}"${can('products') ? '' : ' disabled'}>${thumb}<span class="row-main"><b>${esc(pName(p))}</b><small>${esc(money(p.price))}${p.cap ? ' · ' + esc(t('shop.capacityPerDay', p.cap)) : ''}</small></span>${stock}${icon('chev', 'chev')}</button>`;
   }).join('');
   return { title: t('shop.menu'), back: 'shop', actions: can('products') ? addBtn('add-product', t('shop.addItem')) : '', body: rows ? `<div class="card list">${rows}</div>` : empty(t('shop.noItems')) };
 }
 function openProduct(p) {
   const x = p || { nameAr: '', nameEn: '', price: '', cost: '', cap: '', active: true, track: false, qty: 0, low: 3 };
-  openModal(p ? t('shop.editItem') : t('shop.addItem'), `<form data-form="product" data-id="${p ? p.id : ''}" class="stack">
+  openModal(p ? t('shop.editItem') : t('shop.addItem'), `<form data-form="product" data-id="${p ? esc(p.id) : ''}" class="stack">
     <div class="grid2">${field(t('shop.nameAr'), `<input name="nameAr" value="${esc(x.nameAr)}" dir="rtl">`)}${field(t('shop.nameEn'), `<input name="nameEn" value="${esc(x.nameEn)}" dir="ltr">`)}</div>
     <div class="grid3">${field(t('shop.price'), `<input name="price" type="number" step="any" min="0" inputmode="decimal" value="${esc(x.price)}" required>`)}${field(t('shop.cost'), `<input name="cost" type="number" step="any" min="0" inputmode="decimal" value="${esc(x.cost)}">`)}${field(t('shop.dailyCapacity'), `<input name="cap" type="number" step="1" min="0" value="${esc(x.cap ?? '')}">`)}</div>
     ${Live.on && p ? `<div class="photo-row">${p.photoId ? `<img class="thumb lg" data-photo="${esc(p.photoId)}" alt="">` : ''}<label class="btn ghost small">${icon('upload')} ${esc(t('photo.upload'))}<input type="file" accept="image/*" data-live="live-photo" data-id="${esc(p.id)}" hidden></label></div>` : ''}
     ${toggle('active', t('shop.active'), x.active)}
-    ${S.stockEnabled ? `${toggle('track', t('stock.trackForProduct'), x.track)}<div class="grid2">${field(t('stock.quantity'), `<input name="qty" type="number" step="1" value="${esc(x.qty)}">`)}${field(t('stock.lowStockAt'), `<input name="low" type="number" step="1" min="0" value="${esc(x.low)}">`)}</div>` : ''}
-    <div class="btn-row">${p ? `<button type="button" class="btn danger-soft" data-act="delete-product" data-id="${p.id}">${esc(t('common.delete'))}</button>` : ''}<button class="btn primary grow">${esc(t('common.save'))}</button></div>
+    ${S.stockEnabled ? `${toggle('track', t('stock.trackForProduct'), x.track)}<div class="grid2">${field(t('stock.quantity'), `<input name="qty" type="number" step="1" value="${esc(x.qty)}"><input name="qty0" type="hidden" value="${esc(x.qty)}">`)}${field(t('stock.lowStockAt'), `<input name="low" type="number" step="1" min="0" value="${esc(x.low)}">`)}</div>` : ''}
+    <div class="btn-row">${p ? `<button type="button" class="btn danger-soft" data-act="delete-product" data-id="${esc(p.id)}">${esc(t('common.delete'))}</button>` : ''}<button class="btn primary grow">${esc(t('common.save'))}</button></div>
   </form>`);
 }
 
 function viewCustomers() {
   const counts = new Map();
   S.orders.forEach(o => counts.set(o.customerId, (counts.get(o.customerId) || 0) + 1));
-  const rows = S.customers.slice().sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0)).map(c => `<button class="row" data-act="edit-customer" data-id="${c.id}"${can('orders') ? '' : ' disabled'}><span class="avatar sm">${esc(initial(cName(c)))}</span><span class="row-main"><b>${esc(cName(c))}</b><small><span dir="ltr">${esc(c.phone)}</span>${c.area ? ' · ' + esc(t('area.' + c.area)) : ''}</small></span><span class="muted small">${esc(t('shop.orderCount', counts.get(c.id) || 0))}</span>${icon('chev', 'chev')}</button>`).join('');
+  const rows = S.customers.slice().sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0)).map(c => `<button class="row" data-act="edit-customer" data-id="${esc(c.id)}"${can('orders') ? '' : ' disabled'}><span class="avatar sm">${esc(initial(cName(c)))}</span><span class="row-main"><b>${esc(cName(c))}</b><small><span dir="ltr">${esc(c.phone)}</span>${c.area ? ' · ' + esc(t('area.' + c.area)) : ''}</small></span><span class="muted small">${esc(t('shop.orderCount', counts.get(c.id) || 0))}</span>${icon('chev', 'chev')}</button>`).join('');
   return { title: t('shop.customersTitle'), back: 'shop', actions: can('orders') ? addBtn('add-customer', t('shop.addCustomer')) : '', body: rows ? `<div class="card list">${rows}</div>` : empty(t('shop.noCustomers')) };
 }
 function openCustomer(c) {
   const x = c || { name: '', phone: '', area: '', notes: '' };
-  openModal(c ? t('shop.editCustomer') : t('shop.addCustomer'), `<form data-form="customer" data-id="${c ? c.id : ''}" class="stack">
+  openModal(c ? t('shop.editCustomer') : t('shop.addCustomer'), `<form data-form="customer" data-id="${c ? esc(c.id) : ''}" class="stack">
     ${field(t('neworder.customerName'), `<input name="name" value="${esc(cName(x) || x.name)}" required>`)}
     ${field(t('neworder.customerPhone'), `<input name="phone" value="${esc(x.phone)}" dir="ltr" inputmode="tel">`)}
     ${field(t('shop.area'), `<select name="area"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, x.area, a => t('area.' + a))}</select>`)}
@@ -928,8 +928,8 @@ function viewMarketing(rest) {
   if (!S.occasions.some(o => o.id === CAP.occ)) CAP.occ = S.occasions[0]?.id || '';
   const picker = CAP.template === 'general' ? ''
     : CAP.template === 'occasionPromo'
-      ? field(t('shop.occasions'), `<select name="occ" data-live="caption">${S.occasions.map(o => `<option value="${o.id}"${o.id === CAP.occ ? ' selected' : ''}>${esc(pick(o.nameAr, o.nameEn))}</option>`).join('')}</select>`)
-      : field(t('neworder.menuItem'), `<select name="pid" data-live="caption">${ps.map(p => `<option value="${p.id}"${p.id === CAP.pid ? ' selected' : ''}>${esc(pName(p))}</option>`).join('')}</select>`);
+      ? field(t('shop.occasions'), `<select name="occ" data-live="caption">${S.occasions.map(o => `<option value="${esc(o.id)}"${o.id === CAP.occ ? ' selected' : ''}>${esc(pick(o.nameAr, o.nameEn))}</option>`).join('')}</select>`)
+      : field(t('neworder.menuItem'), `<select name="pid" data-live="caption">${ps.map(p => `<option value="${esc(p.id)}"${p.id === CAP.pid ? ' selected' : ''}>${esc(pName(p))}</option>`).join('')}</select>`);
   const body = `<div class="stack">
     <nav class="card list">${navRow('shop/marketing/campaigns', 'flag', t('marketing.campaigns'))}${navRow('shop/marketing/studio', 'camera', t('marketing.photoStudio'))}${navRow('shop/marketing/link', 'link', t('marketing.shopLink'), S.shopLink.published ? t('shoplink.published') : '')}</nav>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('marketing.captions'))}</h3>
@@ -985,7 +985,7 @@ function viewStudio() {
     <section class="card stack-sm"><h3 class="card-title">1 · ${esc(t('studio.pickPhotoTitle'))}</h3>
       <div class="studio-photo">${ST.photo ? `<img src="${esc(ST.photo)}" alt="">` : icon('image')}</div>
       <div class="btn-row"><label class="btn ghost small">${icon('upload')} ${esc(t('studio.pickPhoto'))}<input type="file" accept="image/*" data-live="studio-photo" hidden></label><button class="btn ghost small" data-act="studio-sample">${esc(t('studio.samplePhoto'))}</button></div></section>
-    <section class="card stack-sm"><h3 class="card-title">2 · ${esc(t('studio.pickStyleTitle'))}</h3><div class="styles">${styles.map(s => `<button class="style${ST.style === s.id ? ' on' : ''}" data-act="studio-style" data-id="${s.id}" aria-pressed="${ST.style === s.id}"><span class="swatch" style="background:${esc(s.bg)}">${esc(s.emoji || '')}</span><small>${esc(pick(s.ar, s.en))}</small></button>`).join('')}</div></section>
+    <section class="card stack-sm"><h3 class="card-title">2 · ${esc(t('studio.pickStyleTitle'))}</h3><div class="styles">${styles.map(s => `<button class="style${ST.style === s.id ? ' on' : ''}" data-act="studio-style" data-id="${esc(s.id)}" aria-pressed="${ST.style === s.id}"><span class="swatch" style="background:${esc(s.bg)}">${esc(s.emoji || '')}</span><small>${esc(pick(s.ar, s.en))}</small></button>`).join('')}</div></section>
     <section class="card stack-sm"><h3 class="card-title">3 · ${esc(t('studio.pickAspectTitle'))}</h3>${seg('shape', Object.keys(SHAPES), ST.shape, k => t('studio.shape.' + k), 'studio-shape')}</section>
     <div class="btn-row"><button class="btn primary big grow" data-act="studio-generate"${!ST.photo || ST.busy || ST.left <= 0 ? ' disabled' : ''}>${icon('sparkle')} ${esc(ST.busy ? t('studio.generating') : t('studio.generate'))}</button>${typeof ST.left === 'number' ? `<span class="muted small">${esc(t('studio.remainingToday', ST.left))}</span>` : ''}</div>
     ${result}
@@ -1100,7 +1100,7 @@ function slugStatusText() {
 }
 function paintSlug() {
   const el = $('#slug-status');
-  if (el) { el.textContent = slugStatusText(); el.className = `small slug-status ${SLUG.status}`; }
+  if (el) { el.textContent = slugStatusText(); el.className = `small slug-status ${esc(SLUG.status)}`; }
 }
 const validSlug = v => /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(v);
 function viewShopLink() {
@@ -1117,7 +1117,7 @@ function viewShopLink() {
     <div class="kpis three">${kpi(40 + (h % 120), t('shoplink.views7d'))}${kpi(3 + (h % 6), t('shoplink.orders7d'))}${kpi(S.webOrders.length, t('shoplink.pending'))}</div>` : '';
   const form = `<form data-form="shoplink" class="card stack-sm">
     <label class="field"><span>${esc(t('shoplink.slug'))}</span><span class="slug" dir="ltr"><span class="muted">/s/?</span><input name="slug" dir="ltr" data-live="slug" value="${esc(SLUG.value)}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sweetstudio"></span></label>
-    <p class="small slug-status ${SLUG.status}" id="slug-status">${esc(slugStatusText())}</p>
+    <p class="small slug-status ${esc(SLUG.status)}" id="slug-status">${esc(slugStatusText())}</p>
     ${field(t('shoplink.bio'), `<textarea name="bio" rows="2" data-live="link-field">${esc(L.bio)}</textarea>`)}
     <div class="split"><span>${esc(t('shoplink.leadTimeDays', L.leadDays))}</span><span class="stepper"><button type="button" data-act="lead" data-d="-1" aria-label="−">${icon('minus')}</button><b>${L.leadDays}</b><button type="button" data-act="lead" data-d="1" aria-label="+">${icon('plus')}</button></span></div>
     ${field(t('shoplink.delivery'), `<select name="delivery" data-live="link-field">${options(['both', 'pickup', 'delivery'], L.delivery, k => (k === 'both' ? t('shoplink.delivery.both') : t('fulfillment.' + k)))}</select>`)}
@@ -1149,7 +1149,7 @@ function pseudoQr(seedText) {
   return `<svg class="qr" viewBox="-2 -2 ${n + 4} ${n + 4}" width="128" height="128" role="img" aria-label="QR"><rect x="-2" y="-2" width="${n + 4}" height="${n + 4}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
 }
 function viewReceipts() {
-  const rows = live().sort((a, b) => byDue(b, a)).map(o => `<a class="row" href="#/shop/receipts/${o.id}"><span class="row-main"><b><bdi dir="ltr">${esc(invoiceNo(o))}</bdi></b><small>${esc(cName(customerOf(o)))} · ${esc(fmtDate(new Date(o.dueAt)))}</small></span><b class="amt">${esc(money(totals(o).total))}</b>${icon('chev', 'chev')}</a>`).join('');
+  const rows = live().sort((a, b) => byDue(b, a)).map(o => `<a class="row" href="#/shop/receipts/${esc(o.id)}"><span class="row-main"><b><bdi dir="ltr">${esc(invoiceNo(o))}</bdi></b><small>${esc(cName(customerOf(o)))} · ${esc(fmtDate(new Date(o.dueAt)))}</small></span><b class="amt">${esc(money(totals(o).total))}</b>${icon('chev', 'chev')}</a>`).join('');
   const hint = vatOn() || Live.on ? '' : `<p class="note">${esc(t('receipt.vatOff'))} <a href="#/shop/settings">${esc(t('shop.settings'))}</a></p>`;
   return { title: t('shop.receipts'), back: 'shop', body: `<div class="stack">${hint}${rows ? `<div class="card list">${rows}</div>` : empty(t('shop.noOrders'))}</div>` };
 }
@@ -1173,7 +1173,7 @@ function viewReceipt(id) {
     ${rate && country() === 'SA' ? `<figure class="rc-qr">${pseudoQr(invoiceNo(o) + shopName())}<figcaption>${esc(t('receipt.qr'))}</figcaption></figure>` : ''}
     <p class="rc-thanks">${esc(t('receipt.thanks'))}</p>
   </article>
-  <div class="btn-row no-print"><button class="btn ghost" data-act="print">${icon('print')} ${esc(t('receipt.print'))}</button><button class="btn primary" data-act="share-receipt" data-id="${o.id}">${icon('share')} ${esc(t('shop.shareReceipt'))}</button></div>`;
+  <div class="btn-row no-print"><button class="btn ghost" data-act="print">${icon('print')} ${esc(t('receipt.print'))}</button><button class="btn primary" data-act="share-receipt" data-id="${esc(o.id)}">${icon('share')} ${esc(t('shop.shareReceipt'))}</button></div>`;
   return { title: t('shop.receipt'), back: 'shop/receipts', body };
 }
 
@@ -1265,7 +1265,7 @@ function viewTeam() {
   const perms = ['orders', 'prepare', 'money', 'products'];
   const members = `<section class="card stack-sm"><h3 class="card-title">${esc(t('cloud.team.members'))}</h3>
     <div class="split"><span class="row-main"><b><bdi dir="ltr">${esc(C.email)}</bdi></b></span>${badge('brand', t('cloud.team.owner'))}</div>
-    ${C.team.map(m => `<div class="member"><div class="split"><b>${esc(pick(m.name, m.nameEn))}</b><button class="link-btn danger small" data-act="remove-member" data-id="${m.id}">${esc(t('cloud.team.remove'))}</button></div><div class="perm-grid">${perms.map(k => `<label class="check"><input type="checkbox" data-live="perm" data-id="${m.id}" data-k="${k}"${m.perms[k] ? ' checked' : ''}><span>${esc(t('cloud.permission.' + k))}</span></label>`).join('')}</div></div>`).join('')}
+    ${C.team.map(m => `<div class="member"><div class="split"><b>${esc(pick(m.name, m.nameEn))}</b><button class="link-btn danger small" data-act="remove-member" data-id="${esc(m.id)}">${esc(t('cloud.team.remove'))}</button></div><div class="perm-grid">${perms.map(k => `<label class="check"><input type="checkbox" data-live="perm" data-id="${esc(m.id)}" data-k="${k}"${m.perms[k] ? ' checked' : ''}><span>${esc(t('cloud.permission.' + k))}</span></label>`).join('')}</div></div>`).join('')}
   </section>`;
   return { title: t('cloud.team'), back: 'shop/settings', body: `<div class="stack">${invite}${members}<p class="note">${esc(t('cloud.demoNote'))}</p></div>` };
 }
@@ -1596,6 +1596,9 @@ const FORMS = {
     if (S.stockEnabled) Object.assign(data, { track: fd.has('track'), qty: +get('qty') || 0, low: +get('low') || 0 });
     const p = productOf(f.dataset.id);
     if (!can('products')) return;
+    // A quantity left as it was when the form opened keeps the current one (another device may have moved
+    // stock since); only a typed quantity becomes a correction.
+    if (p && S.stockEnabled && fd.has('qty0') && get('qty') === get('qty0')) data.qty = p.qty;
     if (p && Live.on && S.stockEnabled && data.track) Live.stockCorrection(Object.assign(p, { track: true }), data.qty);
     if (p) Object.assign(p, data); else S.products.push({ id: nid(), aliases: [], track: false, qty: 0, low: 3, ...(Live.on ? { stockMoves: [], photoId: null } : {}), ...data });
     save(); closeModal(); render(); toast(t('common.saved'));

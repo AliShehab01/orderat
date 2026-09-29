@@ -160,6 +160,7 @@
         if (!view) return;
         const entity = record.entity, id = record.id;
         if (LISTS[entity]) {
+          if (!map.safeId(id)) return; // never shown, so never edited or deleted from here
           const obj = map[`${entity}ToWeb`](id, view.data, ctx);
           remember(obj, key, view, obj, gen);
           state[LISTS[entity]].push(obj);

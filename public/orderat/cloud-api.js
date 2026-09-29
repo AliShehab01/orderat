@@ -112,12 +112,16 @@
     const timeoutMs = opts.timeoutMs > 0 ? opts.timeoutMs : TIMEOUT_MS;
     const aiTimeoutMs = Math.max(timeoutMs, AI_TIMEOUT_MS);
 
-    function post(fn, body, withSession, ms) {
+    // A keepalive request survives the tab closing (beforeunload, pagehide), but browsers cap all of
+    // them in flight at 64 KB, so only a small sync call asks for it.
+    const KEEPALIVE_MAX = 60 * 1024;
+    function post(fn, body, withSession, ms, keepalive) {
       const headers = { 'Content-Type': 'application/json' };
       const session = withSession ? getSession() : null;
       if (typeof session === 'string' && session) headers['X-Orderat-Session'] = session;
       const controller = typeof G.AbortController === 'function' ? new G.AbortController() : null;
       const init = { method: 'POST', headers, body: JSON.stringify(body) };
+      if (keepalive && init.body.length * 3 <= KEEPALIVE_MAX) init.keepalive = true;
       if (controller) init.signal = controller.signal;
       const answer = Promise.resolve()
         .then(() => fetchImpl(`${base}/${fn}`, init))
@@ -126,7 +130,7 @@
     }
 
     const authCall = (body, withSession) => post('orderat-auth', body, withSession, timeoutMs);
-    const syncCall = body => post('orderat-sync', body, true, timeoutMs);
+    const syncCall = (body, keepalive) => post('orderat-sync', body, true, timeoutMs, keepalive);
     function aiCall(fn, body) {
       const b = isObj(body) ? body : {};
       const lang = typeof b.lang === 'string' && b.lang ? b.lang : getLang() || 'ar';
@@ -146,7 +150,7 @@
       pairPoll: (pairId, pollToken) => authCall({ action: 'pair_poll', pairId, pollToken }, false),
 
       shopsList: () => syncCall({ action: 'shops_list' }),
-      sync: p => syncCall({ action: 'sync', shopId: p.shopId, cursor: p.cursor, changes: p.changes }),
+      sync: p => syncCall({ action: 'sync', shopId: p.shopId, cursor: p.cursor, changes: p.changes }, true),
       inviteCreate: shopId => syncCall({ action: 'invite_create', shopId }),
       membersList: shopId => syncCall({ action: 'members_list', shopId }),
       membersUpdate(shopId, userId, permissions) {

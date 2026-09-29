@@ -218,6 +218,20 @@ describe('start', () => {
     expect(again.products[0]).not.toBe(state.products[0]);
   });
 
+  it('leaves out records whose id is not safe in HTML (a staff push cannot inject markup)', async () => {
+    const server = seeded();
+    const evil = '"><img src=x onerror=alert(1)>';
+    server.put('order', evil, ORDER());
+    server.put('customer', evil, FATIMA());
+    server.put('product', CAKE_ID.toUpperCase(), COOKIES());
+    const app = await started(server);
+    expect(app.S.orders.map(o => o.id)).toEqual([ORDER_ID]);
+    expect(app.S.customers.map(c => c.id)).toEqual([FATIMA_ID, NOORA_ID]);
+    expect(app.S.products.map(p => p.id)).toContain(CAKE_ID.toUpperCase());
+    await app.sync.commit(app.S);
+    expect(server.calls.slice(1).flatMap(c => c.changes)).toEqual([]);
+  });
+
   it('shows no templates and no subscription when the shop has neither', async () => {
     const server = fakeServer();
     server.put('shop', SHOP_ID, SHOP());

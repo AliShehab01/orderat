@@ -124,6 +124,37 @@ function buildManifest() {
   return JSON.stringify(manifest, null, 2) + "\n";
 }
 
+// Cloudflare Pages serves 404.html for unknown paths; without one it treats the site as a single-page app
+// and answers every unknown path (/app/typos too) with the home page.
+function buildNotFound() {
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="${BRAND.themeColor}">
+<title>الصفحة غير موجودة | Page not found · ${BRAND.nameEn}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+:root{color-scheme:light dark;--bg:#f4f6ff;--fg:#1b1f3b;--muted:#5b6180;--accent:${BRAND.themeColor}}
+@media (prefers-color-scheme:dark){:root{--bg:#10132a;--fg:#eef0ff;--muted:#a3a8c7;--accent:#8e9cff}}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,"Segoe UI",Tahoma,sans-serif;padding:16px}
+main{max-width:28rem;text-align:center}h1{font-size:1.5rem;margin:.2em 0}p{color:var(--muted)}a{color:var(--accent);font-weight:600}
+</style>
+</head>
+<body>
+<main>
+<h1>الصفحة غير موجودة</h1>
+<p>الرابط غير صحيح أو الصفحة انتقلت.</p>
+<p><a href="/">الصفحة الرئيسية</a> · <a href="/app/">افتح التطبيق</a></p>
+<p lang="en" dir="ltr">Page not found. <a href="/en/">Home</a> · <a href="/app/?lang=en">Open the app</a></p>
+</main>
+</body>
+</html>
+`;
+}
+
 function main() {
   console.log("Building Orderat marketing site...");
   rmrf(DIST);
@@ -152,7 +183,8 @@ function main() {
   fs.writeFileSync(path.join(DIST, "sitemap.xml"), buildSitemap(pages), "utf8");
   fs.writeFileSync(path.join(DIST, "robots.txt"), buildRobots(), "utf8");
   fs.writeFileSync(path.join(DIST, "site.webmanifest"), buildManifest(), "utf8");
-  console.log("  wrote sitemap.xml, robots.txt, site.webmanifest");
+  fs.writeFileSync(path.join(DIST, "404.html"), buildNotFound(), "utf8");
+  console.log("  wrote sitemap.xml, robots.txt, site.webmanifest, 404.html");
 
   console.log(`Done. Output: ${path.relative(process.cwd(), DIST) || DIST}`);
 }

@@ -39,6 +39,11 @@
   const objects = v => (Array.isArray(v) ? v.filter(isObj) : []);
   const clone = v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
   const pad = n => String(n).padStart(2, '0');
+  // A record id the web will show. The phones write UUIDs (iPhone uppercase, Android lowercase) and
+  // settings use their key (whatsappTemplates); the server only checks 1-128 characters, so anything
+  // else a member pushed is left out rather than put into the page.
+  const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+  const safeId = id => typeof id === 'string' && SAFE_ID.test(id);
   const idOf = x => (typeof x.id === 'string' && x.id ? x.id : undefined);
   // A new record's result is built from scratch; an existing one's from a deep copy of the raw record.
   const start = raw => (isObj(raw) ? clone(raw) : {});
@@ -145,7 +150,6 @@
   const lastDay = dayAt(23, 59, 59, 999);
   const CURRENCY = { read: v => (typeof v === 'string' && v ? v : 'BHD'), write: v => (v == null || v === '' ? 'BHD' : String(v)) };
   // Web-only, kept in the cloud record (the phones keep unknown keys): where an order came from.
-  const SOURCE = { read: v => (typeof v === 'string' && v ? v : 'manual'), write: webOnlyText.write };
 
   // An enum code. `renames` maps the cloud codes the web spells differently. A code this build does not
   // know reads as `other`, and since the web value then still reads the same, it is written back unchanged.
@@ -165,6 +169,9 @@
   const METHOD = codes(['benefit', 'cash', 'transfer', 'card'], 'cash', 'cash');
   const CATEGORY = codes(['ingredients', 'packaging', 'delivery', 'ads', 'equipment', 'tools', 'rent', 'other'], 'other', 'other');
   const KIND = codes(['ramadan', 'eidAlFitr', 'eidAlAdha', 'bahrainNationalDay', 'gergaoon', 'custom'], 'custom', 'custom');
+  // Web-only, kept in the cloud record (the phones keep unknown keys): where an order came from. A code
+  // this build does not know (or anything else a member pushed) reads as manual and is kept on write.
+  const SOURCE = codes(['whatsapp', 'instagram', 'link', 'manual'], 'manual', 'manual');
 
   // Writes one web-owned field into `out`, the copy of `raw` being built. On an existing record the raw
   // value stays, in its exact raw form, when the web value is missing or still reads the same.
@@ -455,7 +462,7 @@
   }
 
   return {
-    ENTITY_ORDER, decimalsFor, toMinor, fromMinor, newId,
+    ENTITY_ORDER, decimalsFor, toMinor, fromMinor, newId, safeId,
     shopToWeb, shopToCloud, customerToWeb, customerToCloud, productToWeb, productToCloud,
     occasionToWeb, occasionToCloud, orderToWeb, orderToCloud, expenseToWeb, expenseToCloud,
     settingToWeb, settingToCloud,
