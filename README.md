@@ -1,20 +1,12 @@
 # اوردرات — Orderat browser MVP
 
-Pitch-ready browser MVP for Bahrain home sellers. Basic captures copied text, screenshots, voice notes and manual orders without accessing WhatsApp or Instagram. The owner reviews every draft before it enters the order book and day plan.
+Browser demo of the Orderat app for sellers in Bahrain and the Gulf. It matches the phone apps shown on the marketing site (https://orderat-app.pages.dev): the same five tabs (Today, Orders, New order, Money, Shop), the same Arabic and English labels, and the apps' demo shop for each business type (home business, shop or boutique, services, restaurant or café, food truck). It covers the eight features the site lists: WhatsApp, Instagram and shop-link orders; VAT tax invoices; optional stock that is deducted when an order is confirmed; drafting an order from a pasted message; profit and expenses with charts; the public shop link; staff and cloud sync; and the photo studio with occasion campaigns.
 
-Ready Stock tracks finished items, automatically reserves quantities for open confirmed orders, flags product-level shortages, and shows what remains available to sell. Sales Analytics uses current product prices to estimate booked sales, average order value, units, bestsellers, order sources and fulfilment progress. These features remain device-local in the prototype.
+It is a demo, not a working product. Records stay in the browser's localStorage. Message reading, Ask Orderat, AI captions and the photo studio are small on-device stand-ins, and sign-in, sync, shop-link publishing and subscriptions are simulated; each of those screens says so. Occasion campaigns are read from `content/campaigns.json` on the main branch. WhatsApp buttons open real wa.me links.
 
-Every order records its customer channel and intake method separately. Automatic Pro examples retain the WhatsApp customer number or Instagram username. Manually captured orders also retain their stated source and customer reference. Source details appear in the order list, order details, review form, analytics and CSV export.
+The demo is served from `public/orderat` (`index.html`, `app.css`, `i18n.js` for the labels, `demo.js` for the demo shops, `app.js` for the screens) and published with the legal pages at https://alishehab01.github.io/orderat/ (see "Legal pages" below). Its styling follows the marketing site's stylesheet (`site/src/assets/css/style.css`): the same colors, IBM Plex Sans Arabic and IBM Plex Sans, plus light and dark modes. Tone of voice is documented in `BRAND_GUIDELINES.md`.
 
-The Plans screen presents the proposed BHD 9 Basic and BHD 15 Pro tests. Pro includes a pre-subscription readiness checklist for WhatsApp Business, a Meta business account, possible Meta verification, and a professional Instagram account. Pro remains marked as pending Meta app review; no payment or account connection is performed in the prototype.
-
-The interactive product is served from `public/orderat`. It stores prototype records on the current device. Text extraction is a limited local demonstration; live AI, authentication, cloud sync, Meta APIs, customer replies and subscription billing are not connected.
-
-The visual and verbal system is documented in `BRAND_GUIDELINES.md`. Orderat uses IBM Plex Sans Arabic and IBM Plex Sans in Regular 400 and Bold 700, with a flat operational palette and direct, owner-controlled language.
-
-Light and dark modes use the same brand tokens. On mobile, the bottom navigation keeps Today, Order Book and Ready Stock visible; Day Plan, Sales, Products, Plans and Settings sit behind a single More menu.
-
-Run with `npm run dev` or create the static export with `npm run build`.
+Run it with `npx serve public/orderat`, or through Next.js with `npm run dev` (the root page frames it); `npm run build` creates the static export.
 
 ## WhatsApp agent (Pro) — local webhook
 
