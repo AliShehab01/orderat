@@ -132,7 +132,9 @@ ${ld}
 <body class="${escAttr(bodyClass || "")}">
 ${header(lang, slug, langSwitchSlug ?? slug)}
 <main id="main">
+${slug === "" ? bodyHtml : `<div class="wrap page">
 ${bodyHtml}
+</div>`}
 </main>
 ${footer(lang)}
 </body>
