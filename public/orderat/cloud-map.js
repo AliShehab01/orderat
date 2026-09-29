@@ -11,6 +11,11 @@
 //   an enum code this build does not know), so toCloud(toWeb(raw), raw) deep-equals raw for any record
 //   and cloud-sync.js pushes only what the web really changed;
 // - a field missing from the web object (undefined) is left as it is.
+// For an existing record, callers must pass xToCloud a web object that came from this same rawData
+// (read with xToWeb, then edited), and always the live object, not a copy (see the side effect below).
+// The web object is the authority for items, payments and plain fields, so one read from an older raw
+// record would drop what a phone added since (only order history is merged): rebuild web objects from
+// raw after every pull or restore.
 // ctx = { decimals, now: Date, deviceCode }. Money is integer minor units in the cloud and major units on
 // the web; cloud dates are ISO 8601 UTC with milliseconds.
 //
@@ -93,12 +98,11 @@
   const nowIso = ctx => iso(ctx && ctx.now) || new Date().toISOString();
   const decimalsOf = ctx => (ctx && typeof ctx.decimals === 'number' ? ctx.decimals : 3);
 
-  // An occasion day as 'YYYY-MM-DD'. The web writes 00:00 UTC; the phones write a local-time instant
-  // (iOS: local midnight, 2026-12-15T21:00:00.000Z for 16 December in Bahrain), read in local time.
+  // An occasion day, 'YYYY-MM-DD' on the web: the local calendar day of the cloud instant. The iOS form
+  // keeps the picker's time of day and Android writes local midnight; both read back as the day picked.
   function dayOf(v) {
     const s = iso(v);
     if (!s) return typeof v === 'string' ? v : '';
-    if (s.slice(10) === 'T00:00:00.000Z') return s.slice(0, 10);
     const d = new Date(s);
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }
@@ -127,7 +131,18 @@
   const money = decimals => ({ read: v => fromMinor(typeof v === 'number' ? v : 0, decimals), write: v => toMinor(v, decimals) });
   const date = fallback => ({ read: v => iso(v) || (typeof v === 'string' ? v : ''), write: v => iso(v) || fallback });
   const anyDate = date(null);
-  const day = { read: dayOf, write: v => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T00:00:00.000Z` : iso(v) || null) };
+  // An occasion's first day is written at local 00:00:00.000 and its last at local 23:59:59.999, so the
+  // phones' instant check (iOS Occasion.covers: startDate <= date <= endDate) covers both days whole.
+  const DAY_KEY = /^(\d{4})-(\d{2})-(\d{2})$/;
+  const dayAt = (h, min, sec, ms) => ({
+    read: dayOf,
+    write: v => {
+      const k = DAY_KEY.exec(typeof v === 'string' && DAY_KEY.test(v) ? v : dayOf(v));
+      return k ? new Date(+k[1], k[2] - 1, +k[3], h, min, sec, ms).toISOString() : null;
+    },
+  });
+  const firstDay = dayAt(0, 0, 0, 0);
+  const lastDay = dayAt(23, 59, 59, 999);
   const CURRENCY = { read: v => (typeof v === 'string' && v ? v : 'BHD'), write: v => (v == null || v === '' ? 'BHD' : String(v)) };
   // Web-only, kept in the cloud record (the phones keep unknown keys): where an order came from.
   const SOURCE = { read: v => (typeof v === 'string' && v ? v : 'manual'), write: webOnlyText.write };
@@ -282,11 +297,16 @@
       if (!idOf(it)) it.id = newId(); // on the web item too, so the next write reuses it
       const r = known[it.id], isNew = !r, base = r || {}, out = isNew ? { id: it.id } : clone(r);
       put(out, base, 'productId', it.pid, nullableText, isNew);
-      // nameSnapshot is history: a line keeps it unless the web moved it to another product or renamed it.
-      const snap = text.read(base.nameSnapshot);
-      const moved = !isNew && it.pid !== undefined && nullableText.read(it.pid) !== nullableText.read(base.productId);
-      const renamed = !isNew && (it.nameAr !== undefined || it.nameEn !== undefined) && it.nameAr !== snap && it.nameEn !== snap;
-      if (isNew || moved || renamed) out.nameSnapshot = String(it.nameAr || it.nameEn || '');
+      // nameSnapshot is history: an existing line keeps it, even when its product was renamed since,
+      // unless the web moved the line to another product (or to none) or renamed a custom line (one with
+      // no product before or after).
+      const rawPid = nullableText.read(base.productId);
+      const pid = it.pid === undefined ? rawPid : nullableText.read(it.pid);
+      const name = String(it.nameAr || it.nameEn || '');
+      const named = it.nameAr !== undefined || it.nameEn !== undefined;
+      const moved = pid !== rawPid;
+      const renamed = pid === null && rawPid === null && name !== text.read(base.nameSnapshot);
+      if (isNew || (named && (moved || renamed))) out.nameSnapshot = name;
       put(out, base, 'quantity', it.qty, QTY, isNew);
       put(out, base, 'unitPriceMinor', it.price, m, isNew);
       put(out, base, 'unitCostMinor', it.cost, m, isNew);
@@ -402,7 +422,7 @@
   // ---------- occasion (start/end are day keys on the web) ----------
 
   const OCCASION_FIELDS = [
-    ['kind', 'kind', KIND], ['nameAr', 'nameAr', text], ['nameEn', 'nameEn', optText], ['start', 'startDate', day], ['end', 'endDate', day],
+    ['kind', 'kind', KIND], ['nameAr', 'nameAr', text], ['nameEn', 'nameEn', optText], ['start', 'startDate', firstDay], ['end', 'endDate', lastDay],
     ['cap', 'dailyCapacityOverride', nullableInt], ['blocked', 'blocked', flag(false)], ['notes', 'notes', optText],
   ];
   function occasionToWeb(id, data) {

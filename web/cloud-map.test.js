@@ -3,6 +3,10 @@
 import { createRequire } from 'node:module';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// Occasion days are local calendar days, and the expected instants below are Bahrain time (UTC+3, no
+// daylight saving). server/test-setup.ts pins the same zone; this file does not rely on that.
+process.env.TZ = 'Asia/Bahrain';
+
 const load = createRequire(import.meta.url);
 const map = load('../public/orderat/cloud-map.js');
 
@@ -424,15 +428,30 @@ describe('order', () => {
     expect(out.changes).toStrictEqual([...raw.changes, { id: anId(), field: 'items', newValue: 'edited', at: '2026-09-29T07:55:00.000Z' }]);
   });
 
-  it('re-snapshots an existing item only when its product or its name changes', () => {
+  it('keeps the snapshot of a product line whose product was renamed since', () => {
     const [cake, box] = orderRecord().items;
-    const raw = frozen({ ...orderRecord(), items: [{ ...cake, nameSnapshot: 'Vanilla Sponge Cake' }, box] }); // ordered in English
+    const raw = frozen({ ...orderRecord(), items: [{ ...cake, nameSnapshot: 'Vanilla Sponge Cake' }, box] });
     const web = map.orderToWeb(ORDER_ID, raw, BHD);
-    Object.assign(web.items[0], { nameAr: 'كيك إسفنجي بالفانيليا', nameEn: 'Vanilla Sponge Cake' }); // same product, names re-read
-    Object.assign(web.items[1], { nameAr: 'Gift box (large)', nameEn: 'Gift box (large)' }); // custom line renamed
-    expect(map.orderToCloud(web, raw, BHD).items.map(it => it.nameSnapshot)).toEqual(['Vanilla Sponge Cake', 'Gift box (large)']);
+    Object.assign(web.items[0], { nameAr: 'كيك فانيليا', nameEn: 'Vanilla Cake', qty: 3 }); // names re-read from the renamed product
+    expect(map.orderToCloud(web, raw, BHD).items[0]).toStrictEqual({ ...raw.items[0], quantity: 3 });
+  });
+
+  it("takes the new product's name when a line moves to another product, or to no product", () => {
+    const raw = orderRecord();
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
     Object.assign(web.items[0], { pid: OTHER_PRODUCT_ID, nameAr: 'تشيز كيك بالتوت', nameEn: 'Berry Cheesecake' });
     expect(map.orderToCloud(web, raw, BHD).items[0]).toStrictEqual({ ...raw.items[0], productId: OTHER_PRODUCT_ID, nameSnapshot: 'تشيز كيك بالتوت' });
+    Object.assign(web.items[0], { pid: null, nameAr: 'Cake (own recipe)', nameEn: 'Cake (own recipe)' });
+    expect(map.orderToCloud(web, raw, BHD).items[0]).toStrictEqual({ ...raw.items[0], productId: null, nameSnapshot: 'Cake (own recipe)' });
+  });
+
+  it('takes the new name when a custom line (no product) is renamed', () => {
+    const raw = orderRecord();
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
+    Object.assign(web.items[1], { nameAr: 'Gift box (large)', nameEn: 'Gift box (large)' });
+    expect(map.orderToCloud(web, raw, BHD).items[1]).toStrictEqual({ ...raw.items[1], nameSnapshot: 'Gift box (large)' });
+    web.items[1] = { id: ITEM_2, qty: 2 }; // a line given without names leaves its name as it is
+    expect(map.orderToCloud(web, raw, BHD).items[1]).toStrictEqual({ ...raw.items[1], quantity: 2 });
   });
 
   it('counts VAT added on top of prices in the total, like the phones', () => {
@@ -527,34 +546,45 @@ describe('expense', () => {
 });
 
 describe('occasion', () => {
-  // The phones store an occasion's days as local-time instants (iOS: Calendar.current midnight).
-  const local = (y, m, d, h = 0) => new Date(y, m - 1, d, h).toISOString();
+  // As the iPhone form saves it: the picked days keep the picker's time of day (here 14:23 Bahrain time).
   const occasionRecord = () => frozen({
     kind: 'bahrainNationalDay', nameAr: 'اليوم الوطني البحريني', nameEn: 'Bahrain National Day',
-    startDate: local(2026, 12, 16), endDate: local(2026, 12, 17, 14), preOrderOpensAt: '2026-12-01T05:00:00.000Z',
+    startDate: '2026-12-16T11:23:00.000Z', endDate: '2026-12-17T11:23:00.000Z', preOrderOpensAt: '2026-12-01T05:00:00.000Z',
     dailyCapacityOverride: 60, blocked: false, notes: null, futureField: 1,
   });
+  const days = (startDate, endDate) => {
+    const web = map.occasionToWeb(OCCASION_ID, { startDate, endDate });
+    return [web.start, web.end];
+  };
 
-  it('reads the phones\' local days and the web\'s UTC-midnight days as the same day keys', () => {
+  it('reads a phone record\'s dates as their local calendar days, whatever the time of day', () => {
     expect(map.occasionToWeb(OCCASION_ID, occasionRecord())).toEqual({ id: OCCASION_ID, kind: 'bahrainNationalDay', nameAr: 'اليوم الوطني البحريني', nameEn: 'Bahrain National Day', start: '2026-12-16', end: '2026-12-17', cap: 60, blocked: false, notes: '' });
-    const web = map.occasionToWeb(OCCASION_ID, { startDate: '2027-03-10T00:00:00.000Z', endDate: '2027-03-12T00:00:00.000Z' });
-    expect([web.start, web.end]).toEqual(['2027-03-10', '2027-03-12']);
+    expect(days('2026-12-15T21:00:00.000Z', '2026-12-16T21:00:00.000Z')).toEqual(['2026-12-16', '2026-12-17']); // Android: local midnight
+    expect(days('2026-12-15T22:30:00.000Z', '2026-12-17T20:45:00.000Z')).toEqual(['2026-12-16', '2026-12-17']); // 01:30 and 23:45 local
+  });
+
+  it('writes local 00:00:00.000 of the first day and local 23:59:59.999 of the last, and reads them back (Bahrain)', () => {
+    const web = { id: OCCASION_ID, kind: 'bahrainNationalDay', nameAr: 'اليوم الوطني البحريني', nameEn: 'Bahrain National Day', start: '2026-12-16', end: '2026-12-17', cap: 60, blocked: false };
+    const out = map.occasionToCloud(web, undefined, BHD);
+    expect([out.startDate, out.endDate]).toEqual(['2026-12-15T21:00:00.000Z', '2026-12-17T20:59:59.999Z']);
+    expect(days(out.startDate, out.endDate)).toEqual(['2026-12-16', '2026-12-17']);
+    expect(roundTrip('occasion', OCCASION_ID, frozen(out), BHD)).toStrictEqual(out);
   });
 
   it('round-trips unchanged', () => {
     expect(roundTrip('occasion', OCCASION_ID, occasionRecord(), BHD)).toStrictEqual(occasionRecord());
   });
 
-  it('writes an edited day at 00:00 UTC and keeps the other day, preOrderOpensAt and unknown fields', () => {
+  it('writes an edited day and keeps the other day as the phone stored it, preOrderOpensAt and unknown fields', () => {
     const raw = occasionRecord();
     const web = map.occasionToWeb(OCCASION_ID, raw);
     Object.assign(web, { end: '2026-12-18', cap: null, blocked: true, notes: 'Closed on the 18th' });
-    expect(map.occasionToCloud(web, raw, BHD)).toStrictEqual({ ...raw, endDate: '2026-12-18T00:00:00.000Z', dailyCapacityOverride: null, blocked: true, notes: 'Closed on the 18th' });
+    expect(map.occasionToCloud(web, raw, BHD)).toStrictEqual({ ...raw, endDate: '2026-12-18T20:59:59.999Z', dailyCapacityOverride: null, blocked: true, notes: 'Closed on the 18th' });
   });
 
   it('builds a new occasion as FORMS.occasion makes it', () => {
     const web = { id: OCCASION_ID, kind: 'custom', nameAr: 'تخفيضات الشتاء', nameEn: 'Winter sale', start: '2026-11-01', end: '2026-11-03', cap: null, blocked: false };
-    expect(map.occasionToCloud(web, undefined, BHD)).toStrictEqual({ kind: 'custom', nameAr: 'تخفيضات الشتاء', nameEn: 'Winter sale', startDate: '2026-11-01T00:00:00.000Z', endDate: '2026-11-03T00:00:00.000Z', dailyCapacityOverride: null, blocked: false, notes: null });
+    expect(map.occasionToCloud(web, undefined, BHD)).toStrictEqual({ kind: 'custom', nameAr: 'تخفيضات الشتاء', nameEn: 'Winter sale', startDate: '2026-10-31T21:00:00.000Z', endDate: '2026-11-03T20:59:59.999Z', dailyCapacityOverride: null, blocked: false, notes: null });
   });
 });
 
