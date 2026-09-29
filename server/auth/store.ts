@@ -1,7 +1,8 @@
 // Database access for accounts and sessions (docs/sme-phase-2-cloud.md's "Accounts"), backed by
-// db/migrations/0004_cloud.sql's orderat.users / sessions (and 0005's sessions.expires_at). Every
-// query is parameterized; server/auth/handler.ts is the only caller, always after
-// server/auth/verify-token.ts has already verified whatever it's about to trust.
+// db/migrations/0004_cloud.sql's orderat.users / sessions (and 0005's sessions.expires_at), plus
+// 0006's orderat.web_pairings for the phone-to-web login. Every query is parameterized;
+// server/auth/handler.ts is the only caller, always after server/auth/verify-token.ts has already
+// verified whatever it's about to trust.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { constantTimeEqualHex, sha256HexOfString } from "../shared/crypto.ts";
@@ -177,4 +178,107 @@ export async function resolveSession(sql: SqlClient, token: string, now: Date): 
 export async function revokeSession(sql: SqlClient, token: string): Promise<void> {
   const tokenHash = await sha256HexOfString(token);
   await sql.query(`update orderat.sessions set revoked_at = now() where token_hash = $1 and revoked_at is null`, [tokenHash]);
+}
+
+// --- Phone-to-web login ("Open on computer"): db/migrations/0006_web_pairing.sql's web_pairings ---
+
+/** A pairing's poll token, which pair_start returns to the website once: the same shape as a session
+ * token (32 random bytes, base64url), so it is minted by newSessionToken. Only its SHA-256 hex
+ * (`pollHash`) is stored, in web_pairings.poll_hash. */
+export async function newPollToken(): Promise<{ pollToken: string; pollHash: string }> {
+  const { token, tokenHash } = await newSessionToken();
+  return { pollToken: token, pollHash: tokenHash };
+}
+
+/** Deletes every pairing whose five minutes are up (expires_at <= now), whatever its status. Every
+ * pairing call runs this first, so the table only holds pairings still in progress, and an approved
+ * pairing whose website never came back for its session takes that raw session token with it. */
+export async function deleteExpiredPairings(sql: SqlClient, now: Date): Promise<void> {
+  await sql.query(`delete from orderat.web_pairings where expires_at <= $1`, [now.toISOString()]);
+}
+
+/** Inserts a new pending pairing, or, when `code` is already another pending pairing's
+ * (web_pairings_pending_code_idx), inserts nothing and returns false so the caller can retry with a
+ * fresh code. */
+export async function insertPairing(
+  sql: SqlClient,
+  input: { id: string; code: string; pollHash: string; expiresAt: Date },
+): Promise<boolean> {
+  const rows = await sql.query(
+    `insert into orderat.web_pairings (id, code, poll_hash, status, expires_at) values ($1, $2, $3, 'pending', $4)
+     on conflict do nothing
+     returning id`,
+    [input.id, input.code, input.pollHash, input.expiresAt.toISOString()],
+  );
+  return rows.length > 0;
+}
+
+/** The unexpired pending pairing showing `code`, if any (at most one: web_pairings_pending_code_idx). */
+export async function findPendingPairingByCode(sql: SqlClient, code: string, now: Date): Promise<{ id: string } | undefined> {
+  const rows = await sql.query<{ id: string }>(
+    `select id from orderat.web_pairings where code = $1 and status = 'pending' and expires_at > $2`,
+    [code, now.toISOString()],
+  );
+  return rows[0] ? { id: rows[0].id } : undefined;
+}
+
+/** Marks pairing `id` approved by `userId`, holding `sessionToken` (the raw token of the web session
+ * just created for it) for the website's next poll, but only while it is still pending and unexpired.
+ * One conditional UPDATE, so of two phones approving the same code at once only one wins; false, with
+ * nothing changed, for the other (or for a pairing whose five minutes ran out). */
+export async function approvePairing(
+  sql: SqlClient,
+  input: { id: string; userId: string; sessionToken: string; now: Date },
+): Promise<boolean> {
+  const rows = await sql.query(
+    `update orderat.web_pairings
+        set status = 'approved', user_id = $2, session_token = $3, approved_at = $4
+      where id = $1 and status = 'pending' and expires_at > $4
+      returning id`,
+    [input.id, input.userId, input.sessionToken, input.now.toISOString()],
+  );
+  return rows.length > 0;
+}
+
+export type PairingPoll =
+  | { status: "pending" }
+  | { status: "expired" }
+  | { status: "approved"; sessionToken: string; user: UserRow };
+
+/**
+ * The website's poll of pairing `pairId`, authenticated by the poll token pair_start gave it: the
+ * token's SHA-256 hex is compared with the stored poll_hash in constant time (constantTimeEqualHex).
+ * The row is looked up by id, so, unlike in resolveSession, that comparison is what decides. An unknown
+ * pairing, a wrong poll token, a pairing past its expiry and one whose session was already collected
+ * all answer the same "expired", so a poll never reveals which it was. An approved pairing's session
+ * token is handed out exactly once: a single statement (so a single transaction) returns it and clears
+ * it, marking the pairing consumed.
+ */
+export async function pollPairing(sql: SqlClient, pairId: string, pollToken: string, now: Date): Promise<PairingPoll> {
+  const pollHash = await sha256HexOfString(pollToken);
+  const rows = await sql.query<Record<string, unknown>>(`select poll_hash, status, expires_at from orderat.web_pairings where id = $1`, [pairId]);
+  const row = rows[0];
+  if (!row || !constantTimeEqualHex(row.poll_hash as string, pollHash)) return { status: "expired" };
+  if (new Date(row.expires_at as string | Date).getTime() <= now.getTime()) return { status: "expired" };
+  if (row.status === "pending") return { status: "pending" };
+  if (row.status !== "approved") return { status: "expired" }; // Consumed: its session was already handed out.
+
+  // FOR UPDATE makes a concurrent poll that got here too wait for this one, then re-check the row: by
+  // then it is consumed, so that poll's CTE is empty and the token is never returned twice.
+  const consumed = await sql.query<Record<string, unknown>>(
+    `with approved as (
+       select id, session_token, user_id from orderat.web_pairings
+        where id = $1 and status = 'approved' and expires_at > $2
+        for update
+     )
+     update orderat.web_pairings p
+        set status = 'consumed', session_token = null
+       from approved join orderat.users u on u.id = approved.user_id
+      where p.id = approved.id
+     returning approved.session_token, u.id, u.provider, u.provider_sub, u.email, u.name, u.created_at`,
+    [pairId, now.toISOString()],
+  );
+  const claimed = consumed[0];
+  if (!claimed) return { status: "expired" };
+  return { status: "approved", sessionToken: claimed.session_token as string, user: toUserRow(claimed) };
 }

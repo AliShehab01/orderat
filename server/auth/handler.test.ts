@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { createCloudTestSql } from "../cloud-pglite-test-support.ts";
 import { sha256HexOfString } from "../shared/crypto.ts";
-import { createAuthHandler } from "./handler.ts";
+import { createAuthHandler, type AuthHandlerDeps } from "./handler.ts";
 import { createJwksCache } from "./jwks.ts";
 import { fakeJwksFetch, generateTestKeyPair, signTestToken, type TestKeyPair } from "./jwt-test-support.ts";
 
@@ -15,7 +15,7 @@ let sql: SqlClient;
 let appleKeyPair: TestKeyPair;
 let googleKeyPair: TestKeyPair;
 
-function makeHandler(now: () => Date = () => NOW) {
+function makeHandler(now: () => Date = () => NOW, overrides: Partial<AuthHandlerDeps> = {}) {
   return createAuthHandler({
     sql,
     appleJwks: createJwksCache("https://appleid.apple.com/auth/keys", { fetchImpl: fakeJwksFetch([appleKeyPair]) }),
@@ -24,6 +24,7 @@ function makeHandler(now: () => Date = () => NOW) {
     googleAudiences: [GOOGLE_AUD],
     now,
     log: () => {},
+    ...overrides,
   });
 }
 
@@ -279,5 +280,292 @@ describe("createAuthHandler / request shape", () => {
     const res = await handler(post({ action: "signin", provider: "apple", idToken: "a".repeat(20000) }));
     expect(res.status).toBe(413);
     expect(await res.json()).toEqual({ error: "too_large" });
+  });
+});
+
+// Phone-to-web login ("Open on computer"): the website starts a pairing and shows its code (a QR code
+// and 6 digits), the seller's signed-in phone approves that code, and the website, polling, receives a
+// web session for the phone's account.
+describe("createAuthHandler / phone-to-web pairing", () => {
+  const MINUTE_MS = 60 * 1000;
+  type Handler = (req: Request) => Promise<Response>;
+  interface Pairing { pairId: string; code: string; pollToken: string; expiresAt: string; }
+
+  async function signInPhone(handler: Handler, sub = "apple-sub-1", email = "seller@example.com"): Promise<string> {
+    const res = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken({ sub, email }), deviceName: "iPhone" }));
+    expect(res.status).toBe(200);
+    return (await res.json()).session as string;
+  }
+
+  async function start(handler: Handler): Promise<Pairing> {
+    const res = await handler(post({ action: "pair_start" }));
+    expect(res.status).toBe(200);
+    return (await res.json()) as Pairing;
+  }
+
+  const approve = (handler: Handler, code: string, session?: string) =>
+    handler(post({ action: "pair_approve", code }, session ? { "x-orderat-session": session } : {}));
+
+  async function poll(handler: Handler, pairing: Pick<Pairing, "pairId" | "pollToken">) {
+    const res = await handler(post({ action: "pair_poll", pairId: pairing.pairId, pollToken: pairing.pollToken }));
+    expect(res.status).toBe(200);
+    return res.json();
+  }
+
+  const me = (handler: Handler, session: string) => handler(post({ action: "me" }, { "x-orderat-session": session }));
+
+  async function pairingRow(pairId: string) {
+    return (await sql.query<Record<string, unknown>>(`select * from orderat.web_pairings where id = $1`, [pairId]))[0];
+  }
+
+  /** A 6-digit code that differs from `code`. */
+  const otherCode = (code: string) => (code === "000000" ? "000001" : "000000");
+
+  it("starts a pairing without a session: an id, a 6-digit code, a poll token and an expiry 5 minutes out", async () => {
+    const pairing = await start(makeHandler());
+    expect(pairing.pairId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(pairing.code).toMatch(/^\d{6}$/);
+    expect(pairing.pollToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(pairing.expiresAt).toBe("2026-09-27T12:05:00.000Z");
+    expect(Object.keys(pairing).sort()).toEqual(["code", "expiresAt", "pairId", "pollToken"]);
+  });
+
+  it("polls as pending until the phone approves", async () => {
+    const handler = makeHandler();
+    const pairing = await start(handler);
+    expect(await poll(handler, pairing)).toEqual({ status: "pending" });
+  });
+
+  it("start, approve, poll: the website receives a session for the phone's account that works for me", async () => {
+    const handler = makeHandler();
+    const phone = await signInPhone(handler);
+    const phoneUser = (await (await me(handler, phone)).json()).user;
+    const pairing = await start(handler);
+
+    const approved = await approve(handler, pairing.code, phone);
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toEqual({ ok: true });
+
+    const polled = await poll(handler, pairing);
+    expect(polled).toEqual({ status: "approved", session: expect.any(String), user: phoneUser });
+    expect(polled.session).not.toBe(phone);
+    const meRes = await me(handler, polled.session);
+    expect(meRes.status).toBe(200);
+    expect((await meRes.json()).user).toEqual(phoneUser);
+  });
+
+  it("hands the session out once: a second poll is expired and the pairing no longer holds the token", async () => {
+    const handler = makeHandler();
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+    await approve(handler, pairing.code, phone);
+
+    expect((await poll(handler, pairing)).status).toBe("approved");
+    expect(await poll(handler, pairing)).toEqual({ status: "expired" });
+    expect(await pairingRow(pairing.pairId)).toMatchObject({ status: "consumed", session_token: null });
+  });
+
+  it("answers a wrong poll token and an unknown pairing the same expired, and still hands the session to the right poll", async () => {
+    const handler = makeHandler();
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+    const other = await start(handler);
+    await approve(handler, pairing.code, phone);
+
+    expect(await poll(handler, { pairId: pairing.pairId, pollToken: other.pollToken })).toEqual({ status: "expired" });
+    expect(await poll(handler, { pairId: "7c9e6679-7425-40de-944b-e07fc1f90ae7", pollToken: pairing.pollToken })).toEqual({ status: "expired" });
+    expect((await poll(handler, pairing)).status).toBe("approved");
+  });
+
+  it("an expired pairing can no longer be approved (404 invalid_code) and polls as expired", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+
+    clock = new Date(NOW.getTime() + 5 * MINUTE_MS);
+    const res = await approve(handler, pairing.code, phone);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "invalid_code" });
+    expect(await poll(handler, pairing)).toEqual({ status: "expired" });
+  });
+
+  it("rejects a code no pending pairing shows with 404 invalid_code", async () => {
+    const handler = makeHandler();
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+
+    const res = await approve(handler, otherCode(pairing.code), phone);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "invalid_code" });
+    expect(await poll(handler, pairing)).toEqual({ status: "pending" });
+  });
+
+  it("approve without a session, or with an unknown one, is unauthorized and leaves the pairing pending", async () => {
+    const handler = makeHandler();
+    const pairing = await start(handler);
+
+    const res = await approve(handler, pairing.code);
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+    expect((await approve(handler, pairing.code, "garbage")).status).toBe(401);
+    expect(await poll(handler, pairing)).toEqual({ status: "pending" });
+  });
+
+  it("a browser's session, signed in or paired, cannot approve (403), so a web session never mints another", async () => {
+    const handler = makeHandler();
+    const signin = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken(), client: "web" }));
+    const webSession = (await signin.json()).session as string;
+    const phone = await signInPhone(handler);
+    const first = await start(handler);
+    await approve(handler, first.code, phone);
+    const pairedSession = (await poll(handler, first)).session as string;
+    const pairing = await start(handler);
+
+    for (const session of [webSession, pairedSession]) {
+      const res = await approve(handler, pairing.code, session);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "forbidden" });
+    }
+    expect(await poll(handler, pairing)).toEqual({ status: "pending" });
+  });
+
+  it("a code approved by one phone cannot be approved again by another", async () => {
+    const handler = makeHandler();
+    const phone = await signInPhone(handler);
+    const otherPhone = await signInPhone(handler, "apple-sub-2", "other@example.com");
+    const pairing = await start(handler);
+
+    expect((await approve(handler, pairing.code, phone)).status).toBe(200);
+    const second = await approve(handler, pairing.code, otherPhone);
+    expect(second.status).toBe(404);
+    expect(await second.json()).toEqual({ error: "invalid_code" });
+    expect((await poll(handler, pairing)).user.email).toBe("seller@example.com");
+  });
+
+  it("revokes the session it created when another phone approves the same code first, and answers 404", async () => {
+    const handler = makeHandler();
+    const phone = await signInPhone(handler);
+    const otherPhone = await signInPhone(handler, "apple-sub-2", "other@example.com");
+    const pairing = await start(handler);
+    // The other phone's approval lands between this call finding the code and claiming it: just as
+    // this call writes the web session it made for the pairing.
+    let raced = false;
+    const racingSql: SqlClient = {
+      async query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> {
+        if (!raced && text.startsWith("insert into orderat.sessions")) {
+          raced = true;
+          expect((await approve(handler, pairing.code, otherPhone)).status).toBe(200);
+        }
+        return sql.query<T>(text, params);
+      },
+    };
+
+    const res = await approve(makeHandler(() => NOW, { sql: racingSql }), pairing.code, phone);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "invalid_code" });
+
+    const polled = await poll(handler, pairing);
+    expect(polled.user.email).toBe("other@example.com");
+    const paired = await sql.query<{ token_hash: string; revoked_at: Date | null }>(`select token_hash, revoked_at from orderat.sessions where device_name = 'Web (paired)'`);
+    expect(paired).toHaveLength(2);
+    expect(paired.filter((row) => row.revoked_at === null).map((row) => row.token_hash)).toEqual([await sha256HexOfString(polled.session)]);
+  });
+
+  it("limits a session to 10 approvals a minute: the 11th is rate_limited whatever its code", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+
+    for (let i = 0; i < 10; i++) expect((await approve(handler, otherCode(pairing.code), phone)).status).toBe(404);
+    const limited = await approve(handler, pairing.code, phone);
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toEqual({ error: "rate_limited" });
+    expect(await poll(handler, pairing)).toEqual({ status: "pending" });
+
+    clock = new Date(NOW.getTime() + MINUTE_MS);
+    expect((await approve(handler, pairing.code, phone)).status).toBe(200);
+  });
+
+  it("the paired web session lasts 30 days from the approval, like a web signin's", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+    const approvedAt = new Date(NOW.getTime() + MINUTE_MS);
+    clock = approvedAt;
+    await approve(handler, pairing.code, phone);
+    const { session } = await poll(handler, pairing);
+
+    const rows = await sql.query<{ expires_at: Date; device_name: string }>(`select expires_at, device_name from orderat.sessions where token_hash = $1`, [await sha256HexOfString(session)]);
+    expect(rows[0]!.device_name).toBe("Web (paired)");
+    expect(new Date(rows[0]!.expires_at).toISOString()).toBe("2026-10-27T12:01:00.000Z");
+
+    clock = new Date(approvedAt.getTime() + 29 * DAY_MS);
+    expect((await me(handler, session)).status).toBe(200);
+    clock = new Date(approvedAt.getTime() + 31 * DAY_MS);
+    expect((await me(handler, session)).status).toBe(401);
+    expect((await me(handler, phone)).status).toBe(200); // The phone's own session never expires.
+  });
+
+  it("an approved pairing the website never collects loses its raw session token once it expires", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+    await approve(handler, pairing.code, phone);
+    expect((await pairingRow(pairing.pairId))!.session_token).toEqual(expect.any(String));
+
+    clock = new Date(NOW.getTime() + 5 * MINUTE_MS);
+    await start(handler); // Any pairing call (here another website's) first deletes the expired pairings.
+    expect(await pairingRow(pairing.pairId)).toBeUndefined();
+    expect(await poll(handler, pairing)).toEqual({ status: "expired" });
+  });
+
+  it("never gives two pending pairings the same code: a code already showing is redrawn", async () => {
+    const handler = makeHandler();
+    const first = await start(handler);
+    // The next two 6-digit draws: the first pairing's code again, then 246810.
+    const draws = [Number(first.code), 246810];
+    const realGetRandomValues = crypto.getRandomValues.bind(crypto);
+    const spy = vi.spyOn(crypto, "getRandomValues").mockImplementation(((array: Uint8Array) => {
+      if (array.length !== 4 || draws.length === 0) return realGetRandomValues(array);
+      new DataView(array.buffer, array.byteOffset, array.byteLength).setUint32(0, draws.shift()!);
+      return array;
+    }) as typeof crypto.getRandomValues);
+    try {
+      expect((await start(handler)).code).toBe("246810");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(draws).toEqual([]);
+    expect((await sql.query(`select 1 from orderat.web_pairings where status = 'pending'`)).length).toBe(2);
+  });
+
+  it("pair_start and pair_poll ignore a session header and never act on the account", async () => {
+    const handler = makeHandler();
+    const phone = await signInPhone(handler);
+    const headers = { "x-orderat-session": phone };
+
+    const started = await handler(post({ action: "pair_start" }, headers));
+    expect(started.status).toBe(200);
+    const pairing = (await started.json()) as Pairing;
+    const polled = await handler(post({ action: "pair_poll", pairId: pairing.pairId, pollToken: pairing.pollToken }, headers));
+    expect(await polled.json()).toEqual({ status: "pending" });
+    expect((await me(handler, phone)).status).toBe(200); // Account and session untouched.
+  });
+
+  it("never logs a code, a poll token or a session token", async () => {
+    const entries: Record<string, unknown>[] = [];
+    const handler = makeHandler(() => NOW, { log: (entry) => entries.push(entry) });
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+    await approve(handler, pairing.code, phone);
+    const { session } = await poll(handler, pairing);
+
+    expect(entries.map((entry) => entry.event)).toEqual(expect.arrayContaining(["auth_pair_start", "auth_pair_approve", "auth_pair_poll"]));
+    const logged = JSON.stringify(entries);
+    for (const secret of [pairing.code, pairing.pollToken, session, phone]) expect(logged).not.toContain(secret);
   });
 });

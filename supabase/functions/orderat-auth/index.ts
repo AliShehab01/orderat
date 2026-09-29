@@ -6,9 +6,10 @@
 // and by the browser web app at https://orderatweb.com/app/ — so the handler is wrapped with
 // withAppCors (server/shared/cors.ts), which allows the site's origins (and localhost for development)
 // and leaves the phones, which send no Origin header, exactly as they were. All the actual logic
-// (token verification, session issuing, signout, delete account) is the same server/auth/handler.ts a
-// test can exercise directly; this file only wires it to real dependencies — the two provider JWKS
-// endpoints, fetched with the real global `fetch`, and the allowed audiences from env. See
+// (token verification, session issuing, signout, delete account, and the phone-to-web login's
+// pair_start / pair_approve / pair_poll) is the same server/auth/handler.ts a test can exercise
+// directly; this file only wires it to real dependencies — the two provider JWKS endpoints, fetched
+// with the real global `fetch`, and the allowed audiences from env. See
 // supabase/functions/orderat-whatsapp/index.ts for notes on the import layout, --use-api and the
 // orderat- / ORDERAT_ prefixing this shares with the other functions.
 

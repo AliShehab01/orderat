@@ -9,10 +9,16 @@ import type { SqlClient } from "../agent/postgres-store.ts";
 import { createCloudTestSql } from "../cloud-pglite-test-support.ts";
 import { sha256HexOfString } from "../shared/crypto.ts";
 import {
+  approvePairing,
   createSession,
   deleteAccount,
+  deleteExpiredPairings,
+  findPendingPairingByCode,
   findUserById,
+  insertPairing,
+  newPollToken,
   newSessionToken,
+  pollPairing,
   resolveSession,
   revokeSession,
   upsertUser,
@@ -219,5 +225,171 @@ describe("deleteAccount", () => {
 
   it("deleting an unknown user id is a harmless no-op", async () => {
     await expect(deleteAccount(sql, "99999999-9999-9999-9999-999999999999")).resolves.toBeUndefined();
+  });
+});
+
+// Phone-to-web login (db/migrations/0006_web_pairing.sql's orderat.web_pairings): the website starts a
+// pairing, the signed-in phone approves its code, the website polls until it collects its session.
+describe("web pairings", () => {
+  const T0 = new Date("2026-09-29T12:00:00Z");
+  const MINUTE_MS = 60 * 1000;
+  const EXPIRES_AT = new Date(T0.getTime() + 5 * MINUTE_MS);
+  const PAIR_ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const OTHER_PAIR_ID = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+  const RAW_SESSION = "raw-web-session-token";
+
+  async function phoneUser() {
+    return upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1", email: "seller@example.com" });
+  }
+
+  async function startPairing(id = PAIR_ID, code = "123456", expiresAt = EXPIRES_AT) {
+    const { pollToken, pollHash } = await newPollToken();
+    const inserted = await insertPairing(sql, { id, code, pollHash, expiresAt });
+    return { pollToken, pollHash, inserted };
+  }
+
+  async function pairingRow(id = PAIR_ID) {
+    const rows = await sql.query<Record<string, unknown>>(`select * from orderat.web_pairings where id = $1`, [id]);
+    return rows[0];
+  }
+
+  it("mints a poll token of 32 random bytes, base64url, with its SHA-256 hex", async () => {
+    const { pollToken, pollHash } = await newPollToken();
+    expect(pollToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(pollHash).toBe(await sha256HexOfString(pollToken));
+    expect((await newPollToken()).pollToken).not.toBe(pollToken);
+  });
+
+  it("inserts a pending pairing that stores only the poll token's hash", async () => {
+    const { pollToken, pollHash, inserted } = await startPairing();
+
+    expect(inserted).toBe(true);
+    const row = await pairingRow();
+    expect(row).toMatchObject({ id: PAIR_ID, code: "123456", poll_hash: pollHash, status: "pending", user_id: null, session_token: null, approved_at: null });
+    expect(new Date(row!.expires_at as Date).toISOString()).toBe("2026-09-29T12:05:00.000Z");
+    expect(JSON.stringify(row)).not.toContain(pollToken);
+  });
+
+  it("refuses a second pending pairing with the same code, and allows the code again once the first is no longer pending", async () => {
+    const user = await phoneUser();
+    await startPairing(PAIR_ID, "123456");
+
+    expect((await startPairing(OTHER_PAIR_ID, "123456")).inserted).toBe(false);
+    expect(await pairingRow(OTHER_PAIR_ID)).toBeUndefined();
+
+    await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: T0 });
+    expect((await startPairing(OTHER_PAIR_ID, "123456")).inserted).toBe(true);
+  });
+
+  it("finds a pending pairing by its code only until it expires", async () => {
+    await startPairing(PAIR_ID, "123456");
+
+    expect(await findPendingPairingByCode(sql, "123456", T0)).toEqual({ id: PAIR_ID });
+    expect(await findPendingPairingByCode(sql, "654321", T0)).toBeUndefined();
+    expect(await findPendingPairingByCode(sql, "123456", new Date(EXPIRES_AT.getTime() - 1))).toEqual({ id: PAIR_ID });
+    expect(await findPendingPairingByCode(sql, "123456", EXPIRES_AT)).toBeUndefined();
+  });
+
+  it("no longer finds a pairing by its code once it is approved", async () => {
+    const user = await phoneUser();
+    await startPairing(PAIR_ID, "123456");
+    await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: T0 });
+
+    expect(await findPendingPairingByCode(sql, "123456", T0)).toBeUndefined();
+  });
+
+  it("approves a pending pairing for the phone's user, holding the raw session token for the website", async () => {
+    const user = await phoneUser();
+    await startPairing();
+    const approvedAt = new Date(T0.getTime() + MINUTE_MS);
+
+    expect(await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: approvedAt })).toBe(true);
+
+    const row = await pairingRow();
+    expect(row).toMatchObject({ status: "approved", user_id: user.id, session_token: RAW_SESSION });
+    expect(new Date(row!.approved_at as Date).toISOString()).toBe(approvedAt.toISOString());
+  });
+
+  it("approves a pairing only once, and never after it expires", async () => {
+    const user = await phoneUser();
+    await startPairing(PAIR_ID, "123456");
+    await startPairing(OTHER_PAIR_ID, "654321");
+
+    expect(await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: T0 })).toBe(true);
+    expect(await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: "another-token", now: T0 })).toBe(false);
+    expect((await pairingRow(PAIR_ID))!.session_token).toBe(RAW_SESSION);
+
+    expect(await approvePairing(sql, { id: OTHER_PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: EXPIRES_AT })).toBe(false);
+    expect((await pairingRow(OTHER_PAIR_ID))!.status).toBe("pending");
+  });
+
+  describe("pollPairing", () => {
+    it("is pending until the phone approves", async () => {
+      const { pollToken } = await startPairing();
+      expect(await pollPairing(sql, PAIR_ID, pollToken, T0)).toEqual({ status: "pending" });
+    });
+
+    it("hands an approved pairing's session token and user out once, clearing the token from the row", async () => {
+      const user = await phoneUser();
+      const { pollToken } = await startPairing();
+      await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: T0 });
+
+      const first = await pollPairing(sql, PAIR_ID, pollToken, T0);
+      expect(first).toEqual({ status: "approved", sessionToken: RAW_SESSION, user: expect.objectContaining({ id: user.id, provider: "apple", email: "seller@example.com" }) });
+      expect(await pairingRow()).toMatchObject({ status: "consumed", session_token: null });
+
+      expect(await pollPairing(sql, PAIR_ID, pollToken, T0)).toEqual({ status: "expired" });
+    });
+
+    it("answers expired for a wrong poll token without handing out the session", async () => {
+      const user = await phoneUser();
+      await startPairing();
+      await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: T0 });
+      const { pollToken: someoneElses } = await newPollToken();
+
+      expect(await pollPairing(sql, PAIR_ID, someoneElses, T0)).toEqual({ status: "expired" });
+      expect(await pairingRow()).toMatchObject({ status: "approved", session_token: RAW_SESSION });
+    });
+
+    it("answers expired for an unknown pairing", async () => {
+      const { pollToken } = await startPairing();
+      expect(await pollPairing(sql, OTHER_PAIR_ID, pollToken, T0)).toEqual({ status: "expired" });
+    });
+
+    it("answers expired from the pairing's expiry instant on, approved or not", async () => {
+      const user = await phoneUser();
+      const pending = await startPairing(PAIR_ID, "123456");
+      const approved = await startPairing(OTHER_PAIR_ID, "654321");
+      await approvePairing(sql, { id: OTHER_PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: T0 });
+
+      expect(await pollPairing(sql, PAIR_ID, pending.pollToken, new Date(EXPIRES_AT.getTime() - 1))).toEqual({ status: "pending" });
+      expect(await pollPairing(sql, PAIR_ID, pending.pollToken, EXPIRES_AT)).toEqual({ status: "expired" });
+      expect(await pollPairing(sql, OTHER_PAIR_ID, approved.pollToken, EXPIRES_AT)).toEqual({ status: "expired" });
+      expect((await pairingRow(OTHER_PAIR_ID))!.status).toBe("approved"); // Not handed out.
+    });
+  });
+
+  it("deletes every pairing whose five minutes are up, approved ones with their raw session token included", async () => {
+    const user = await phoneUser();
+    await startPairing(PAIR_ID, "123456", EXPIRES_AT);
+    await startPairing(OTHER_PAIR_ID, "654321", new Date(EXPIRES_AT.getTime() + MINUTE_MS));
+    await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: T0 });
+
+    await deleteExpiredPairings(sql, new Date(EXPIRES_AT.getTime() - 1));
+    expect(await pairingRow(PAIR_ID)).toBeDefined();
+
+    await deleteExpiredPairings(sql, EXPIRES_AT);
+    expect(await pairingRow(PAIR_ID)).toBeUndefined();
+    expect(await pairingRow(OTHER_PAIR_ID)).toBeDefined();
+  });
+
+  it("deleting the approving user's account deletes the pairing with it", async () => {
+    const user = await phoneUser();
+    await startPairing();
+    await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: T0 });
+
+    await deleteAccount(sql, user.id);
+
+    expect(await pairingRow()).toBeUndefined();
   });
 });

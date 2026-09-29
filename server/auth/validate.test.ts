@@ -53,6 +53,48 @@ describe("validateAuthBody", () => {
     expect(validateAuthBody(JSON.stringify({ action: "nope" }))).toEqual({ ok: false, error: "invalid_body" });
   });
 
+  // Phone-to-web login: the website calls pair_start and pair_poll, the signed-in phone pair_approve.
+  describe("pairing", () => {
+    const PAIR_ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    const POLL_TOKEN = "q9Yx2Lh0cN3bV7mK1pZ8tR4wS6uE5aD0fG2hJ3kL4mN";
+
+    it("accepts pair_start, which carries no fields of its own", () => {
+      expect(validateAuthBody(JSON.stringify({ action: "pair_start" }))).toEqual({ ok: true, body: { action: "pair_start" } });
+    });
+
+    it.each(["123456", "000000", "999999"])("accepts pair_approve with the 6-digit code %s", (code) => {
+      expect(validateAuthBody(JSON.stringify({ action: "pair_approve", code }))).toEqual({ ok: true, body: { action: "pair_approve", code } });
+    });
+
+    it.each([["12345"], ["1234567"], ["12a456"], [" 123456"], [""], [123456], [null]])("rejects the pair_approve code %j", (code) => {
+      expect(validateAuthBody(JSON.stringify({ action: "pair_approve", code }))).toEqual({ ok: false, error: "invalid_body" });
+    });
+
+    it("rejects pair_approve without a code", () => {
+      expect(validateAuthBody(JSON.stringify({ action: "pair_approve" }))).toEqual({ ok: false, error: "invalid_body" });
+    });
+
+    it("accepts pair_poll with a uuid pairId and a poll token", () => {
+      expect(validateAuthBody(JSON.stringify({ action: "pair_poll", pairId: PAIR_ID, pollToken: POLL_TOKEN }))).toEqual({
+        ok: true,
+        body: { action: "pair_poll", pairId: PAIR_ID, pollToken: POLL_TOKEN },
+      });
+    });
+
+    it.each([["not-a-uuid"], [""], [42], [null]])("rejects the pair_poll pairId %j", (pairId) => {
+      expect(validateAuthBody(JSON.stringify({ action: "pair_poll", pairId, pollToken: POLL_TOKEN }))).toEqual({ ok: false, error: "invalid_body" });
+    });
+
+    it.each([[""], ["a".repeat(129)], [42], [null]])("rejects the pair_poll pollToken %j", (pollToken) => {
+      expect(validateAuthBody(JSON.stringify({ action: "pair_poll", pairId: PAIR_ID, pollToken }))).toEqual({ ok: false, error: "invalid_body" });
+    });
+
+    it("rejects pair_poll missing its pairId or pollToken", () => {
+      expect(validateAuthBody(JSON.stringify({ action: "pair_poll", pollToken: POLL_TOKEN }))).toEqual({ ok: false, error: "invalid_body" });
+      expect(validateAuthBody(JSON.stringify({ action: "pair_poll", pairId: PAIR_ID }))).toEqual({ ok: false, error: "invalid_body" });
+    });
+  });
+
   it("rejects malformed JSON", () => {
     expect(validateAuthBody("{not json")).toEqual({ ok: false, error: "invalid_body" });
   });

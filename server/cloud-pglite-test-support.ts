@@ -2,10 +2,11 @@
 // (server/auth/*.test.ts, server/sync/*.test.ts, server/parse/*.test.ts) — same approach as
 // server/marketing-pglite-test-support.ts and server/ask/pglite-test-support.ts, pulled out to this
 // top-level file (alongside server/test-setup.ts) since db/migrations/0004_cloud.sql's tables are
-// shared by all three feature folders and no single one owns it. Applies 0001, 0002, 0003, 0004, then
-// 0005 (web sessions' expires_at column), the same order scripts/hosting-migrate.mjs applies them in
-// (0004 assumes schema "orderat" and role "orderat_app" already exist from 0001, and is otherwise
-// independent of 0002/0003's own tables; 0005 alters 0004's sessions table).
+// shared by all three feature folders and no single one owns it. Applies 0001, 0002, 0003, 0004, 0005
+// (web sessions' expires_at column), then 0006 (phone-to-web pairing), the same order
+// scripts/hosting-migrate.mjs applies them in (0004 assumes schema "orderat" and role "orderat_app"
+// already exist from 0001, and is otherwise independent of 0002/0003's own tables; 0005 alters 0004's
+// sessions table; 0006's web_pairings references 0004's users).
 // One instance per process, truncated between tests — starting a fresh WASM instance per test is what
 // made these suites slow before (see server/ask/pglite-test-support.ts's own note).
 
@@ -21,10 +22,13 @@ const MIGRATION_0002 = readFileSync(join(MIGRATIONS_DIR, "0002_ai_usage.sql"), "
 const MIGRATION_0003 = readFileSync(join(MIGRATIONS_DIR, "0003_marketing.sql"), "utf8");
 const MIGRATION_0004 = readFileSync(join(MIGRATIONS_DIR, "0004_cloud.sql"), "utf8");
 const MIGRATION_0005 = readFileSync(join(MIGRATIONS_DIR, "0005_web_sessions.sql"), "utf8");
+const MIGRATION_0006 = readFileSync(join(MIGRATIONS_DIR, "0006_web_pairing.sql"), "utf8");
 
 const CLOUD_TABLES = [
   "orderat.sessions",
   "orderat.sync_rate_limit",
+  "orderat.web_pairings",
+  "orderat.pair_approve_rate_limit",
   // shop_members/invites/records reference orderat.shops_cloud, so truncating shops_cloud must
   // cascade to them too — plain `truncate ... cascade` (rather than listing every dependent table)
   // keeps this list correct even if a later migration adds another table referencing shops_cloud.
@@ -47,6 +51,7 @@ function getDb() {
     await db.exec(MIGRATION_0003);
     await db.exec(MIGRATION_0004);
     await db.exec(MIGRATION_0005);
+    await db.exec(MIGRATION_0006);
     return db;
   })();
   return dbPromise;
