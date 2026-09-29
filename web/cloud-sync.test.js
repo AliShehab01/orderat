@@ -704,3 +704,143 @@ describe('orders', () => {
     expect(app.S.orders[0].payments.map(p => p.amount)).toEqual([5, 8]);
   });
 });
+
+// Review fixes (review-task-4.md I1-I3, M1-M3).
+describe('the app state handed to pull()', () => {
+  it('keeps lists and switches the app replaced on S before its first commit (I1)', async () => {
+    const server = seeded();
+    const app = await started(server);
+    server.put('product', COOKIE_ID, { ...COOKIES(), priceMinor: 3500 }); // news, so the pull rebuilds S
+    app.S.customers = app.S.customers.filter(c => c.id !== NOORA_ID);
+    app.S.stockEnabled = false;
+    await expect(app.sync.pull(app.S)).resolves.toBe(true);
+    expect(app.S.customers.map(c => c.id)).toEqual([FATIMA_ID]);
+    expect(app.S.stockEnabled).toBe(false);
+    expect(product(app, COOKIE_ID).price).toBe(3.5);
+    expect(server.row('customer', NOORA_ID).deleted).toBe(true);
+    expect(server.row('shop', SHOP_ID).data.stock.enabled).toBe(false);
+  });
+});
+
+describe('server limits (I2)', () => {
+  it('does not send a record over 32 KB: the server copy comes back (a new one is dropped) and it says invalid', async () => {
+    const server = seeded();
+    const app = await started(server);
+    app.S.customers[0].notes = 'x'.repeat(33 * 1024);
+    app.S.customers.push({ id: NEW_ID, name: 'ريم سعيد', nameEn: '', phone: '+97333001099', area: '', notes: 'y'.repeat(33 * 1024) });
+    product(app, CAKE_ID).price = 7;
+    await expect(app.sync.commit(app.S)).resolves.toBe(true);
+    expect(server.pushed().map(c => c.id)).toEqual([CAKE_ID]);
+    expect(app.notices).toEqual([['invalid', [{ entity: 'customer', id: FATIMA_ID, reason: 'too_large' }, { entity: 'customer', id: NEW_ID, reason: 'too_large' }]]]);
+    expect(app.S.customers.map(c => [c.id, c.notes])).toEqual([[FATIMA_ID, ''], [NOORA_ID, '']]);
+    expect(app.sync.pending).toBe(0);
+    const calls = server.calls.length;
+    await app.sync.commit(app.S);
+    expect(server.calls).toHaveLength(calls);
+  });
+
+  it('restores an oversized edit and says invalid even when nothing else is sent', async () => {
+    const server = seeded();
+    const app = await started(server);
+    app.S.customers[0].notes = 'x'.repeat(33 * 1024);
+    await app.sync.commit(app.S);
+    expect(server.calls).toHaveLength(1);
+    expect(app.notices.map(n => n[0])).toEqual(['invalid']);
+    expect(app.S.customers[0].notes).toBe('');
+  });
+
+  it('cuts a push at about 1.8 MB of JSON as well as at 500 changes', async () => {
+    const server = seeded();
+    const app = await started(server);
+    for (let i = 1; i <= 70; i++) app.S.customers.push({ id: uuidFor(i), name: `زبون ${i}`, nameEn: '', phone: `+9733300${i}`, area: '', notes: 'n'.repeat(30 * 1024) });
+    await expect(app.sync.commit(app.S)).resolves.toBe(true);
+    const pushes = server.calls.filter(c => c.changes.length);
+    expect(pushes.length).toBeGreaterThan(1);
+    for (const call of pushes) expect(Buffer.byteLength(JSON.stringify({ action: 'sync', ...call }))).toBeLessThan(2 * 1024 * 1024);
+    expect(pushes.reduce((n, c) => n + c.changes.length, 0)).toBe(70);
+    expect(app.sync.pending).toBe(0);
+  });
+});
+
+describe('deletions (I3, M2)', () => {
+  it('a filtered copy of an old list never deletes records added since', async () => {
+    const server = seeded();
+    const app = await started(server);
+    const oldCustomers = app.S.customers;
+    server.put('customer', NEW_ID, { ...NOORA(), name: 'ريم سعيد' }); // another device adds a customer
+    await app.sync.pull(app.S);
+    expect(app.S.customers).toHaveLength(3);
+    await app.sync.commit({ ...app.S, customers: oldCustomers.filter(c => c.id !== NOORA_ID) });
+    expect(server.row('customer', NEW_ID).deleted).toBe(false);
+    expect(server.row('customer', NOORA_ID).deleted).toBe(true);
+  });
+
+  it('deleting a record the server never had drops it, without a tombstone', async () => {
+    const server = seeded();
+    const app = await started(server);
+    app.S.customers.push({ id: NEW_ID, name: 'ريم سعيد', nameEn: '', phone: '+97333001099', area: '', notes: '' });
+    server.fail = new CloudError('offline', 0, 'network');
+    await app.sync.commit(app.S);
+    expect(app.sync.pending).toBe(1);
+    app.S.customers = app.S.customers.filter(c => c.id !== NEW_ID);
+    server.fail = null;
+    await app.sync.pull(app.S);
+    expect(server.pushed().filter(c => c.id === NEW_ID && c.deleted)).toEqual([]);
+    expect(server.row('customer', NEW_ID)).toBeUndefined();
+    expect(app.sync.pending).toBe(0);
+  });
+});
+
+describe('base seq of an edit (M1)', () => {
+  it('says conflict when a phone changed the record while the web edit was on its way', async () => {
+    const server = seeded();
+    const app = await started(server);
+    const phoneSeq = server.put('product', CAKE_ID, { ...CAKE(), nameEn: 'Cake (phone)' });
+    const gate = deferred();
+    server.gate = gate.promise;
+    const pulling = app.sync.pull(app.S);
+    await until(() => server.inFlight === 1);
+    product(app, CAKE_ID).price = 8;
+    server.gate = null;
+    gate.resolve();
+    await pulling;
+    await app.sync.commit(app.S);
+    expect(app.notices).toEqual([['conflict', [{ entity: 'product', id: CAKE_ID, seq: phoneSeq }]]]);
+    expect(server.calls.at(-1).changes.map(c => [c.id, c.baseSeq])).toEqual([[CAKE_ID, 2]]);
+  });
+
+  it('does not call the web own earlier push a conflict', async () => {
+    const server = seeded();
+    const app = await started(server);
+    const cake = product(app, CAKE_ID);
+    cake.price = 7;
+    const gate = deferred();
+    server.gate = gate.promise;
+    const committing = app.sync.commit(app.S);
+    await until(() => server.inFlight === 1);
+    cake.price = 9; // edited again while the first push is out
+    server.gate = null;
+    gate.resolve();
+    await committing;
+    await app.sync.commit(app.S);
+    expect(app.notices).toEqual([]);
+    expect(server.row('product', CAKE_ID).data.priceMinor).toBe(9000);
+  });
+});
+
+describe('starting again (M3)', () => {
+  it('keeps changes not sent yet and sends them later', async () => {
+    const server = seeded();
+    const app = await started(server);
+    product(app, CAKE_ID).price = 7;
+    server.fail = new CloudError('offline', 0, 'network');
+    await app.sync.commit(app.S);
+    server.fail = null;
+    await app.sync.start();
+    expect(product(app, CAKE_ID).price).toBe(7);
+    expect(app.sync.pending).toBe(1);
+    await app.sync.pull(app.S);
+    expect(server.row('product', CAKE_ID).data.priceMinor).toBe(7000);
+    expect(app.sync.pending).toBe(0);
+  });
+});

@@ -5,36 +5,44 @@
 //   const sync = createSync({ api, map, shopId, ctx: { deviceCode }, onChange, onNotice });
 //   await sync.start();   // pulls every page from cursor 0, then onChange(state)
 //   sync.commit(S);       // after local edits: push what changed (nothing to push, no call)
-//   sync.pull();          // on a timer and on focus: send anything pending, apply what others changed
+//   sync.pull(S);         // on a timer and on focus: send what changed, apply what others changed
 //
 // The app adopts each onChange state into its own S in place (Object.assign(S, state)), keeps editing
-// S (in place, or by replacing a list), and hands S to commit(). A state is
+// S, and hands S itself to both commit() and pull(): a list or value replaced on S is only seen through S.
+// Edit web objects in place (or replace a list); an object replaced by a copy has no origin and is judged
+// against the latest record. A state is
 //   { shop, vat, stockEnabled, products, customers, orders, expenses, occasions, waTemplates, subscription }
 // with deleted records left out; subscription is the `setting/subscription` record's value (or null) and
 // is never written, like every setting other than whatsappTemplates (waTemplates) and every entity the
 // web does not show (stock_move). The web never deletes the shop or a setting.
 //
 // How edits reach the server:
-// - Each web object remembers the cloud data it was built from. A commit hands the live object and that
-//   data to xToCloud (ctx = { decimals of the shop currency, now, deviceCode }); a result that differs is
-//   a pending change. Diffing each object against its own origin, never against a newer record, means a
-//   copy of the state from before a pull cannot undo another device's change.
-// - A record in the list the state was built with but gone from S becomes a tombstone (with its last data).
-// - Pending changes go out at most 500 per call, in map.ENTITY_ORDER, with baseSeq = the record's seq.
-//   The same call pulls: pages are applied while `more`, and then the state is rebuilt from the records
-//   (and the changes still pending) and handed to onChange, so nothing stale is ever diffed.
+// - Each web object remembers the cloud data (and seq) it was built from. A commit hands the live object
+//   and that data to xToCloud (ctx = { decimals of the shop currency, now, deviceCode }); a result that
+//   differs is a pending change, sent with baseSeq = the seq it was based on, so a phone's change that
+//   arrived meanwhile is reported as a conflict. Diffing each object against its own origin, never against
+//   a newer record, means a copy of the state from before a pull cannot undo another device's change.
+// - Deletions: a record in the build a list came from (its oldest member's build) but gone from the list
+//   becomes a tombstone (with its last data); a record the server never had is simply dropped. A list from
+//   an older build never deletes records that came later.
+// - The server's limits: a record over 32 KB of JSON is never sent; the server copy is put back (a new
+//   record is dropped) and onNotice('invalid') says so. A call carries at most 500 changes and ~1.8 MB.
+// - Changes go out in map.ENTITY_ORDER. The same call pulls: pages are applied while `more`, then the
+//   state is rebuilt from the records (and the changes still pending) and handed to onChange, so nothing
+//   stale is ever diffed.
 // - Edits made while a call is out are picked up before its answer is applied, so the rebuild keeps them.
 // - One call at a time: commit() and pull() made meanwhile share one more round after it.
 //
 // onNotice(notice, detail):
 //   'conflict'   detail: the answer's conflicts  another device wrote first; the web's copy won
 //   'forbidden'  detail: the rejected entries     refused changes, now back to the server's copy (or gone)
+//   'invalid'    detail: [{ entity, id, reason: 'too_large' }]   records too large to send, put back
 //   'offline' | 'unauthorized' | 'rate_limited' | 'server' | 'invalid'   detail: the CloudError
 //   'no_access'  detail: the CloudError (403)    the account is no longer a member of this shop
 // After a failure the changes stay pending (see `pending`) and the next commit() or pull() sends them.
 // commit() and pull() resolve true when their round went through, false when it failed or could not
-// run (before start(), after stop()). start() again reloads from cursor 0. stop() is for good (sign-out,
-// another shop): later answers are ignored and nothing runs any more.
+// run (before start(), after stop()). start() again reloads from cursor 0 and keeps changes not sent
+// yet. stop() is for good (sign-out, another shop): later answers are ignored and nothing runs any more.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -42,8 +50,12 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  // server/sync/validate.ts MAX_CHANGES_PER_REQUEST.
+  // server/sync/validate.ts: MAX_CHANGES_PER_REQUEST, MAX_RECORD_DATA_BYTES, and under MAX_BODY_BYTES (2 MB).
   const MAX_CHANGES = 500;
+  const MAX_RECORD_BYTES = 32 * 1024;
+  const MAX_BATCH_BYTES = 1.8 * 1024 * 1024;
+  // How many recent builds keep their key sets, for deletions from lists built by them.
+  const KEEP_BUILDS = 20;
   // The web state's list for each listed entity.
   const LISTS = { customer: 'customers', product: 'products', occasion: 'occasions', order: 'orders', expense: 'expenses' };
   // The settings the web edits, by setting id.
@@ -51,12 +63,18 @@
   // A 403 on the whole sync call: this account is not a member of the shop any more.
   const FAILURE_NOTICES = { forbidden: 'no_access' };
 
+  const G = typeof globalThis !== 'undefined' ? globalThis : self;
   const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const keyOf = (entity, id) => `${entity}/${id}`;
   const seqOf = v => (typeof v === 'number' && isFinite(v) ? v : 0);
   const isCloudError = e => !!e && e.name === 'CloudError' && typeof e.kind === 'string';
   // Whether a sync answer brings records or refusals, the two things that make the state be rebuilt.
   const hasNews = a => isObj(a) && ((Array.isArray(a.changes) && a.changes.length > 0) || (Array.isArray(a.rejected) && a.rejected.length > 0));
+  // UTF-8 bytes of JSON, as the server measures it.
+  const jsonBytes = v => {
+    const s = JSON.stringify(v);
+    return typeof G.TextEncoder === 'function' ? new G.TextEncoder().encode(s).length : s.length * 3;
+  };
 
   // JSON with sorted keys, so two values compare equal whatever their key order.
   function stable(v) {
@@ -82,22 +100,26 @@
     };
 
     const records = new Map(); // key → { entity, id, data, deleted, seq }: the server's copies
-    const pending = new Map(); // key → { entity, id, data, deleted }: web changes the server has not taken yet
+    // key → { entity, id, data, deleted, baseSeq, gen }: web changes the server has not taken yet
+    // (gen: the latest build when the change was made).
+    const pending = new Map();
     const keyedMeta = new Map(); // key → origin of a setting value that is not an object
-    let origins = new WeakMap(); // web object → { key, base, fromPending, fp, out }
-    let builtLists = new WeakMap(); // web list → keys it was built with
-    let builtKeys = {}; // entity → keys of the latest build
+    const tooLarge = new Map(); // key → { entity, id, reason }: changes refused here for their size
+    const buildKeys = new Map(); // build number → { entity → keys }, for the last KEEP_BUILDS builds
+    let origins = new WeakMap(); // web object → { key, base, seq, fromPending, gen, fp, out }
+    let builtLists = new WeakMap(); // web list → the build it was made by
+    let lastBuild = 0;
     let cursor = 0, membership = null;
     let started = false, stopped = false;
-    let committed = null, built = null; // the state last handed to commit(), the state last built
+    let committed = null, built = null; // the state last handed to commit()/pull(), the state last built
     let chain = Promise.resolve(), queued = null, queuedPull = false;
 
     // A record as the web sees it: its pending change if there is one, else the server's copy.
     function local(key) {
       const p = pending.get(key);
-      if (p) return p.deleted ? undefined : { data: p.data, fromPending: true };
+      if (p) return p.deleted ? undefined : { data: p.data, fromPending: true, seq: p.baseSeq };
       const r = records.get(key);
-      return r && !r.deleted ? { data: r.data, fromPending: false } : undefined;
+      return r && !r.deleted ? { data: r.data, fromPending: false, seq: r.seq } : undefined;
     }
 
     function makeCtx() {
@@ -115,12 +137,15 @@
     }
     // holder: the object the origin is kept on (the web object; for the shop, state.shop);
     // value: what xToCloud takes; fpValue: what is compared to see whether the web edited it.
-    function remember(holder, key, view, fpValue) {
-      setOrigin(holder, key, { key, base: view ? view.data : undefined, fromPending: !!(view && view.fromPending), fp: stable(fpValue), out: undefined });
+    function remember(holder, key, view, fpValue, gen) {
+      setOrigin(holder, key, {
+        key, base: view ? view.data : undefined, seq: view ? view.seq : 0, fromPending: !!(view && view.fromPending), gen, fp: stable(fpValue), out: undefined,
+      });
     }
 
     function buildState() {
       const ctx = makeCtx();
+      const gen = ++lastBuild;
       const state = { shop: null, vat: null, stockEnabled: false, products: [], customers: [], orders: [], expenses: [], occasions: [], waTemplates: null, subscription: null };
       const keys = {};
       Object.keys(LISTS).forEach(entity => { keys[entity] = new Set(); });
@@ -133,7 +158,7 @@
         const entity = record.entity, id = record.id;
         if (LISTS[entity]) {
           const obj = map[`${entity}ToWeb`](id, view.data, ctx);
-          remember(obj, key, view, obj);
+          remember(obj, key, view, obj, gen);
           state[LISTS[entity]].push(obj);
           keys[entity].add(key);
         } else if (entity === 'setting' && (WEB_SETTINGS[id] || id === 'subscription')) {
@@ -141,16 +166,17 @@
           if (id === 'subscription') state.subscription = value === undefined ? null : value;
           else {
             state[WEB_SETTINGS[id]] = value === undefined ? null : value;
-            remember(value, key, view, value);
+            remember(value, key, view, value, gen);
           }
         }
       });
       const shopView = local(SHOP_KEY);
       const shop = map.shopToWeb(shopId, shopView ? shopView.data : undefined, ctx);
       Object.assign(state, shop);
-      remember(state.shop, SHOP_KEY, shopView, shop);
-      Object.keys(LISTS).forEach(entity => builtLists.set(state[LISTS[entity]], keys[entity]));
-      builtKeys = keys;
+      remember(state.shop, SHOP_KEY, shopView, shop, gen);
+      Object.keys(LISTS).forEach(entity => builtLists.set(state[LISTS[entity]], gen));
+      buildKeys.set(gen, keys);
+      buildKeys.delete(gen - KEEP_BUILDS);
       built = state;
       return state;
     }
@@ -165,20 +191,39 @@
         return;
       }
       const p = pending.get(key);
-      if (!p || p.deleted || p.data !== data) pending.set(key, { entity, id, data, deleted: false });
+      if (p && !p.deleted && p.data === data) return;
+      if (origin.out !== undefined && jsonBytes(data) > MAX_RECORD_BYTES) {
+        pending.delete(key); // the server would refuse the whole call: keep its copy instead
+        tooLarge.set(key, { entity, id, reason: 'too_large' });
+        return;
+      }
+      pending.set(key, { entity, id, data, deleted: false, baseSeq: origin.seq, gen: lastBuild });
     }
 
     function look(entity, key, id, value, holder, fpValue, ctx) {
       let origin = getOrigin(holder, key);
       if (!origin || origin.key !== key || origin.fp !== stable(fpValue)) {
-        const from = origin && origin.key === key ? { data: origin.base, fromPending: origin.fromPending } : local(key) || { data: undefined, fromPending: false };
-        const out = map[`${entity}ToCloud`](value, from.data, ctx);
-        const edited = from.data === undefined || !same(out, from.data);
+        const from = origin && origin.key === key ? origin : local(key) || { data: undefined, fromPending: false, seq: 0 };
+        const base = origin && origin.key === key ? origin.base : from.data;
+        const out = map[`${entity}ToCloud`](value, base, ctx);
+        const edited = base === undefined || !same(out, base);
         // Taken after xToCloud, which writes new ids onto the web object.
-        origin = { key, base: from.data, fromPending: from.fromPending, fp: stable(fpValue), out: edited ? out : undefined };
+        origin = { key, base, seq: from.seq, fromPending: from.fromPending, gen: origin && origin.key === key ? origin.gen : undefined, fp: stable(fpValue), out: edited ? out : undefined };
         setOrigin(holder, key, origin);
       }
       settle(entity, id, key, origin);
+    }
+
+    // The build a list came from: its own, else its oldest member's, else the latest.
+    function buildOf(list) {
+      const own = builtLists.get(list);
+      if (own !== undefined) return own;
+      let oldest;
+      list.forEach(obj => {
+        const origin = isObj(obj) ? origins.get(obj) : undefined;
+        if (origin && origin.gen !== undefined && (oldest === undefined || origin.gen < oldest)) oldest = origin.gen;
+      });
+      return oldest === undefined ? lastBuild : oldest;
     }
 
     // Records what the web state `ws` changed as pending changes.
@@ -205,14 +250,26 @@
             seen.add(key);
             look(entity, key, obj.id, obj, obj, obj, ctx);
           });
-          // Only records this list was built with: a list from an older build never deletes newer ones.
-          (builtLists.get(list) || builtKeys[entity] || new Set()).forEach(key => {
-            const view = seen.has(key) ? undefined : local(key);
-            if (!view) return;
-            const known = records.get(key) || pending.get(key);
-            pending.set(key, { entity, id: known.id, data: view.data, deleted: true });
-          });
+          deletions(entity, list, seen);
         }
+      });
+    }
+
+    // Records the list's build had (and records the web added since) that are gone from the list.
+    function deletions(entity, list, seen) {
+      const gen = buildOf(list);
+      const keys = buildKeys.get(gen);
+      if (!keys) return; // a list from a build too old to know: delete nothing
+      const candidates = new Set(keys[entity]);
+      pending.forEach((p, key) => {
+        if (p.entity === entity && !p.deleted && !records.has(key) && p.gen <= gen) candidates.add(key);
+      });
+      candidates.forEach(key => {
+        const view = seen.has(key) ? undefined : local(key);
+        if (!view) return;
+        const r = records.get(key), p = pending.get(key);
+        if (!r || r.deleted) pending.delete(key); // the server never had it (or no longer has it)
+        else pending.set(key, { entity, id: r.id, data: view.data, deleted: true, baseSeq: p ? p.baseSeq : r.seq, gen: lastBuild });
       });
     }
 
@@ -232,17 +289,25 @@
         changed = true;
       });
       // Taken: the server now holds what was sent. Its pulled copy (on this page or a later one) brings
-      // the new seq. A change the web made again meanwhile stays pending.
+      // the new seq. A change the web made again meanwhile stays pending, based on that copy.
       sent.forEach(p => {
         const key = keyOf(p.entity, p.id);
         if (refused.has(key)) return;
         const r = records.get(key);
         records.set(key, { entity: p.entity, id: p.id, data: p.data, deleted: p.deleted, seq: r ? r.seq : 0 });
-        if (pending.get(key) === p) pending.delete(key);
+        const now = pending.get(key);
+        if (now === p) pending.delete(key);
+        else if (now) now.afterOwn = true;
       });
       (Array.isArray(a.changes) ? a.changes : []).forEach(c => {
         if (!isObj(c) || typeof c.entity !== 'string' || typeof c.id !== 'string') return;
-        records.set(keyOf(c.entity, c.id), { entity: c.entity, id: c.id, data: isObj(c.data) ? c.data : {}, deleted: c.deleted === true, seq: seqOf(c.seq) });
+        const key = keyOf(c.entity, c.id);
+        records.set(key, { entity: c.entity, id: c.id, data: isObj(c.data) ? c.data : {}, deleted: c.deleted === true, seq: seqOf(c.seq) });
+        const p = pending.get(key);
+        if (p && p.afterOwn) { // the copy of the web's own push that this change was made on top of
+          p.baseSeq = seqOf(c.seq);
+          p.afterOwn = false;
+        }
         changed = true;
       });
       if (Number.isInteger(a.cursor) && a.cursor > cursor) cursor = a.cursor;
@@ -252,24 +317,46 @@
       return changed;
     }
 
+    // The next call's changes: due and not sent yet, in entity order, at most 500 and ~1.8 MB.
+    function nextBatch(due, sent) {
+      const waiting = due.filter(key => !sent.has(key) && pending.has(key)).map(key => pending.get(key));
+      waiting.sort((a, b) => entityRank(a.entity) - entityRank(b.entity));
+      const batch = [];
+      let bytes = 0;
+      for (const p of waiting) {
+        const size = jsonBytes(p.data) + 200;
+        if (batch.length && (batch.length === MAX_CHANGES || bytes + size > MAX_BATCH_BYTES)) break;
+        batch.push(p);
+        bytes += size;
+      }
+      return batch;
+    }
+
     const liveState = () => committed || built;
     const publish = () => onChange(buildState());
+    function reportTooLarge() {
+      if (!tooLarge.size) return;
+      const list = Array.from(tooLarge.values());
+      tooLarge.clear();
+      onNotice('invalid', list);
+    }
 
     async function round(mustCall) {
       if (stopped) return false;
       capture(liveState());
       const due = Array.from(pending.keys());
-      if (!due.length && !mustCall) return true;
+      if (!due.length && !mustCall) {
+        if (tooLarge.size) {
+          publish(); // puts back the server copy of what was too large to send
+          reportTooLarge();
+        }
+        return true;
+      }
       const sent = new Set(), notices = [];
-      let changed = false;
+      let changed = tooLarge.size > 0;
       for (;;) {
-        const batch = due.filter(key => !sent.has(key) && pending.has(key)).map(key => pending.get(key));
-        batch.sort((a, b) => entityRank(a.entity) - entityRank(b.entity));
-        batch.splice(MAX_CHANGES);
-        const changes = batch.map(p => {
-          const r = records.get(keyOf(p.entity, p.id));
-          return { entity: p.entity, id: p.id, data: p.data, deleted: p.deleted, baseSeq: r ? r.seq : 0 };
-        });
+        const batch = nextBatch(due, sent);
+        const changes = batch.map(p => ({ entity: p.entity, id: p.id, data: p.data, deleted: p.deleted, baseSeq: (records.get(keyOf(p.entity, p.id)) || { seq: 0 }).seq }));
         const from = cursor;
         let answer;
         try {
@@ -279,6 +366,7 @@
           if (changed) {
             capture(liveState()); // edits made while this call was out
             publish(); // the pages this round did apply
+            reportTooLarge();
           }
           if (!isCloudError(error)) throw error;
           onNotice(FAILURE_NOTICES[error.kind] || error.kind, error);
@@ -295,13 +383,15 @@
         if (!unsent && !(isObj(answer) && answer.more && cursor > from)) break;
       }
       if (changed) publish();
+      reportTooLarge();
       notices.forEach(([notice, detail]) => onNotice(notice, detail));
       return true;
     }
 
     // Runs after the round in progress; calls made meanwhile share that one round.
-    function schedule(pull) {
+    function schedule(pull, webState) {
       if (!started || stopped) return Promise.resolve(false);
+      if (isObj(webState)) committed = webState;
       queuedPull = queuedPull || pull;
       if (!queued) {
         queued = chain.then(() => {
@@ -315,14 +405,15 @@
       return queued;
     }
 
+    // Changes not sent yet survive a reload: they stay pending and are laid over the fresh records.
     function start() {
       const run = chain.then(async () => {
         records.clear();
-        pending.clear();
         keyedMeta.clear();
+        tooLarge.clear();
+        buildKeys.clear();
         origins = new WeakMap();
         builtLists = new WeakMap();
-        builtKeys = {};
         cursor = 0;
         membership = null;
         started = false;
@@ -345,11 +436,8 @@
 
     return {
       start,
-      commit(webState) {
-        if (started && !stopped && isObj(webState)) committed = webState;
-        return schedule(false);
-      },
-      pull: () => schedule(true),
+      commit: webState => schedule(false, webState),
+      pull: webState => schedule(true, webState),
       buildState,
       stop() { stopped = true; },
       get membership() { return membership; },
