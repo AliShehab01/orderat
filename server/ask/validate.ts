@@ -13,7 +13,8 @@ const MAX_INSTALL_ID_CHARS = 200;
 const MAX_APP_VERSION_CHARS = 32;
 
 export type Lang = "ar" | "en";
-export type Platform = "ios" | "android";
+/** "web" is the browser web app at https://orderatweb.com/app/. */
+export type Platform = "ios" | "android" | "web";
 /** How Arabic answers address the seller; the apps default to "male" (a setting can switch it). */
 export type AddressAs = "male" | "female";
 export type HistoryRole = "user" | "assistant";
@@ -84,7 +85,7 @@ export function validateAskBody(raw: string): AskValidationResult {
   const { installId, platform, appVersion, lang, demo, addressAs, question, history, snapshot } = json;
 
   if (!isNonEmptyString(installId, MAX_INSTALL_ID_CHARS)) return invalid();
-  if (platform !== "ios" && platform !== "android") return invalid();
+  if (platform !== "ios" && platform !== "android" && platform !== "web") return invalid();
   if (!isNonEmptyString(appVersion, MAX_APP_VERSION_CHARS)) return invalid();
   if (lang !== "ar" && lang !== "en") return invalid();
   if (demo !== undefined && typeof demo !== "boolean") return invalid();

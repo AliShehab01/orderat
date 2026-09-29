@@ -51,8 +51,14 @@ describe("validateParseBody", () => {
     expect(validateParseBody(JSON.stringify(baseBody({ products: [{ id: "p1" }] })))).toEqual({ ok: false, error: "invalid_body" });
   });
 
-  it("rejects platform values outside ios/android", () => {
-    expect(validateParseBody(JSON.stringify(baseBody({ platform: "web" })))).toEqual({ ok: false, error: "invalid_body" });
+  // "web" is the browser web app at https://orderatweb.com/app/, calling the same function as the phones.
+  it.each(["ios", "android", "web"])("accepts the platform %s", (platform) => {
+    const result = validateParseBody(JSON.stringify(baseBody({ platform })));
+    expect(result.ok && result.body.platform).toBe(platform);
+  });
+
+  it("rejects platform values outside ios/android/web", () => {
+    expect(validateParseBody(JSON.stringify(baseBody({ platform: "windows" })))).toEqual({ ok: false, error: "invalid_body" });
   });
 
   it("defaults demo to false and accepts demo: true", () => {

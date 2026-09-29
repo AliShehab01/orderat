@@ -126,6 +126,12 @@ describe("validateStudioBody / caption", () => {
     expect(validateStudioBody(validCaption({ shopName: "a".repeat(61) })).ok).toBe(false);
   });
 
+  // "web" is the browser web app at https://orderatweb.com/app/, calling the same function as the phones.
+  it("accepts the web platform", () => {
+    const result = validateStudioBody(validCaption({ platform: "web" }));
+    expect(result.ok && result.body.platform).toBe("web");
+  });
+
   it("rejects an unknown platform", () => {
     expect(validateStudioBody(validCaption({ platform: "windows" })).ok).toBe(false);
   });
@@ -172,6 +178,15 @@ describe("validateStudioBody / photo", () => {
 
   it("rejects an empty styleId", () => {
     expect(validateStudioBody(validPhoto({ styleId: "" })).ok).toBe(false);
+  });
+
+  it("accepts the web platform", () => {
+    const result = validateStudioBody(validPhoto({ platform: "web" }));
+    expect(result.ok && result.body.platform).toBe("web");
+  });
+
+  it("rejects an unknown platform", () => {
+    expect(validateStudioBody(validPhoto({ platform: "windows" })).ok).toBe(false);
   });
 });
 

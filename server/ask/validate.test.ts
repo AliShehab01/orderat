@@ -101,8 +101,14 @@ describe("validateAskBody", () => {
     });
   }
 
+  // "web" is the browser web app at https://orderatweb.com/app/, calling the same function as the phones.
+  it("accepts the web platform", () => {
+    const result = validateAskBody(JSON.stringify(validBody({ platform: "web" })));
+    expect(result.ok && result.body.platform).toBe("web");
+  });
+
   it("rejects an unknown platform", () => {
-    expect(validateAskBody(JSON.stringify(validBody({ platform: "web" }))).ok).toBe(false);
+    expect(validateAskBody(JSON.stringify(validBody({ platform: "windows" }))).ok).toBe(false);
   });
 
   it("rejects an unknown lang", () => {

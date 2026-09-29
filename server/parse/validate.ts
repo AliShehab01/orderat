@@ -17,7 +17,8 @@ const MAX_PRODUCT_NAME_CHARS = 200;
 const MAX_ALIASES_PER_PRODUCT = 20;
 const MAX_ALIAS_CHARS = 100;
 
-export type ParsePlatform = "ios" | "android";
+/** "web" is the browser web app at https://orderatweb.com/app/. */
+export type ParsePlatform = "ios" | "android" | "web";
 export type ParseLang = "ar" | "en";
 export type AddressAs = "male" | "female";
 
@@ -108,7 +109,7 @@ export function validateParseBody(raw: string): ParseValidationResult {
   if (!isPlainObject(json)) return invalid();
 
   if (!isNonEmptyString(json.installId, MAX_INSTALL_ID_CHARS)) return invalid();
-  if (json.platform !== "ios" && json.platform !== "android") return invalid();
+  if (json.platform !== "ios" && json.platform !== "android" && json.platform !== "web") return invalid();
   if (!isNonEmptyString(json.appVersion, MAX_APP_VERSION_CHARS)) return invalid();
   if (json.demo !== undefined && typeof json.demo !== "boolean") return invalid();
   if (json.lang !== undefined && json.lang !== "ar" && json.lang !== "en") return invalid();

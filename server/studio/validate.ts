@@ -21,7 +21,8 @@ const MAX_STYLE_ID_CHARS = 100;
 const MIN_ITEMS = 1;
 const MAX_ITEMS = 5;
 
-export type Platform = "ios" | "android";
+/** "web" is the browser web app at https://orderatweb.com/app/. */
+export type Platform = "ios" | "android" | "web";
 export type StudioLang = "ar" | "en";
 export type Channel = "instagram" | "whatsapp_status" | "tiktok";
 export type Aspect = "1:1" | "4:5" | "9:16";
@@ -88,7 +89,7 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function commonFieldsOk(json: Record<string, unknown>): boolean {
   if (!isNonEmptyString(json.installId, MAX_INSTALL_ID_CHARS)) return false;
-  if (json.platform !== "ios" && json.platform !== "android") return false;
+  if (json.platform !== "ios" && json.platform !== "android" && json.platform !== "web") return false;
   if (!isNonEmptyString(json.appVersion, MAX_APP_VERSION_CHARS)) return false;
   if (json.demo !== undefined && typeof json.demo !== "boolean") return false;
   return true;
