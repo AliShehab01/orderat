@@ -4,8 +4,8 @@
 // URL: https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-sync
 //
 // Called directly by the iPhone/Android apps and by the browser web app at
-// https://orderat-app.pages.dev/app/, authenticated by X-Orderat-Session either way — so the handler
-// is wrapped with withAppCors (server/shared/cors.ts), which allows that site's origin (and localhost
+// https://orderatweb.com/app/, authenticated by X-Orderat-Session either way — so the handler
+// is wrapped with withAppCors (server/shared/cors.ts), which allows the site's origins (and localhost
 // for development) and leaves the phones, which send no Origin header, exactly as they were. All the
 // actual logic (push/pull, permissions, invites, members) is the same server/sync/handler.ts a test
 // can exercise directly; this file only wires it to real dependencies.

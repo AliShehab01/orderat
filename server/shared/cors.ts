@@ -8,33 +8,29 @@
 // because, unlike the owner page, docs/marketing-tools.md pins the allow-list itself.
 //
 // withAppCors (below) is the same idea for the Orderat web app (docs/superpowers/specs/
-// 2026-09-29-orderat-web-design.md): a browser page at orderat-app.pages.dev/app/ that calls
-// orderat-auth, orderat-sync, orderat-parse, orderat-ask and orderat-studio directly (the signed-in
-// actions carry the seller's session in X-Orderat-Session). It differs from withPublicCors only in its
-// allow-list: just the site itself (not the older GitHub Pages copy), POST only, and one more allowed
-// header. The phones call those same functions with no Origin header at all, so they are never
-// "allowed" here and never see a CORS header — their responses stay exactly what the handler
-// returned, plus Vary.
+// 2026-09-29-orderat-web-design.md): a browser page at orderatweb.com/app/ that calls orderat-auth,
+// orderat-sync, orderat-parse, orderat-ask and orderat-studio directly (the signed-in actions carry
+// the seller's session in X-Orderat-Session). It differs from withPublicCors only in its allow-list:
+// just the site itself (not the older GitHub Pages copy), POST only, and one more allowed header. The
+// phones call those same functions with no Origin header at all, so they are never "allowed" here and
+// never see a CORS header — their responses stay exactly what the handler returned, plus Vary.
 
 const ALLOWED_METHODS = "GET, POST, OPTIONS";
 // Lower-case per docs/marketing-tools.md's exact wording; header names are case-insensitive on the
 // wire, so this is only ever compared/read case-insensitively, never relied on verbatim.
 const ALLOWED_HEADERS = "apikey, authorization, content-type";
-// The site: orderatweb.com (shop links point there since 2026-09-29), its www form, its original
-// Cloudflare address orderat-app.pages.dev, and the old GitHub
-// Pages copy, so shop links sellers shared before the move keep working.
-const PUBLISHED_ORIGINS: readonly string[] = [
-  "https://orderatweb.com",
-  "https://www.orderatweb.com",
-  "https://orderat-app.pages.dev",
-  "https://alishehab01.github.io",
-];
+/** The site, at each address it answers on: orderatweb.com (the site, shop links and the web app
+ * since 2026-09-29), its www form, and its original Cloudflare address orderat-app.pages.dev (which
+ * now forwards visitors to orderatweb.com). The one list both allow-lists below derive from, so a new
+ * address for the site is one more line here and nowhere else. */
+const SITE_ORIGINS: readonly string[] = ["https://orderatweb.com", "https://www.orderatweb.com", "https://orderat-app.pages.dev"];
+// The site plus the old GitHub Pages copy, so shop links sellers shared before the move keep working.
+const PUBLISHED_ORIGINS: readonly string[] = [...SITE_ORIGINS, "https://alishehab01.github.io"];
 // http only (not https), per docs/marketing-tools.md — a local dev server for the shop page.
 const LOCAL_ORIGIN_RE = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/;
 
-/** The Orderat web app's origin. One shared list, so the day the app also lives on its own domain
- * that domain is one more line here (and nowhere else). */
-export const APP_ORIGINS: readonly string[] = ["https://orderat-app.pages.dev"];
+/** The Orderat web app's origins: the site itself (SITE_ORIGINS), never the older GitHub Pages copy. */
+export const APP_ORIGINS: readonly string[] = SITE_ORIGINS;
 // The web app only ever POSTs — every function it calls answers POST only — so nothing else is offered.
 const APP_ALLOWED_METHODS = "POST, OPTIONS";
 // apikey + authorization are the Supabase gateway's anon key, sent exactly as the phones send it;
@@ -55,8 +51,9 @@ function isAllowedOrigin(origin: string | null, origins: readonly string[]): ori
 /**
  * The mechanics both wrappers below share: answers an OPTIONS preflight itself (never reaching
  * `handler`), and adds Access-Control-Allow-Origin (only for an allowed Origin) plus Vary: Origin to
- * every response. A request with no Origin header at all is simply not allowed: an OPTIONS from it
- * gets the 403, anything else gets the handler's own response with only Vary added.
+ * every response — appended to any Vary the handler already set, never replacing it. A request with
+ * no Origin header at all is simply not allowed: an OPTIONS from it gets the 403, anything else gets
+ * the handler's own response with only Vary added.
  */
 function withCors(policy: CorsPolicy, handler: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   return async (req) => {
@@ -76,7 +73,7 @@ function withCors(policy: CorsPolicy, handler: (req: Request) => Promise<Respons
 
     const res = await handler(req);
     const headers = new Headers(res.headers);
-    headers.set("Vary", "Origin");
+    headers.append("Vary", "Origin");
     if (allowed) headers.set("Access-Control-Allow-Origin", origin);
     return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
   };

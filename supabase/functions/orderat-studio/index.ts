@@ -4,9 +4,9 @@
 // URL: https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-studio
 //
 // Called directly by the iPhone/Android apps and by the browser web app at
-// https://orderat-app.pages.dev/app/ — so the handler is wrapped with withAppCors
+// https://orderatweb.com/app/ — so the handler is wrapped with withAppCors
 // (server/shared/cors.ts) here, rather than applying its own CORS inside the factory the way
-// orderat-campaigns and orderat-shop do; it allows that site's origin (and localhost for development)
+// orderat-campaigns and orderat-shop do; it allows the site's origins (and localhost for development)
 // and leaves the phones, which send no Origin header, exactly as they were. All the actual logic (body
 // validation, content lookups, rate limiting, both Gemini calls) is the same server/studio/handler.ts
 // a test can exercise directly; this file only wires it to real dependencies. See

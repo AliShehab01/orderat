@@ -3,9 +3,9 @@
 // URL: https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-ask
 //
 // Called directly by the iPhone/Android apps (not a Meta webhook) and by the browser web app at
-// https://orderat-app.pages.dev/app/, with `apikey` + `Authorization: Bearer <anon key>` like the
+// https://orderatweb.com/app/, with `apikey` + `Authorization: Bearer <anon key>` like the
 // other orderat functions — so the handler is wrapped with withAppCors (server/shared/cors.ts), which
-// allows that site's origin (and localhost for development) and leaves the phones, which send no
+// allows the site's origins (and localhost for development) and leaves the phones, which send no
 // Origin header, exactly as they were. See supabase/functions/orderat-whatsapp/index.ts for notes on
 // the import layout, --use-api and the orderat- / ORDERAT_ prefixing this shares with the other three
 // functions. All the actual logic (body validation, rate limiting, the Gemini call, action
