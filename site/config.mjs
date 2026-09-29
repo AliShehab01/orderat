@@ -4,7 +4,7 @@
 // 2. Store links at launch: fill in STORE_LINKS below (one object, one line each).
 //    While a link is null, pages show a "coming soon" badge instead of a store button.
 
-export const SITE_URL = process.env.SITE_URL || "https://orderat-app.pages.dev";
+export const SITE_URL = process.env.SITE_URL || "https://orderatweb.com";
 
 /** @type {{ ios: string | null, android: string | null }} */
 export const STORE_LINKS = {

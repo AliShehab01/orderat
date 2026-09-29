@@ -1,6 +1,6 @@
 'use strict';
 // Orderat web demo: the phone app's five tabs (Today, Orders, New order, Money, Shop) in the browser,
-// matching what https://orderat-app.pages.dev shows. Everything is stored in this browser's
+// matching what https://orderatweb.com shows. Everything is stored in this browser's
 // localStorage. AI, sign-in, sync, publishing and payments are simulated, and each screen that fakes
 // one says so. Labels live in i18n.js, the demo shops in demo.js.
 
@@ -8,8 +8,8 @@ const STORE_KEY = 'orderat.web.v1';
 const CAMPAIGNS_KEY = 'orderat.web.campaigns';
 // The same occasion feed the apps get from orderat-campaigns, read straight from the public repo.
 const CAMPAIGNS_URL = 'https://raw.githubusercontent.com/AliShehab01/orderat/main/content/campaigns.json';
-const SITE_URL = 'https://orderat-app.pages.dev';
-const SHOP_PAGE = 'https://alishehab01.github.io/orderat/s/?';
+const SITE_URL = 'https://orderatweb.com';
+const SHOP_PAGE = 'https://orderatweb.com/s/?';
 const TRIAL_DAYS = 7;
 const PRICE = { monthly: 9.99, yearly: 79.99 };
 const CURRENCIES = { BHD: [3, 'BH'], SAR: [2, 'SA'], AED: [2, 'AE'], OMR: [3, 'OM'], KWD: [3, 'KW'], QAR: [2, 'QA'] };
