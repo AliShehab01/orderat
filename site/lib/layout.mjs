@@ -115,6 +115,7 @@ export function renderPage({ lang, slug, title, description, bodyHtml, jsonLd: e
 <html lang="${lang}" dir="${dir}">
 <head>
 <meta charset="utf-8">
+<script>if(location.hostname==='orderat-app.pages.dev')location.replace('https://orderatweb.com'+location.pathname+location.search+location.hash)</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="${escAttr(BRAND.themeColor)}">
 ${headTags({ lang, slug, title, description, ogImage, noEnglish })}

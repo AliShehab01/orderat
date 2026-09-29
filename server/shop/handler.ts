@@ -56,7 +56,7 @@ export type UploadPhoto = (args: { shopId: string; photoId: string; bytes: Uint8
 
 export interface ShopHandlerDeps {
   sql: SqlClient;
-  /** Base for the public shop link, e.g. "https://alishehab01.github.io/orderat/s/?" — the response's
+  /** Base for the public shop link, e.g. "https://orderatweb.com/s/?" — the response's
    * `url` is this plus the slug, with nothing else appended or encoded (a slug is already
    * URL-safe by construction — server/shop/slug.ts's format). */
   shopBaseUrl: string;
