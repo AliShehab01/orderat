@@ -11,7 +11,7 @@ function handlerReturning(body: string, headers: Record<string, string> = {}) {
 describe("withPublicCors", () => {
   it("reflects the site's origin, where shop links point", async () => {
     const wrapped = withPublicCors(handlerReturning("ok"));
-    const site = "https://orderat-app.pages.dev";
+    const site = "https://orderatweb.com";
     const res = await wrapped(new Request("https://x.supabase.co/functions/v1/orderat-shop", { headers: { origin: site } }));
     expect(res.headers.get("access-control-allow-origin")).toBe(site);
   });

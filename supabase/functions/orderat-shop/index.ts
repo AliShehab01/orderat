@@ -51,7 +51,7 @@ const uploadPhoto: UploadPhoto = async ({ shopId, photoId, bytes, mimeType }) =>
 };
 
 // docs/marketing-tools.md's default, used whenever ORDERAT_SHOP_BASE_URL isn't set.
-const shopBaseUrl = env("SHOP_BASE_URL") || "https://orderat-app.pages.dev/s/?";
+const shopBaseUrl = env("SHOP_BASE_URL") || "https://orderatweb.com/s/?";
 
 // docs/marketing-tools.md: "fallback: derive from another secret or a constant with a comment; never
 // crash if missing." Prefers a dedicated ORDERAT_SHOP_IP_SALT; failing that, derives one from the

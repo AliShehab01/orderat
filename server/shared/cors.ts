@@ -20,9 +20,15 @@ const ALLOWED_METHODS = "GET, POST, OPTIONS";
 // Lower-case per docs/marketing-tools.md's exact wording; header names are case-insensitive on the
 // wire, so this is only ever compared/read case-insensitively, never relied on verbatim.
 const ALLOWED_HEADERS = "apikey, authorization, content-type";
-// The site (orderat-app.pages.dev, where shop links point since 2026-09-29) and the old GitHub
+// The site: orderatweb.com (shop links point there since 2026-09-29), its www form, its original
+// Cloudflare address orderat-app.pages.dev, and the old GitHub
 // Pages copy, so shop links sellers shared before the move keep working.
-const PUBLISHED_ORIGINS: readonly string[] = ["https://orderat-app.pages.dev", "https://alishehab01.github.io"];
+const PUBLISHED_ORIGINS: readonly string[] = [
+  "https://orderatweb.com",
+  "https://www.orderatweb.com",
+  "https://orderat-app.pages.dev",
+  "https://alishehab01.github.io",
+];
 // http only (not https), per docs/marketing-tools.md — a local dev server for the shop page.
 const LOCAL_ORIGIN_RE = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/;
 
