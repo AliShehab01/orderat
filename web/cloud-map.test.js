@@ -195,7 +195,20 @@ describe('product', () => {
       id: PRODUCT_ID, nameAr: 'كيك إسفنجي بالفانيليا', nameEn: 'Vanilla Sponge Cake', aliases: ['كيك فانيليا', 'vanilla cake'],
       price: 6.5, cost: 2.5, cap: 6, active: true, track: true, qty: 14, low: 4,
       photoId: '3f5a9c2e7b1d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a',
+      stockMoves: productRecord().stockMoves,
     });
+  });
+
+  it('writes a stock move the web added (the phones\' shape, newest first) and keeps the older ones as they are', () => {
+    const raw = productRecord();
+    const web = map.productToWeb(PRODUCT_ID, raw, BHD);
+    const move = { id: 'cc33dd44-ee55-4f66-8a77-112233445566', delta: -1, reason: 'orderConfirmed', orderId: ORDER_ID, note: null, at: NOW.toISOString() };
+    web.qty = 13;
+    web.stockMoves = [move].concat(web.stockMoves);
+    expect(map.productToCloud(web, raw, BHD)).toStrictEqual({ ...raw, stockQuantity: 13, stockMoves: [move, ...raw.stockMoves] });
+    const sparse = frozen({ nameAr: 'كرك', priceMinor: 300, createdAt: '2026-03-01T06:00:00.000Z' });
+    expect(map.productToWeb(PRODUCT_ID, sparse, BHD).stockMoves).toEqual([]);
+    expect(roundTrip('product', PRODUCT_ID, sparse, BHD)).toStrictEqual(sparse);
   });
 
   it('round-trips unchanged, also an Android record without aliases or photoId', () => {

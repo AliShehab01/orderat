@@ -5,7 +5,7 @@
 // xToWeb(id, data, ctx) reads a record. xToCloud(webObj, rawData, ctx) writes one back, starting from a
 // copy of rawData (the last cloud data for that id, undefined for a new record) and overwriting only the
 // fields the web owns, so:
-// - unknown keys, and the known ones the web does not own (address.block, stockMoves, ...),
+// - unknown keys, and the known ones the web does not own (address.block, receiptPhotoId, ...),
 //   survive a web edit;
 // - a field the web did not change keeps its exact raw form (null or missing, another app's date format,
 //   an enum code this build does not know), so toCloud(toWeb(raw), raw) deep-equals raw for any record
@@ -234,14 +234,19 @@
     ['active', 'active', flag(true)], ['track', 'trackStock', flag(false)], ['qty', 'stockQuantity', int(0)],
     ['low', 'lowStockThreshold', int(3)], ['photoId', 'photoId', nullableText],
   ];
+  // stockMoves is the phones' stock history ({ id, delta, reason, orderId, note, at }, newest first, the
+  // last 50), passed through as it is: the web prepends a move when it applies stock for an order.
   function productToWeb(id, data, ctx) {
-    return readFields(productFields(decimalsOf(ctx)), obj(data), { id });
+    const d = obj(data), web = readFields(productFields(decimalsOf(ctx)), d, { id });
+    web.stockMoves = clone(objects(d.stockMoves));
+    return web;
   }
-  // Keeps stockMoves (the phones' stock history) and createdAt.
+  // Keeps createdAt, and stockMoves unless the web changed the list.
   function productToCloud(p, raw, ctx) {
-    const isNew = !isObj(raw), out = start(raw);
-    putFields(productFields(decimalsOf(ctx)), obj(p), out, obj(raw), isNew);
-    if (isNew) Object.assign(out, { stockMoves: [], createdAt: nowIso(ctx) });
+    const isNew = !isObj(raw), out = start(raw), w = obj(p);
+    putFields(productFields(decimalsOf(ctx)), w, out, obj(raw), isNew);
+    if (!isNew && w.stockMoves !== undefined) putList(out, obj(raw), 'stockMoves', clone(objects(w.stockMoves)), false);
+    if (isNew) Object.assign(out, { stockMoves: clone(objects(w.stockMoves)), createdAt: nowIso(ctx) });
     return out;
   }
 
