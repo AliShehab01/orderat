@@ -1,8 +1,9 @@
-// Small crypto primitives shared by orderat-studio (nothing yet, reserved for future use) and
-// orderat-shop (edit tokens, photo dedupe ids, IP hashing for rate limits): SHA-256 hashing and
-// random token generation, both via the Web Crypto API (`crypto.subtle`, `crypto.getRandomValues`)
-// so the same code runs unchanged under Deno and under Node 22's global `crypto` — no `node:crypto`
-// import, which wouldn't resolve the same way under Deno's own global.
+// Small crypto primitives shared by orderat-studio (nothing yet, reserved for future use),
+// orderat-shop (edit tokens, photo dedupe ids, IP hashing for rate limits) and orderat-auth (token
+// hashes, IP hashing for pair_start's rate limit): SHA-256 hashing and random token generation, both
+// via the Web Crypto API (`crypto.subtle`, `crypto.getRandomValues`) so the same code runs unchanged
+// under Deno and under Node 22's global `crypto` — no `node:crypto` import, which wouldn't resolve the
+// same way under Deno's own global.
 
 const HEX = "0123456789abcdef";
 
@@ -28,6 +29,16 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
  * (server/shop/rate-limit.ts) — raw IPs and tokens are never stored, only these hashes. */
 export function sha256HexOfString(value: string): Promise<string> {
   return sha256Hex(new TextEncoder().encode(value));
+}
+
+/** A request's client IP as a per-IP rate limit keys it: `x-forwarded-for`'s first entry (Supabase
+ * sets this) — the original client, before any proxy — hashed with the server's salt before ever
+ * touching a row, never the raw IP. Falls back to a fixed bucket, "unknown", when the header is absent
+ * (local testing, or a direct call) so rate limiting still applies, just coarsely. */
+export function hashClientIp(req: Request, ipSalt: string): Promise<string> {
+  const forwardedFor = req.headers.get("x-forwarded-for");
+  const ip = forwardedFor?.split(",")[0]?.trim() || "unknown";
+  return sha256HexOfString(`${ipSalt}:${ip}`);
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {

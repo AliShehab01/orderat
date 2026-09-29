@@ -46,6 +46,8 @@ export const ALLOWLIST = [
   "APPLE_AUDIENCES",
   "GOOGLE_AUDIENCES",
   "PARSE_DAILY_CAP",
+  // orderat-auth's pair_start rate limit (optional; derived from the database URL when unset).
+  "AUTH_IP_SALT",
 ];
 
 // Local-only convenience flags (server/dev.ts, server/whatsapp/webhook.ts, server/instagram/config.ts)

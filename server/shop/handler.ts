@@ -13,7 +13,7 @@
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { todayInRiyadh } from "../campaigns/content.ts";
-import { newEditToken, sha256HexOfString } from "../shared/crypto.ts";
+import { hashClientIp, newEditToken } from "../shared/crypto.ts";
 import { withPublicCors } from "../shared/cors.ts";
 import { referencedPhotoIds, resolveShopDoc, validateShopDoc } from "./doc.ts";
 import {
@@ -87,15 +87,6 @@ const slugTakenResponse = () => jsonResponse({ error: "slug_taken" }, 409);
 const tooLargeResponse = () => jsonResponse({ error: "too_large" }, 413);
 const rateLimitedResponse = () => jsonResponse({ error: "rate_limited" }, 429);
 const uploadFailedResponse = () => jsonResponse({ error: "ai_unavailable" }, 502);
-
-/** `x-forwarded-for`'s first entry (Supabase sets this) — the original client, before any proxy —
- * hashed with the server's salt before ever touching a row. Falls back to a fixed bucket when the
- * header is absent (local testing, or a direct call) so rate limiting still applies, just coarsely. */
-function hashClientIp(req: Request, ipSalt: string): Promise<string> {
-  const forwardedFor = req.headers.get("x-forwarded-for");
-  const ip = forwardedFor?.split(",")[0]?.trim() || "unknown";
-  return sha256HexOfString(`${ipSalt}:${ip}`);
-}
 
 export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Promise<Response> {
   const log = deps.log ?? console.log;

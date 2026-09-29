@@ -190,11 +190,26 @@ export async function newPollToken(): Promise<{ pollToken: string; pollHash: str
   return { pollToken: token, pollHash: tokenHash };
 }
 
-/** Deletes every pairing whose five minutes are up (expires_at <= now), whatever its status. Every
- * pairing call runs this first, so the table only holds pairings still in progress, and an approved
- * pairing whose website never came back for its session takes that raw session token with it. */
+/** Deletes every pairing whose time is up (expires_at <= now, found through
+ * web_pairings_expires_at_idx), whatever its status. Every pairing call runs this first, so the table
+ * only holds pairings still in progress. An approved pairing whose website never came back for its
+ * session takes that raw session token with it, and the session, started for nobody, is revoked. */
 export async function deleteExpiredPairings(sql: SqlClient, now: Date): Promise<void> {
-  await sql.query(`delete from orderat.web_pairings where expires_at <= $1`, [now.toISOString()]);
+  const deleted = await sql.query<{ session_token: string | null }>(
+    `delete from orderat.web_pairings where expires_at <= $1 returning session_token`,
+    [now.toISOString()],
+  );
+  // Only an approved, uncollected pairing still holds its token; a collected one's was cleared on the poll.
+  for (const { session_token: sessionToken } of deleted) if (sessionToken) await revokeSession(sql, sessionToken);
+}
+
+/** How many pairings are pending (not yet approved) and unexpired: what pair_start caps. */
+export async function countPendingPairings(sql: SqlClient, now: Date): Promise<number> {
+  const rows = await sql.query<{ total: number }>(
+    `select count(*)::int as total from orderat.web_pairings where status = 'pending' and expires_at > $1`,
+    [now.toISOString()],
+  );
+  return rows[0]!.total;
 }
 
 /** Inserts a new pending pairing, or, when `code` is already another pending pairing's
@@ -225,14 +240,17 @@ export async function findPendingPairingByCode(sql: SqlClient, code: string, now
 /** Marks pairing `id` approved by `userId`, holding `sessionToken` (the raw token of the web session
  * just created for it) for the website's next poll, but only while it is still pending and unexpired.
  * One conditional UPDATE, so of two phones approving the same code at once only one wins; false, with
- * nothing changed, for the other (or for a pairing whose five minutes ran out). */
+ * nothing changed, for the other (or for a pairing whose five minutes ran out). An approval in the
+ * pairing's last minute moves its expiry to a minute after the approval, so the website's next poll
+ * can still collect the session. */
 export async function approvePairing(
   sql: SqlClient,
   input: { id: string; userId: string; sessionToken: string; now: Date },
 ): Promise<boolean> {
   const rows = await sql.query(
     `update orderat.web_pairings
-        set status = 'approved', user_id = $2, session_token = $3, approved_at = $4
+        set status = 'approved', user_id = $2, session_token = $3, approved_at = $4,
+            expires_at = greatest(expires_at, $4::timestamptz + interval '60 seconds')
       where id = $1 and status = 'pending' and expires_at > $4
       returning id`,
     [input.id, input.userId, input.sessionToken, input.now.toISOString()],

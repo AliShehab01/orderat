@@ -17,10 +17,12 @@ import { createAuthHandler } from "../../../server/auth/handler.ts";
 import { createJwksCache } from "../../../server/auth/jwks.ts";
 import { APPLE_JWKS_URL, GOOGLE_JWKS_URL, resolveAudiences } from "../../../server/auth/providers.ts";
 import { withAppCors } from "../../../server/shared/cors.ts";
+import { sha256HexOfString } from "../../../server/shared/crypto.ts";
 import { orderatEnv as env } from "../_shared/env.ts";
 import { getSqlClient } from "../_shared/db.ts";
 
-const sql = getSqlClient(env("DATABASE_URL") ?? "");
+const databaseUrl = env("DATABASE_URL") ?? "";
+const sql = getSqlClient(databaseUrl);
 
 // One cache per provider, held at module scope so it's reused across every request this isolate
 // handles (server/auth/jwks.ts's own reasoning) instead of refetching the JWKS on every signin.
@@ -37,6 +39,13 @@ const appleAudiences = resolveAudiences(env("APPLE_AUDIENCES"), ["com.ams.ordera
 // are public identifiers, not secrets.
 const googleAudiences = resolveAudiences(env("GOOGLE_AUDIENCES"), ["799835600648-rj4qq9ia615jfob5eg6k4lgop3aq3i6l.apps.googleusercontent.com"]);
 
-const handler = withAppCors(createAuthHandler({ sql, appleJwks, googleJwks, appleAudiences, googleAudiences }));
+// The salt pair_start's per-IP rate limit hashes a client IP with, so no row ever holds the IP (the
+// same approach as orderat-shop's ORDERAT_SHOP_IP_SALT). A dedicated ORDERAT_AUTH_IP_SALT if set;
+// otherwise a one-way hash of the database URL, a secret this function already holds, so the salt is
+// still unknown to anyone reading only the database. If that URL ever changes, the one-minute windows
+// simply start over.
+const ipSalt = env("AUTH_IP_SALT") || (await sha256HexOfString(`orderat-auth-ip-salt:${databaseUrl}`));
+
+const handler = withAppCors(createAuthHandler({ sql, appleJwks, googleJwks, appleAudiences, googleAudiences, ipSalt }));
 
 Deno.serve((req) => handler(req));

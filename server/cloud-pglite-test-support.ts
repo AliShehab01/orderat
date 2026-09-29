@@ -28,6 +28,7 @@ const CLOUD_TABLES = [
   "orderat.sessions",
   "orderat.sync_rate_limit",
   "orderat.web_pairings",
+  "orderat.pair_start_rate_limit",
   "orderat.pair_approve_rate_limit",
   // shop_members/invites/records reference orderat.shops_cloud, so truncating shops_cloud must
   // cascade to them too — plain `truncate ... cascade` (rather than listing every dependent table)

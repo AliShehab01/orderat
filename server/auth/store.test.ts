@@ -383,6 +383,64 @@ describe("web pairings", () => {
     expect(await pairingRow(OTHER_PAIR_ID)).toBeDefined();
   });
 
+  it("gives a pairing approved in its last minute a minute from the approval for the website to collect it", async () => {
+    const user = await phoneUser();
+    await startPairing();
+    const lastSecond = new Date(EXPIRES_AT.getTime() - 1000);
+
+    expect(await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: lastSecond })).toBe(true);
+
+    expect(new Date((await pairingRow())!.expires_at as Date).toISOString()).toBe("2026-09-29T12:05:59.000Z");
+  });
+
+  it("keeps a pairing's own expiry when it is approved with more than a minute left", async () => {
+    const user = await phoneUser();
+    await startPairing();
+    await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: RAW_SESSION, now: T0 });
+
+    expect(new Date((await pairingRow())!.expires_at as Date).toISOString()).toBe(EXPIRES_AT.toISOString());
+  });
+
+  it("revokes the session of an expired pairing nobody collected, and leaves a collected pairing's session alone", async () => {
+    const user = await phoneUser();
+    const uncollected = await newSessionToken();
+    const collected = await newSessionToken();
+    await createSession(sql, { tokenHash: uncollected.tokenHash, userId: user.id, deviceName: "Web (paired)" });
+    await createSession(sql, { tokenHash: collected.tokenHash, userId: user.id, deviceName: "Web (paired)" });
+    await startPairing(PAIR_ID, "123456");
+    const other = await startPairing(OTHER_PAIR_ID, "654321");
+    await approvePairing(sql, { id: PAIR_ID, userId: user.id, sessionToken: uncollected.token, now: T0 });
+    await approvePairing(sql, { id: OTHER_PAIR_ID, userId: user.id, sessionToken: collected.token, now: T0 });
+    expect((await pollPairing(sql, OTHER_PAIR_ID, other.pollToken, T0)).status).toBe("approved");
+
+    await deleteExpiredPairings(sql, EXPIRES_AT);
+
+    expect(await resolveSession(sql, uncollected.token, EXPIRES_AT)).toBeUndefined();
+    expect((await resolveSession(sql, collected.token, EXPIRES_AT))?.user.id).toBe(user.id);
+  });
+
+  it("finds the expired pairings it deletes through web_pairings_expires_at_idx", async () => {
+    const sent: { text: string; params?: unknown[] }[] = [];
+    const recording: SqlClient = {
+      async query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> {
+        sent.push({ text, params });
+        return sql.query<T>(text, params);
+      },
+    };
+    await deleteExpiredPairings(recording, EXPIRES_AT);
+    const cleanup = sent.find(({ text }) => text.startsWith("delete from orderat.web_pairings"));
+    expect(cleanup).toBeDefined();
+
+    // With sequential scans priced out, the plan shows whether the query can use the index at all.
+    await sql.query(`set enable_seqscan = off`);
+    try {
+      const plan = await sql.query<{ "QUERY PLAN": string }>(`explain ${cleanup!.text}`, cleanup!.params);
+      expect(plan.map((row) => row["QUERY PLAN"]).join("\n")).toContain("web_pairings_expires_at_idx");
+    } finally {
+      await sql.query(`reset enable_seqscan`);
+    }
+  });
+
   it("deleting the approving user's account deletes the pairing with it", async () => {
     const user = await phoneUser();
     await startPairing();

@@ -17,14 +17,17 @@
 // the point) and shows the pairing's code as a QR code and as 6 digits; the seller's signed-in phone
 // scans or types it and calls `pair_approve`, which creates a web session for the phone's account
 // exactly as a `client: "web"` signin would; the website's `pair_poll` then collects that session, once.
-// The pairing lives five minutes (db/migrations/0006_web_pairing.sql).
+// The pairing lives five minutes (db/migrations/0006_web_pairing.sql). pair_start is open to anyone,
+// so it is limited per client IP and refused while MAX_PENDING_PAIRINGS are pending.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
+import { hashClientIp } from "../shared/crypto.ts";
 import type { JwksCache } from "./jwks.ts";
 import { appleConfig, googleConfig } from "./providers.ts";
-import { bumpPairApproveRateLimit, MAX_PAIR_APPROVES_PER_MINUTE } from "./rate-limit.ts";
+import { bumpPairApproveRateLimit, bumpPairStartRateLimit, MAX_PAIR_APPROVES_PER_MINUTE, MAX_PAIR_STARTS_PER_MINUTE } from "./rate-limit.ts";
 import {
   approvePairing,
+  countPendingPairings,
   createSession,
   deleteAccount,
   deleteExpiredPairings,
@@ -49,6 +52,9 @@ export interface AuthHandlerDeps {
   googleJwks: JwksCache;
   appleAudiences: string[];
   googleAudiences: string[];
+  /** Salt for hashing a client IP (pair_start's per-IP rate limit) before it is written to a row —
+   * never the raw IP. */
+  ipSalt: string;
   now?: () => Date;
   /** Structured, content-free log line per request — never an ID token, a session token, an email or
    * a name (nor a pairing's code or poll token). */
@@ -71,6 +77,10 @@ const providerUnavailableResponse = () => jsonResponse({ error: "provider_unavai
 const WEB_SESSION_MS = WEB_SESSION_DAYS * 24 * 60 * 60 * 1000;
 /** How long a pairing's code works, from pair_start. */
 const PAIRING_TTL_MS = 5 * 60 * 1000;
+/** At most this many pairings pending at once, from everyone: pair_start answers rate_limited above
+ * it. Pairings are anonymous and cheap to start, and every pending code is one a phone can approve
+ * (even by mistyping its own), so this keeps any flood to a sliver (0.05%) of the million codes. */
+const MAX_PENDING_PAIRINGS = 500;
 /** How many fresh codes pair_start draws before giving up, when each one it draws is already another
  * pending pairing's — with 1,000,000 codes and pairings that live five minutes, one clash is already
  * rare (same reasoning as server/sync/handler.ts's MAX_INVITE_CODE_ATTEMPTS). */
@@ -138,9 +148,20 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
     return jsonResponse({ session, user: userJson(user) }, 200);
   }
 
-  async function handlePairStart(): Promise<Response> {
+  async function handlePairStart(req: Request): Promise<Response> {
     const at = now();
+    const ipHash = await hashClientIp(req, deps.ipSalt);
+    if ((await bumpPairStartRateLimit(deps.sql, ipHash, at)) > MAX_PAIR_STARTS_PER_MINUTE) {
+      log({ event: "auth_pair_start", status: 429, reason: "client_limit" });
+      return rateLimitedResponse();
+    }
+
     await deleteExpiredPairings(deps.sql, at);
+    if ((await countPendingPairings(deps.sql, at)) >= MAX_PENDING_PAIRINGS) {
+      log({ event: "auth_pair_start", status: 429, reason: "pending_cap" });
+      return rateLimitedResponse();
+    }
+
     const pairId = crypto.randomUUID();
     const { pollToken, pollHash } = await newPollToken();
     const expiresAt = new Date(at.getTime() + PAIRING_TTL_MS);
@@ -165,7 +186,7 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
     }
 
     const at = now();
-    if ((await bumpPairApproveRateLimit(deps.sql, resolved.session.tokenHash, at)) > MAX_PAIR_APPROVES_PER_MINUTE) {
+    if ((await bumpPairApproveRateLimit(deps.sql, resolved.user.id, at)) > MAX_PAIR_APPROVES_PER_MINUTE) {
       log({ event: "auth_pair_approve", status: 429 });
       return rateLimitedResponse();
     }
@@ -195,7 +216,8 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
     await deleteExpiredPairings(deps.sql, at);
     const polled = await pollPairing(deps.sql, body.pairId, body.pollToken, at);
 
-    log({ event: "auth_pair_poll", status: 200, result: polled.status });
+    // Only the answer that ends the polling is logged: the website asks every few seconds while pending.
+    if (polled.status !== "pending") log({ event: "auth_pair_poll", status: 200, result: polled.status });
     if (polled.status !== "approved") return jsonResponse({ status: polled.status }, 200);
     return jsonResponse({ status: "approved", session: polled.sessionToken, user: userJson(polled.user) }, 200);
   }
@@ -214,7 +236,7 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
     if (body.action === "signin") return handleSignin(body);
     // The website's side of a pairing needs no session (a session is what it is pairing for), and
     // ignores one if sent.
-    if (body.action === "pair_start") return handlePairStart();
+    if (body.action === "pair_start") return handlePairStart(req);
     if (body.action === "pair_poll") return handlePairPoll(body);
 
     const sessionToken = req.headers.get("x-orderat-session") ?? "";
@@ -239,8 +261,13 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
         await deleteAccount(deps.sql, resolved.user.id);
         log({ event: "auth_delete_account", status: 200 });
         return jsonResponse({ ok: true }, 200);
-      default:
+      default: {
+        // `never`: an action the validator accepts but this switch has no case for is a compile error
+        // here. Should one ever get this far anyway, it is refused, never run as some other action.
+        const unhandled: never = body;
+        log({ event: "auth", status: 400, action: (unhandled as { action: string }).action });
         return invalidBodyResponse();
+      }
     }
   };
 }

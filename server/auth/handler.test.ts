@@ -22,6 +22,7 @@ function makeHandler(now: () => Date = () => NOW, overrides: Partial<AuthHandler
     googleJwks: createJwksCache("https://www.googleapis.com/oauth2/v3/certs", { fetchImpl: fakeJwksFetch([googleKeyPair]) }),
     appleAudiences: [APPLE_AUD],
     googleAudiences: [GOOGLE_AUD],
+    ipSalt: "test-ip-salt",
     now,
     log: () => {},
     ...overrides,
@@ -119,6 +120,7 @@ describe("createAuthHandler / signin", () => {
       googleJwks: createJwksCache("https://www.googleapis.com/oauth2/v3/certs", { fetchImpl: fakeJwksFetch([googleKeyPair]) }),
       appleAudiences: [APPLE_AUD],
       googleAudiences: [GOOGLE_AUD],
+      ipSalt: "test-ip-salt",
       now: () => NOW,
       log: () => {},
     });
@@ -472,7 +474,7 @@ describe("createAuthHandler / phone-to-web pairing", () => {
     expect(paired.filter((row) => row.revoked_at === null).map((row) => row.token_hash)).toEqual([await sha256HexOfString(polled.session)]);
   });
 
-  it("limits a session to 10 approvals a minute: the 11th is rate_limited whatever its code", async () => {
+  it("limits an account to 10 approvals a minute: the 11th is rate_limited whatever its code", async () => {
     let clock = NOW;
     const handler = makeHandler(() => clock);
     const phone = await signInPhone(handler);
@@ -486,6 +488,77 @@ describe("createAuthHandler / phone-to-web pairing", () => {
 
     clock = new Date(NOW.getTime() + MINUTE_MS);
     expect((await approve(handler, pairing.code, phone)).status).toBe(200);
+  });
+
+  it("counts an account's approvals across all its sessions: a fresh signin buys no fresh tries", async () => {
+    const handler = makeHandler();
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+    for (let i = 0; i < 10; i++) await approve(handler, otherCode(pairing.code), phone);
+
+    const secondSession = await signInPhone(handler); // The same Apple account again.
+    expect((await approve(handler, pairing.code, secondSession)).status).toBe(429);
+    const otherAccount = await signInPhone(handler, "apple-sub-2", "other@example.com");
+    expect((await approve(handler, pairing.code, otherAccount)).status).toBe(200);
+  });
+
+  it("limits pair_start to 10 a minute per client IP, the first entry of x-forwarded-for", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const startFrom = (forwardedFor: string) => handler(post({ action: "pair_start" }, { "x-forwarded-for": forwardedFor }));
+
+    for (let i = 0; i < 10; i++) expect((await startFrom(`203.0.113.7, 10.0.0.${i}`)).status).toBe(200);
+    const limited = await startFrom("203.0.113.7");
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toEqual({ error: "rate_limited" });
+    expect((await startFrom("198.51.100.9")).status).toBe(200); // Another client is unaffected.
+
+    clock = new Date(NOW.getTime() + MINUTE_MS);
+    expect((await startFrom("203.0.113.7")).status).toBe(200);
+  });
+
+  it("counts pair_start calls without x-forwarded-for together, as the one client \"unknown\"", async () => {
+    const handler = makeHandler();
+    for (let i = 0; i < 10; i++) await start(handler);
+    const limited = await handler(post({ action: "pair_start" }));
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toEqual({ error: "rate_limited" });
+  });
+
+  it("keeps only a salted hash of the client IP, never the IP itself", async () => {
+    const handler = makeHandler();
+    await handler(post({ action: "pair_start" }, { "x-forwarded-for": "203.0.113.7" }));
+
+    const rows = await sql.query<{ ip_hash: string }>(`select ip_hash from orderat.pair_start_rate_limit`);
+    expect(rows).toEqual([{ ip_hash: await sha256HexOfString("test-ip-salt:203.0.113.7") }]);
+  });
+
+  it("caps pending pairings at 500: pair_start is rate_limited until one stops pending", async () => {
+    const handler = makeHandler();
+    // 499 pending pairings from 499 other websites, inserted directly (one client couldn't start them all).
+    await sql.query(
+      `insert into orderat.web_pairings (id, code, poll_hash, status, expires_at)
+       select gen_random_uuid(), lpad(n::text, 6, '0'), 'hash', 'pending', $1 from generate_series(1, 499) as n`,
+      [new Date(NOW.getTime() + 5 * MINUTE_MS).toISOString()],
+    );
+    const fiveHundredth = await start(handler);
+
+    const capped = await handler(post({ action: "pair_start" }, { "x-forwarded-for": "198.51.100.9" }));
+    expect(capped.status).toBe(429);
+    expect(await capped.json()).toEqual({ error: "rate_limited" });
+
+    await approve(handler, fiveHundredth.code, await signInPhone(handler));
+    expect((await handler(post({ action: "pair_start" }, { "x-forwarded-for": "198.51.100.9" }))).status).toBe(200);
+  });
+
+  it("does not count expired pairings toward the cap", async () => {
+    const handler = makeHandler();
+    await sql.query(
+      `insert into orderat.web_pairings (id, code, poll_hash, status, expires_at)
+       select gen_random_uuid(), lpad(n::text, 6, '0'), 'hash', 'pending', $1 from generate_series(1, 500) as n`,
+      [NOW.toISOString()],
+    );
+    expect((await handler(post({ action: "pair_start" }))).status).toBe(200);
   });
 
   it("the paired web session lasts 30 days from the approval, like a web signin's", async () => {
@@ -509,18 +582,60 @@ describe("createAuthHandler / phone-to-web pairing", () => {
     expect((await me(handler, phone)).status).toBe(200); // The phone's own session never expires.
   });
 
-  it("an approved pairing the website never collects loses its raw session token once it expires", async () => {
+  it("an approved pairing the website never collects loses its raw session token, and the session, once it expires", async () => {
     let clock = NOW;
     const handler = makeHandler(() => clock);
     const phone = await signInPhone(handler);
     const pairing = await start(handler);
     await approve(handler, pairing.code, phone);
-    expect((await pairingRow(pairing.pairId))!.session_token).toEqual(expect.any(String));
+    const rawSession = (await pairingRow(pairing.pairId))!.session_token as string;
+    expect((await me(handler, rawSession)).status).toBe(200);
 
     clock = new Date(NOW.getTime() + 5 * MINUTE_MS);
     await start(handler); // Any pairing call (here another website's) first deletes the expired pairings.
     expect(await pairingRow(pairing.pairId)).toBeUndefined();
     expect(await poll(handler, pairing)).toEqual({ status: "expired" });
+    expect((await me(handler, rawSession)).status).toBe(401);
+    const paired = await sql.query<{ revoked_at: Date | null }>(`select revoked_at from orderat.sessions where device_name = 'Web (paired)'`);
+    expect(paired).toEqual([{ revoked_at: expect.any(Date) }]);
+  });
+
+  it("a phone approving in a pairing's last second leaves the website a minute to collect the session", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+
+    clock = new Date(NOW.getTime() + 5 * MINUTE_MS - 1000);
+    expect((await approve(handler, pairing.code, phone)).status).toBe(200);
+    clock = new Date(NOW.getTime() + 5 * MINUTE_MS + 30_000);
+    const polled = await poll(handler, pairing);
+    expect(polled.status).toBe("approved");
+    expect((await me(handler, polled.session)).status).toBe(200);
+  });
+
+  it("two polls racing for one approved pairing: exactly one receives the session, the other answers expired", async () => {
+    const handler = makeHandler();
+    const phone = await signInPhone(handler);
+    const pairing = await start(handler);
+    await approve(handler, pairing.code, phone);
+    // The inner poll runs start to finish just as the outer one, past its own check that the pairing is
+    // approved, sends the statement that consumes it: the order two concurrent polls take when the
+    // inner one wins the row lock.
+    let inner: { status: string; session?: string } | undefined;
+    const racingSql: SqlClient = {
+      async query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> {
+        if (!inner && text.startsWith("with approved as")) inner = await poll(handler, pairing);
+        return sql.query<T>(text, params);
+      },
+    };
+
+    const outer = await poll(makeHandler(() => NOW, { sql: racingSql }), pairing);
+
+    expect(inner?.status).toBe("approved");
+    expect(outer).toEqual({ status: "expired" });
+    expect((await me(handler, inner!.session!)).status).toBe(200);
+    expect(await pairingRow(pairing.pairId)).toMatchObject({ status: "consumed", session_token: null });
   });
 
   it("never gives two pending pairings the same code: a code already showing is redrawn", async () => {
@@ -567,5 +682,15 @@ describe("createAuthHandler / phone-to-web pairing", () => {
     expect(entries.map((entry) => entry.event)).toEqual(expect.arrayContaining(["auth_pair_start", "auth_pair_approve", "auth_pair_poll"]));
     const logged = JSON.stringify(entries);
     for (const secret of [pairing.code, pairing.pollToken, session, phone]) expect(logged).not.toContain(secret);
+  });
+
+  it("writes no log line for a pending poll (the website polls every few seconds)", async () => {
+    const entries: Record<string, unknown>[] = [];
+    const handler = makeHandler(() => NOW, { log: (entry) => entries.push(entry) });
+    const pairing = await start(handler);
+    entries.length = 0;
+
+    expect(await poll(handler, pairing)).toEqual({ status: "pending" });
+    expect(entries).toEqual([]);
   });
 });

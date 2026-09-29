@@ -135,6 +135,34 @@ describe("pushChanges / staff permission filtering", () => {
     expect(result.rejected).toEqual([{ entity: "expense", id: "e1", reason: "forbidden" }]);
   });
 
+  it("accepts the owner's subscription report (the setting record \"subscription\")", async () => {
+    const report = { value: { status: "active", expiresAt: "2027-01-01T00:00:00.000Z" } };
+    const result = await pushChanges(sql, SHOP_ID, owner, [change({ entity: "setting", id: "subscription", data: report })], OWNER_ID);
+    expect(result).toEqual({ conflicts: [], rejected: [] });
+    expect((await findRecord(sql, SHOP_ID, "setting", "subscription"))?.data).toEqual(report);
+  });
+
+  it("rejects a staff member's write of the subscription setting, returning the server copy", async () => {
+    const ownersReport = { value: { status: "expired", expiresAt: "2026-09-01T00:00:00.000Z" } };
+    const stored = await upsertRecord(sql, SHOP_ID, "setting", "subscription", ownersReport, false, OWNER_ID);
+    const everyPermission: Member = { role: "staff", permissions: { orders: true, prepare: true, money: true, products: true } };
+
+    const forged = { value: { status: "active", expiresAt: "2099-01-01T00:00:00.000Z" } };
+    const result = await pushChanges(sql, SHOP_ID, everyPermission, [change({ entity: "setting", id: "subscription", data: forged, baseSeq: stored.seq })], STAFF_ID);
+
+    expect(result.rejected).toEqual([
+      { entity: "setting", id: "subscription", reason: "forbidden", record: { data: ownersReport, deleted: false, seq: stored.seq, updatedAt: stored.updatedAt } },
+    ]);
+    expect((await findRecord(sql, SHOP_ID, "setting", "subscription"))?.data).toEqual(ownersReport);
+  });
+
+  it("still accepts a staff member's other settings, such as whatsappTemplates", async () => {
+    const staff: Member = { role: "staff", permissions: DEFAULT_STAFF_PERMISSIONS };
+    const result = await pushChanges(sql, SHOP_ID, staff, [change({ entity: "setting", id: "whatsappTemplates", data: { value: ["Hi {name}"] } })], STAFF_ID);
+    expect(result.rejected).toEqual([]);
+    expect((await findRecord(sql, SHOP_ID, "setting", "whatsappTemplates"))?.data).toEqual({ value: ["Hi {name}"] });
+  });
+
   it("rejects a prepare-only staff member's attempt to create a brand-new order", async () => {
     const prepareOnly: Member = { role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, prepare: true } };
     const result = await pushChanges(sql, SHOP_ID, prepareOnly, [change({ id: "brand-new-order" })], STAFF_ID);

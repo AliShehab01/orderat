@@ -7,9 +7,11 @@
 -- Idempotent by design, like 0001-0005 (every statement is CREATE ... IF NOT EXISTS, or otherwise safe
 -- to re-run).
 
--- One row per pairing, alive for five minutes from pair_start (expires_at); every pairing call first
--- deletes the rows whose time is up (server/auth/store.ts's deleteExpiredPairings), so the table only
--- ever holds pairings still in progress.
+-- One row per pairing, alive for five minutes from pair_start (expires_at, which an approval in the
+-- last minute pushes to a minute after the approval, so the website can still collect its session);
+-- every pairing call first deletes the rows whose time is up (server/auth/store.ts's
+-- deleteExpiredPairings), so the table only ever holds pairings still in progress, and pair_start
+-- refuses new ones while 500 are pending (server/auth/handler.ts's MAX_PENDING_PAIRINGS).
 --   code          the 6 digits the website shows, stored as is: unlike a session or poll token it is not
 --                 a secret that grants anything on its own (approving it takes a signed-in phone,
 --                 rate limited), and a hash of 6 digits would be reversed by trying all 1,000,000.
@@ -20,8 +22,8 @@
 --   user_id       the approving phone's user, whose account the web session is for.
 --   session_token the RAW token of the web session pair_approve created, held only until the website's
 --                 first successful poll hands it out and clears it (or, never collected, until the row
---                 expires and is deleted) — the one place a raw session token is ever written down;
---                 orderat.sessions itself only ever stores its hash.
+--                 expires and is deleted, and that session revoked) — the one place a raw session token
+--                 is ever written down; orderat.sessions itself only ever stores its hash.
 create table if not exists orderat.web_pairings (
   id uuid primary key,
   code text not null,
@@ -41,16 +43,31 @@ create table if not exists orderat.web_pairings (
 -- deletes expired rows before it inserts.
 create unique index if not exists web_pairings_pending_code_idx on orderat.web_pairings (code) where status = 'pending';
 
--- server/auth/rate-limit.ts's fixed-window counter for pair_approve (at most 10 per minute per
--- session): the same shape, and the same reasons for being its own table, as 0004's
--- orderat.sync_rate_limit.
+-- The expiry cleanup every pairing call runs first ("delete ... where expires_at <= now") and
+-- pair_start's count of unexpired pending pairings, both without reading the whole table.
+create index if not exists web_pairings_expires_at_idx on orderat.web_pairings (expires_at);
+
+-- server/auth/rate-limit.ts's fixed-window counters, the same shape (and the same reasons for being
+-- tables of their own) as 0004's orderat.sync_rate_limit:
+--   pair_start_rate_limit    pair_start calls per client IP (at most 10 a minute). `ip_hash` is the
+--                            salted SHA-256 hex of the IP (server/shared/crypto.ts's hashClientIp),
+--                            never the raw address.
+--   pair_approve_rate_limit  pair_approve calls per account (at most 10 a minute), whichever of the
+--                            account's sessions makes them; deleted with the account.
+create table if not exists orderat.pair_start_rate_limit (
+  ip_hash text primary key,
+  window_started_at timestamptz not null,
+  count int not null default 0
+);
+
 create table if not exists orderat.pair_approve_rate_limit (
-  token_hash text primary key,
+  user_id uuid primary key references orderat.users (id) on delete cascade,
   window_started_at timestamptz not null,
   count int not null default 0
 );
 
 alter table orderat.web_pairings enable row level security;
+alter table orderat.pair_start_rate_limit enable row level security;
 alter table orderat.pair_approve_rate_limit enable row level security;
 
 -- Same ownership dance as 0001-0004 (see 0001_orderat_isolation.sql's comments for the full reasoning):
@@ -60,6 +77,7 @@ grant orderat_app to current_user with set true, inherit true;
 grant usage, create on schema orderat to orderat_app;
 
 alter table orderat.web_pairings owner to orderat_app;
+alter table orderat.pair_start_rate_limit owner to orderat_app;
 alter table orderat.pair_approve_rate_limit owner to orderat_app;
 
 revoke create on schema orderat from orderat_app;
@@ -67,18 +85,19 @@ grant usage on schema orderat to orderat_app;
 
 -- web_pairings: inserted by pair_start, updated by pair_approve and pair_poll, and deleted once expired.
 grant select, insert, update, delete on orderat.web_pairings to orderat_app;
--- pair_approve_rate_limit: read and incremented/reset in place, never deleted (same as sync_rate_limit).
-grant select, insert, update on orderat.pair_approve_rate_limit to orderat_app;
+-- The rate-limit counters: read and incremented/reset in place, never deleted by the app (same as
+-- sync_rate_limit; an account's approval counter goes with the account through the cascade above).
+grant select, insert, update on orderat.pair_start_rate_limit, orderat.pair_approve_rate_limit to orderat_app;
 
-revoke all on orderat.web_pairings, orderat.pair_approve_rate_limit from public;
+revoke all on orderat.web_pairings, orderat.pair_start_rate_limit, orderat.pair_approve_rate_limit from public;
 
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
-    execute 'revoke all on orderat.web_pairings, orderat.pair_approve_rate_limit from anon';
+    execute 'revoke all on orderat.web_pairings, orderat.pair_start_rate_limit, orderat.pair_approve_rate_limit from anon';
   end if;
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
-    execute 'revoke all on orderat.web_pairings, orderat.pair_approve_rate_limit from authenticated';
+    execute 'revoke all on orderat.web_pairings, orderat.pair_start_rate_limit, orderat.pair_approve_rate_limit from authenticated';
   end if;
 end
 $$;

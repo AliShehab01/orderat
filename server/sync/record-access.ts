@@ -13,29 +13,40 @@
 //   - every other entity ("shop", "occasion", "stock_move", "setting") has no permission of its own
 //     in the spec, so any shop member — owner or staff, whatever their permissions — may push or pull
 //     it; this file deliberately does not invent a stricter rule the spec never states.
+//   - one exception: the "setting" record with id "subscription" is the owner's own subscription
+//     report (docs/superpowers/specs/2026-09-29-orderat-web-design.md's "Paid check": the website opens
+//     the shop only while it says the subscription is current), so only the owner may push it. Staff may
+//     still pull it, and may push every other setting as before.
 
 import { hasPermission, type Member } from "./permissions.ts";
 
 export const ENTITIES = ["shop", "product", "customer", "order", "expense", "occasion", "stock_move", "setting"] as const;
 export type Entity = (typeof ENTITIES)[number];
 
+/** The id of the "setting" record holding the owner's subscription report. */
+const SUBSCRIPTION_SETTING_ID = "subscription";
+
 export type PushDecision =
   | { allowed: true; data: Record<string, unknown> }
   | { allowed: false; reason: "forbidden" };
 
 /**
- * Decides whether `member` may push `incomingData` to `entity`, and, when allowed, the actual `data`
- * to store — identical to `incomingData` for every entity except a prepare-only push of an "order",
- * where only `status` is taken from `incomingData` and everything else comes from `existingData` (the
- * record as currently stored; undefined when this would be a brand-new record).
+ * Decides whether `member` may push `incomingData` to record `id` of `entity`, and, when allowed, the
+ * actual `data` to store — identical to `incomingData` for every entity except a prepare-only push of
+ * an "order", where only `status` is taken from `incomingData` and everything else comes from
+ * `existingData` (the record as currently stored; undefined when this would be a brand-new record).
  */
 export function decidePush(
   member: Member,
   entity: Entity,
+  id: string,
   incomingData: Record<string, unknown>,
   deleted: boolean,
   existingData: Record<string, unknown> | undefined,
 ): PushDecision {
+  if (entity === "setting" && id === SUBSCRIPTION_SETTING_ID) {
+    return member.role === "owner" ? { allowed: true, data: incomingData } : { allowed: false, reason: "forbidden" };
+  }
   if (entity === "expense") {
     return hasPermission(member, "money") ? { allowed: true, data: incomingData } : { allowed: false, reason: "forbidden" };
   }
@@ -54,7 +65,8 @@ export function decidePush(
     }
     return { allowed: false, reason: "forbidden" };
   }
-  // shop / occasion / stock_move / setting: no specific permission gates these in the spec.
+  // shop / occasion / stock_move / setting (other than the subscription, above): no specific
+  // permission gates these in the spec.
   return { allowed: true, data: incomingData };
 }
 

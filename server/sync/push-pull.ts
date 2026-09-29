@@ -49,7 +49,7 @@ export async function pushChanges(sql: SqlClient, shopId: string, member: Member
 
   for (const change of changes) {
     const existing = await findRecord(sql, shopId, change.entity, change.id);
-    const decision = decidePush(member, change.entity, change.data, change.deleted, existing?.data);
+    const decision = decidePush(member, change.entity, change.id, change.data, change.deleted, existing?.data);
     if (!decision.allowed) {
       const visible = existing && canPull(member, change.entity);
       rejected.push({
