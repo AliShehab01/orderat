@@ -1,8 +1,11 @@
 'use strict';
-// Orderat web demo: the phone app's five tabs (Today, Orders, New order, Money, Shop) in the browser,
-// matching what https://orderatweb.com shows. Everything is stored in this browser's
-// localStorage. AI, sign-in, sync, publishing and payments are simulated, and each screen that fakes
-// one says so. Labels live in i18n.js, the demo shops in demo.js.
+// Orderat web: the phone app's five tabs (Today, Orders, New order, Money, Shop) in the browser, at
+// https://orderatweb.com/app/. Two modes share these screens:
+// - the demo ("Try the demo"): a sample shop stored in this browser's localStorage; AI, sign-in, sync,
+//   publishing and payments are simulated, and each screen that fakes one says so;
+// - the live shop, after signing in (live.js): the seller's cloud shop, synced with the phones, with
+//   the real AI features. `Live.on` tells them apart; live.js holds the sign-in screens and the wiring.
+// Labels live in i18n.js, the demo shops in demo.js, the live rules in live-core.js.
 
 const STORE_KEY = 'orderat.web.v1';
 const CAMPAIGNS_KEY = 'orderat.web.campaigns';
@@ -114,6 +117,9 @@ function loadState() {
   return s;
 }
 function save() {
+  // The live shop (also while it opens or after it closed): device prefs here, the shop to the cloud,
+  // never cloud data into the demo's store.
+  if (Live.on || S.live) { Live.save(); return; }
   try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch { /* private mode: the demo still works for this visit */ }
 }
 function seed(type) {
@@ -127,6 +133,10 @@ function seed(type) {
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 10);
+// A new record's id: the phones' UUIDs in the live shop, short ids in the demo.
+const nid = () => (Live.on ? Live.newId() : uid());
+// Staff permissions in the live shop (orders, prepare, status, money, products, owner); all true in the demo.
+const can = k => Live.can(k);
 const pad = n => String(n).padStart(2, '0');
 const round = v => Math.round(v * 1000) / 1000;
 const sum = (list, f) => list.reduce((s, x) => s + f(x), 0);
@@ -135,7 +145,7 @@ const hash = s => [...String(s || '')].reduce((a, c) => (a * 31 + c.charCodeAt(0
 const locale = () => (S.lang === 'en' ? 'en-US' : 'ar-BH-u-nu-latn');
 const currency = () => CURRENCIES[S.shop.currency] || CURRENCIES.BHD;
 const country = () => currency()[1];
-const vatRate = () => VAT_RATES[country()] || 0;
+const vatRate = () => (Live.on && typeof S.vat.rateBps === 'number' ? S.vat.rateBps / 100 : VAT_RATES[country()] || 0);
 const vatOn = () => S.vat.enabled && vatRate() > 0;
 // Wrapped in a left-to-right isolate so Arabic text shows "248.500 BHD", as the apps do, not "BHD 248.500".
 const money = v => `\u2066${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: currency()[0], maximumFractionDigits: currency()[0] })} ${S.shop.currency}\u2069`;
@@ -166,9 +176,12 @@ const byDue = (a, b) => a.dueAt.localeCompare(b.dueAt);
 const qtyOf = o => sum(o.items, it => it.qty);
 const costOf = o => sum(o.items, it => it.qty * (it.cost || 0));
 const itemsLine = o => o.items.map(it => `${it.qty}× ${pick(it.nameAr, it.nameEn)}`).join(S.lang === 'en' ? ', ' : '، ');
-const invoiceNo = o => `INV-${new Date(o.dueAt).getFullYear()}-${String(o.no || 0).padStart(4, '0')}`;
+const invoiceNo = o => (Live.on ? Live.invoiceNo(o) : `INV-${new Date(o.dueAt).getFullYear()}-${String(o.no || 0).padStart(4, '0')}`);
+// The VAT an order shows: its own snapshot in the live shop (like the phones), the shop setting in the demo.
+const orderVatRate = o => (Live.on ? Live.vatOf(o) : vatOn() ? vatRate() : 0);
 
 function totals(o) {
+  if (Live.on) return Live.totals(o);
   const gross = sum(o.items, it => it.qty * it.price) + (o.deliveryFee || 0);
   let subtotal = gross, vat = 0, total = gross;
   if (vatOn()) {
@@ -255,6 +268,8 @@ function copyText(s) {
   if (navigator.clipboard) navigator.clipboard.writeText(s).then(() => toast(t('marketing.copied')), fallback);
   else fallback();
 }
+// The site's own terms and privacy pages, in the app's language.
+const legalUrl = page => `${SITE_URL}${S.lang === 'en' ? '/en' : ''}/${page}/`;
 const waLink = (phone, msg) => `https://wa.me/${digits(phone)}?text=${encodeURIComponent(msg)}`;
 
 // ---------- Rendering ----------
@@ -272,32 +287,44 @@ function render() {
   root.dir = S.lang === 'ar' ? 'rtl' : 'ltr';
   if (S.theme === 'system') delete root.dataset.theme; else root.dataset.theme = S.theme;
   const brand = S.lang === 'en' ? 'Orderat' : 'اوردرات';
+  const gate = Live.gate();
+  if (gate) {
+    $('#app').innerHTML = gate.html;
+    document.title = `${gate.title} · ${brand}`;
+    lastPath = '';
+    gate.after?.();
+    return;
+  }
   if (!S.onboarded) {
     $('#app').innerHTML = viewOnboarding();
     document.title = `${brand} · ${t('web.demo')}`;
     return;
   }
   const r = route();
-  const tab = VIEWS[r[0]] ? r[0] : 'today';
+  const tab = VIEWS[r[0]] && tabShown(r[0]) ? r[0] : 'today';
   const v = VIEWS[tab](r.slice(1));
   $('#app').innerHTML = shell(tab, v);
   document.title = `${v.title} · ${brand}`;
   const path = r.join('/');
   if (path !== lastPath) { window.scrollTo(0, 0); lastPath = path; }
+  Live.afterRender();
 }
+// Staff without `orders` get no New order tab, without `money` no Money tab (RootView on the phones).
+const tabShown = id => (id === 'new' ? can('orders') : id === 'money' ? can('money') : true);
 
 function shell(tab, v) {
-  const nav = cls => TABS.map(id => `<a class="${cls}${id === tab ? ' on' : ''}${id === 'new' ? ' is-new' : ''}" href="#/${id}"${id === tab ? ' aria-current="page"' : ''}>${icon(id)}<span>${esc(t('tab.' + id))}</span></a>`).join('');
+  const nav = cls => TABS.filter(tabShown).map(id => `<a class="${cls}${id === tab ? ' on' : ''}${id === 'new' ? ' is-new' : ''}" href="#/${id}"${id === tab ? ' aria-current="page"' : ''}>${icon(id)}<span>${esc(t('tab.' + id))}</span></a>`).join('');
   const langBtn = cls => `<button class="${cls}" data-act="lang" lang="${S.lang === 'ar' ? 'en' : 'ar'}">${icon('globe')} <span>${esc(t('web.switchLang'))}</span></button>`;
   return `<div class="app">
   <aside class="side">
-    <a class="brand" href="#/today"><img src="favicon.svg" width="36" height="36" alt=""><span><b>${S.lang === 'en' ? 'Orderat' : 'اوردرات'}</b><small>${esc(t('web.demo'))}</small></span></a>
+    <a class="brand" href="#/today"><img src="favicon.svg" width="36" height="36" alt=""><span><b>${S.lang === 'en' ? 'Orderat' : 'اوردرات'}</b><small>${esc(t(Live.on ? 'live.brand' : 'web.demo'))}</small></span></a>
     <a class="side-shop" href="#/shop"><span class="avatar">${esc(initial(shopName()))}</span><span class="row-main"><b>${esc(shopName())}</b><small>${esc(t('businessType.' + S.shop.businessType))}</small></span></a>
     <nav class="side-nav" aria-label="Orderat">${nav('side-link')}</nav>
     <div class="side-foot">
       ${langBtn('pill')}
       <a class="pill" href="${SITE_URL}${S.lang === 'en' ? '/en/' : '/'}" target="_blank" rel="noopener">${icon('external')} <span>${esc(t('web.about'))}</span></a>
-      <p class="muted small">${esc(t('web.demoNote'))}</p>
+      ${Live.on ? '' : `<a class="pill" href="#/start">${icon('users')} <span>${esc(t('live.logIn'))}</span></a>`}
+      <p class="muted small">${esc(t(Live.on ? 'live.note' : 'web.demoNote'))}</p>
     </div>
   </aside>
   <main class="main">
@@ -320,6 +347,7 @@ function viewOnboarding() {
     <p class="muted">${esc(t('onboarding.businessType.subtitle'))}</p>
     <div class="types">${BUSINESS_TYPES.map(bt => `<button class="type" data-act="pick-type" data-type="${bt}"><span class="type-ic">${icon(TYPE_ICONS[bt])}</span><span class="row-main"><b>${esc(t('businessType.' + bt))}</b><small>${esc(t('businessType.' + bt + '.examples'))}</small></span></button>`).join('')}</div>
     <p class="note">${esc(t('onboarding.sample'))}</p>
+    <button class="btn ghost block" data-act="live-back-start">${icon('back')} ${esc(t('common.back'))}</button>
   </div></div>`;
 }
 
@@ -336,11 +364,11 @@ function viewToday() {
   const occ = S.occasions.filter(x => x.end >= dayKey(now)).sort((a, b) => a.start.localeCompare(b.start)).slice(0, 3);
   const camp = todayCampaign();
   const cards = [
-    S.askEnabled ? `<button class="card ask-card" data-act="ask"><span class="ask-ic">${icon('sparkle')}</span><span class="row-main"><b>${esc(t('ask.cardTitle'))}</b><small>${esc(t('ask.cardSubtitle'))}</small></span>${icon('chev', 'chev')}</button>` : '',
+    S.askEnabled && can('money') ? `<button class="card ask-card" data-act="ask"><span class="ask-ic">${icon('sparkle')}</span><span class="row-main"><b>${esc(t('ask.cardTitle'))}</b><small>${esc(t('ask.cardSubtitle'))}</small></span>${icon('chev', 'chev')}</button>` : '',
     camp ? campaignCard(camp) : '',
     webOrdersCard(),
     S.isDemo ? `<div class="card demo-banner"><p>${esc(t('today.demoHint', TRIAL_DAYS))}</p><button class="btn primary small" data-act="paywall">${esc(t('today.demoCta'))}</button></div>` : '',
-    `<div class="kpis three">${kpi(todays.length, t('today.orders'))}${kpi(toPrepare, t('today.toPrepare'))}${kpi(money(unpaid), t('today.unpaid'), unpaid > 0 ? 'bad' : '')}</div>`,
+    `<div class="kpis ${can('money') ? 'three' : 'two'}">${kpi(todays.length, t('today.orders'))}${kpi(toPrepare, t('today.toPrepare'))}${can('money') ? kpi(money(unpaid), t('today.unpaid'), unpaid > 0 ? 'bad' : '') : ''}</div>`,
     S.shop.dailyCapacity ? capacityCard(sum(todays, qtyOf), S.shop.dailyCapacity) : '',
     low.length ? `<section class="card"><h3 class="card-title warn-text">${icon('alert')} ${esc(t('today.lowStock'))}</h3>${low.map(p => `<a class="row" href="#/shop/menu"><span class="row-main"><b>${esc(pName(p))}</b></span>${badge(p.qty <= 0 ? 'bad' : 'warn', t('stock.qtyBadge', p.qty))}</a>`).join('')}</section>` : '',
     `<section class="card"><h3 class="card-title">${esc(t('today.nextPickups'))}</h3>${upcoming.length ? `<div class="list">${upcoming.map(o => orderRow(o, true)).join('')}</div>` : empty(t('today.allCaughtUp'))}</section>`,
@@ -417,7 +445,7 @@ function viewOrders(rest) {
   const chips = ['all', ...STATUSES].map(s => `<button class="chip${ordersFilter === s ? ' on' : ''}" data-act="orders-filter" data-v="${s}">${esc(s === 'all' ? t('orders.filterAll') : t('order.status.' + s))}</button>`).join('');
   return {
     title: t('tab.orders'),
-    actions: `<a class="icon-btn" href="#/new" aria-label="${esc(t('tab.new'))}">${icon('plus')}</a>`,
+    actions: can('orders') ? `<a class="icon-btn" href="#/new" aria-label="${esc(t('tab.new'))}">${icon('plus')}</a>` : '',
     body: `<label class="search">${icon('search')}<input type="search" data-live="orders-q" value="${esc(ordersQuery)}" placeholder="${esc(t('common.search'))}" aria-label="${esc(t('common.search'))}"></label><div class="chips">${chips}</div><div id="orders-list">${ordersListHtml()}</div>`,
   };
 }
@@ -437,12 +465,13 @@ function ordersListHtml() {
   return groups.map(g => `<h3 class="group-title">${esc(fmtDay(parseDay(g.k)))}</h3><div class="card list">${g.list.map(o => orderRow(o)).join('')}</div>`).join('');
 }
 
+// The demo's entries and the phones' (read from the cloud: a payment-status change has no amount).
 function historyLabel(ch) {
-  if (ch.kind === 'created') return t('history.created');
-  if (ch.kind === 'items') return t('history.itemsEdited');
-  if (ch.kind === 'status') return `${t('history.status')}: ${t('order.status.' + ch.value)}`;
-  if (ch.kind === 'payment') return `${t('history.payment')}: ${money(ch.value)}`;
-  return '';
+  const h = OrderatLiveCore.historyLabel(ch);
+  if (h.status) return `${t('history.status')}: ${t('order.status.' + h.status)}`;
+  if (h.key === 'history.payment') return `${t('history.payment')}: ${money(h.amount)}`;
+  if (h.payment) return t(h.key, t('payment.status.' + h.payment));
+  return t(h.key);
 }
 function waMessage(kind, o) {
   const c = customerOf(o), d = new Date(o.dueAt), name = firstName(c), shop = shopName();
@@ -462,10 +491,10 @@ function viewOrder(id) {
   const lines = [
     o.items.map(it => line(`${it.qty}× ${pick(it.nameAr, it.nameEn)}`, money(it.qty * it.price))).join(''),
     o.deliveryFee ? line(t('orders.deliveryFee'), money(o.deliveryFee), 'muted') : '',
-    vatOn() ? line(t('orders.subtotal'), money(T.subtotal), 'muted') + line(t('orders.vatPercent', vatRate() + '%'), money(T.vat), 'muted') : '',
+    orderVatRate(o) ? line(t('orders.subtotal'), money(T.subtotal), 'muted') + line(t('orders.vatPercent', orderVatRate(o) + '%'), money(T.vat), 'muted') : '',
     line(t('orders.total'), money(T.total), 'total'),
     `<div class="line pay"><span>${esc(t('orders.paid'))} ${esc(money(T.paid))}</span>${o.status === 'cancelled' ? '' : payBadge(payStatus(o))}</div>`,
-    T.due > 0 && o.status !== 'cancelled' ? `<button class="link-btn" data-act="pay" data-id="${o.id}">${esc(t('recordPayment'))} · ${esc(t('orders.remaining'))} ${esc(money(T.due))}</button>` : '',
+    T.due > 0 && o.status !== 'cancelled' && can('orders') ? `<button class="link-btn" data-act="pay" data-id="${o.id}">${esc(t('recordPayment'))} · ${esc(t('orders.remaining'))} ${esc(money(T.due))}</button>` : '',
   ].join('');
   const wa = c?.phone
     ? `<div class="chips wrap">${WA_TEMPLATES.map(k => `<a class="chip" href="${esc(waLink(c.phone, waMessage(k, o)))}" target="_blank" rel="noopener">${icon('whatsapp')} ${esc(t('whatsapp.template.' + k))}</a>`).join('')}</div>`
@@ -479,12 +508,12 @@ function viewOrder(id) {
       ${o.notes ? `<p class="od-notes">${esc(o.notes)}</p>` : ''}
     </section>
     <section class="card lines">${lines}</section>
-    ${open ? `<div class="btn-col">${NEXT[o.status] ? `<button class="btn primary block big" data-act="advance" data-id="${o.id}">${esc(t(NEXT_LABEL[o.status]))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${o.id}">${esc(t('orders.cancel'))}</button></div>` : ''}
+    ${open && can('status') ? `<div class="btn-col">${NEXT[o.status] ? `<button class="btn primary block big" data-act="advance" data-id="${o.id}">${esc(t(NEXT_LABEL[o.status]))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${o.id}">${esc(t('orders.cancel'))}</button></div>` : ''}
     <section class="card"><h3 class="card-title">${icon('whatsapp')} ${esc(t('orders.sendWhatsApp'))}</h3>${wa}</section>
     <a class="card row" href="#/shop/receipts/${o.id}"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('shop.receipt'))}</b><small><bdi dir="ltr">${esc(invoiceNo(o))}</bdi></small></span>${icon('chev', 'chev')}</a>
     <section class="card"><h3 class="card-title">${esc(t('changeHistory'))}</h3>${history}</section>
   </div>`;
-  const actions = o.status === 'cancelled' ? '' : `<button class="icon-btn" data-act="edit-items" data-id="${o.id}" aria-label="${esc(t('orders.editItems'))}">${icon('edit')}</button>`;
+  const actions = o.status === 'cancelled' || !can('orders') ? '' : `<button class="icon-btn" data-act="edit-items" data-id="${o.id}" aria-label="${esc(t('orders.editItems'))}">${icon('edit')}</button>`;
   return { title: t('tab.orders'), back: 'orders', actions, body };
 }
 
@@ -493,7 +522,8 @@ function applyStock(o, sign) {
   o.items.forEach(it => { const p = productOf(it.pid); if (p && p.track) p.qty = round(p.qty + sign * it.qty); });
 }
 function setStatus(o, status) {
-  if (S.stockEnabled && status === 'confirmed' && !o.stockApplied) { applyStock(o, -1); o.stockApplied = true; }
+  if (Live.on) Live.stockForStatus(o, status); // with the phones' stock moves
+  else if (S.stockEnabled && status === 'confirmed' && !o.stockApplied) { applyStock(o, -1); o.stockApplied = true; }
   if (status === 'cancelled' && o.stockApplied) { applyStock(o, 1); o.stockApplied = false; }
   o.status = status;
   o.changes.push({ kind: 'status', value: status, at: new Date().toISOString() });
@@ -531,14 +561,10 @@ function itemsEditor(items, p) {
     </div>
   </div>`).join('')}</div>`;
 }
-function cleanItems(items) {
-  return items.filter(it => it.qty > 0 && (it.pid !== 'custom' || it.name.trim())).map(it => {
-    const p = productOf(it.pid), price = parseFloat(it.price) || 0;
-    return p ? { pid: p.id, nameAr: p.nameAr, nameEn: p.nameEn, qty: it.qty, price, cost: p.cost } : { pid: null, nameAr: it.name.trim(), nameEn: it.name.trim(), qty: it.qty, price, cost: 0 };
-  });
-}
+// Lines keep their item id (and cost while on the same product), so a cloud edit changes those lines only.
+const cleanItems = items => OrderatLiveCore.cleanItems(items, S.products);
 function openEditItems(o) {
-  E = { id: o.id, items: o.items.map(it => ({ pid: it.pid || 'custom', name: pick(it.nameAr, it.nameEn), qty: it.qty, price: it.price })) };
+  E = { id: o.id, items: o.items.map(it => ({ id: it.id, origPid: it.pid || null, cost: it.cost, pid: it.pid || 'custom', name: pick(it.nameAr, it.nameEn), qty: it.qty, price: it.price })) };
   renderEditItems();
 }
 function renderEditItems() {
@@ -579,7 +605,7 @@ function examples() {
 
 function viewNew() {
   if (!D) D = newDraft();
-  const ex = examples();
+  const ex = Live.on ? [] : examples(); // the samples would spend the shop's real AI quota
   const body = `<div class="stack">
   <section class="card">
     <h3 class="card-title">${icon('whatsapp')} ${esc(t('neworder.pasteTitle'))}</h3>
@@ -823,15 +849,17 @@ function openShop() {
 function viewMenu() {
   const rows = S.products.map(p => {
     const stock = S.stockEnabled && p.track ? badge(p.qty <= 0 ? 'bad' : p.qty <= p.low ? 'warn' : 'neutral', t('stock.qtyBadge', p.qty)) : '';
-    return `<button class="row${p.active ? '' : ' dim'}" data-act="edit-product" data-id="${p.id}"><span class="row-main"><b>${esc(pName(p))}</b><small>${esc(money(p.price))}${p.cap ? ' · ' + esc(t('shop.capacityPerDay', p.cap)) : ''}</small></span>${stock}${icon('chev', 'chev')}</button>`;
+    const thumb = Live.on && p.photoId ? `<img class="thumb" data-photo="${esc(p.photoId)}" alt="">` : '';
+    return `<button class="row${p.active ? '' : ' dim'}" data-act="edit-product" data-id="${p.id}"${can('products') ? '' : ' disabled'}>${thumb}<span class="row-main"><b>${esc(pName(p))}</b><small>${esc(money(p.price))}${p.cap ? ' · ' + esc(t('shop.capacityPerDay', p.cap)) : ''}</small></span>${stock}${icon('chev', 'chev')}</button>`;
   }).join('');
-  return { title: t('shop.menu'), back: 'shop', actions: addBtn('add-product', t('shop.addItem')), body: rows ? `<div class="card list">${rows}</div>` : empty(t('shop.noItems')) };
+  return { title: t('shop.menu'), back: 'shop', actions: can('products') ? addBtn('add-product', t('shop.addItem')) : '', body: rows ? `<div class="card list">${rows}</div>` : empty(t('shop.noItems')) };
 }
 function openProduct(p) {
   const x = p || { nameAr: '', nameEn: '', price: '', cost: '', cap: '', active: true, track: false, qty: 0, low: 3 };
   openModal(p ? t('shop.editItem') : t('shop.addItem'), `<form data-form="product" data-id="${p ? p.id : ''}" class="stack">
     <div class="grid2">${field(t('shop.nameAr'), `<input name="nameAr" value="${esc(x.nameAr)}" dir="rtl">`)}${field(t('shop.nameEn'), `<input name="nameEn" value="${esc(x.nameEn)}" dir="ltr">`)}</div>
     <div class="grid3">${field(t('shop.price'), `<input name="price" type="number" step="any" min="0" inputmode="decimal" value="${esc(x.price)}" required>`)}${field(t('shop.cost'), `<input name="cost" type="number" step="any" min="0" inputmode="decimal" value="${esc(x.cost)}">`)}${field(t('shop.dailyCapacity'), `<input name="cap" type="number" step="1" min="0" value="${esc(x.cap ?? '')}">`)}</div>
+    ${Live.on && p ? `<div class="photo-row">${p.photoId ? `<img class="thumb lg" data-photo="${esc(p.photoId)}" alt="">` : ''}<label class="btn ghost small">${icon('upload')} ${esc(t('photo.upload'))}<input type="file" accept="image/*" data-live="live-photo" data-id="${esc(p.id)}" hidden></label></div>` : ''}
     ${toggle('active', t('shop.active'), x.active)}
     ${S.stockEnabled ? `${toggle('track', t('stock.trackForProduct'), x.track)}<div class="grid2">${field(t('stock.quantity'), `<input name="qty" type="number" step="1" value="${esc(x.qty)}">`)}${field(t('stock.lowStockAt'), `<input name="low" type="number" step="1" min="0" value="${esc(x.low)}">`)}</div>` : ''}
     <div class="btn-row">${p ? `<button type="button" class="btn danger-soft" data-act="delete-product" data-id="${p.id}">${esc(t('common.delete'))}</button>` : ''}<button class="btn primary grow">${esc(t('common.save'))}</button></div>
@@ -841,8 +869,8 @@ function openProduct(p) {
 function viewCustomers() {
   const counts = new Map();
   S.orders.forEach(o => counts.set(o.customerId, (counts.get(o.customerId) || 0) + 1));
-  const rows = S.customers.slice().sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0)).map(c => `<button class="row" data-act="edit-customer" data-id="${c.id}"><span class="avatar sm">${esc(initial(cName(c)))}</span><span class="row-main"><b>${esc(cName(c))}</b><small><span dir="ltr">${esc(c.phone)}</span>${c.area ? ' · ' + esc(t('area.' + c.area)) : ''}</small></span><span class="muted small">${esc(t('shop.orderCount', counts.get(c.id) || 0))}</span>${icon('chev', 'chev')}</button>`).join('');
-  return { title: t('shop.customersTitle'), back: 'shop', actions: addBtn('add-customer', t('shop.addCustomer')), body: rows ? `<div class="card list">${rows}</div>` : empty(t('shop.noCustomers')) };
+  const rows = S.customers.slice().sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0)).map(c => `<button class="row" data-act="edit-customer" data-id="${c.id}"${can('orders') ? '' : ' disabled'}><span class="avatar sm">${esc(initial(cName(c)))}</span><span class="row-main"><b>${esc(cName(c))}</b><small><span dir="ltr">${esc(c.phone)}</span>${c.area ? ' · ' + esc(t('area.' + c.area)) : ''}</small></span><span class="muted small">${esc(t('shop.orderCount', counts.get(c.id) || 0))}</span>${icon('chev', 'chev')}</button>`).join('');
+  return { title: t('shop.customersTitle'), back: 'shop', actions: can('orders') ? addBtn('add-customer', t('shop.addCustomer')) : '', body: rows ? `<div class="card list">${rows}</div>` : empty(t('shop.noCustomers')) };
 }
 function openCustomer(c) {
   const x = c || { name: '', phone: '', area: '', notes: '' };
@@ -908,7 +936,7 @@ function viewMarketing(rest) {
       <div class="field"><span>${esc(t('marketing.template'))}</span>${seg('template', ['newItem', 'priceAndOrder', 'occasionPromo', 'general'], CAP.template, k => t('marketing.template.' + k), 'caption')}</div>
       ${picker}
       <div class="field"><span>${esc(t('marketing.preview'))}</span><p class="caption-box" id="cap-preview">${esc(captionText())}</p></div>
-      ${CAP.ai ? `<p class="ai-note">${icon('sparkle')} ${esc(t('marketing.demoAI'))}</p>` : ''}
+      ${CAP.ai && !Live.on ? `<p class="ai-note">${icon('sparkle')} ${esc(t('marketing.demoAI'))}</p>` : ''}
       <div class="btn-row"><button class="btn ghost small" data-act="copy-caption">${icon('copy')} ${esc(t('marketing.copy'))}</button><a class="btn ghost small" id="cap-share" href="https://wa.me/?text=${encodeURIComponent(captionText())}" target="_blank" rel="noopener">${icon('share')} ${esc(t('marketing.share'))}</a><button class="btn primary small" data-act="caption-ai"${CAP.busy ? ' disabled' : ''}>${esc(CAP.busy ? t('marketing.writingWithAI') : t('marketing.writeWithAI'))}</button></div>
     </section>
   </div>`;
@@ -959,9 +987,9 @@ function viewStudio() {
       <div class="btn-row"><label class="btn ghost small">${icon('upload')} ${esc(t('studio.pickPhoto'))}<input type="file" accept="image/*" data-live="studio-photo" hidden></label><button class="btn ghost small" data-act="studio-sample">${esc(t('studio.samplePhoto'))}</button></div></section>
     <section class="card stack-sm"><h3 class="card-title">2 · ${esc(t('studio.pickStyleTitle'))}</h3><div class="styles">${styles.map(s => `<button class="style${ST.style === s.id ? ' on' : ''}" data-act="studio-style" data-id="${s.id}" aria-pressed="${ST.style === s.id}"><span class="swatch" style="background:${esc(s.bg)}">${esc(s.emoji || '')}</span><small>${esc(pick(s.ar, s.en))}</small></button>`).join('')}</div></section>
     <section class="card stack-sm"><h3 class="card-title">3 · ${esc(t('studio.pickAspectTitle'))}</h3>${seg('shape', Object.keys(SHAPES), ST.shape, k => t('studio.shape.' + k), 'studio-shape')}</section>
-    <div class="btn-row"><button class="btn primary big grow" data-act="studio-generate"${!ST.photo || ST.busy || ST.left <= 0 ? ' disabled' : ''}>${icon('sparkle')} ${esc(ST.busy ? t('studio.generating') : t('studio.generate'))}</button><span class="muted small">${esc(t('studio.remainingToday', ST.left))}</span></div>
+    <div class="btn-row"><button class="btn primary big grow" data-act="studio-generate"${!ST.photo || ST.busy || ST.left <= 0 ? ' disabled' : ''}>${icon('sparkle')} ${esc(ST.busy ? t('studio.generating') : t('studio.generate'))}</button>${typeof ST.left === 'number' ? `<span class="muted small">${esc(t('studio.remainingToday', ST.left))}</span>` : ''}</div>
     ${result}
-    <p class="note">${esc(t('studio.demoNote'))}</p>
+    ${Live.on ? '' : `<p class="note">${esc(t('studio.demoNote'))}</p>`}
   </div>`;
   return { title: t('studio.title'), back: 'shop/marketing', body };
 }
@@ -1076,13 +1104,14 @@ function paintSlug() {
 }
 const validSlug = v => /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(v);
 function viewShopLink() {
+  if (Live.on) return Live.viewShopLink();
   const L = S.shopLink;
   if (!SLUG.value && L.slug) SLUG.value = L.slug;
   const url = SHOP_PAGE + L.slug, h = hash(L.slug);
   const published = L.published ? `<section class="card stack-sm">
       <div>${badge('ok', t('shoplink.published'))}</div>
       <p class="link-url"><bdi dir="ltr">${esc(url)}</bdi></p>
-      <div class="btn-row"><button class="btn ghost small" data-act="copy" data-text="${esc(url)}">${icon('copy')} ${esc(t('marketing.copy'))}</button><a class="btn primary small" href="s/?demo" target="_blank" rel="noopener">${icon('external')} ${esc(t('shoplink.open'))}</a></div>
+      <div class="btn-row"><button class="btn ghost small" data-act="copy" data-text="${esc(url)}">${icon('copy')} ${esc(t('marketing.copy'))}</button><a class="btn primary small" href="/s/?demo" target="_blank" rel="noopener">${icon('external')} ${esc(t('shoplink.open'))}</a></div>
       <p class="muted small">${icon('instagram')} ${esc(t('shoplink.instagramTip'))}</p>
     </section>
     <div class="kpis three">${kpi(40 + (h % 120), t('shoplink.views7d'))}${kpi(3 + (h % 6), t('shoplink.orders7d'))}${kpi(S.webOrders.length, t('shoplink.pending'))}</div>` : '';
@@ -1121,27 +1150,27 @@ function pseudoQr(seedText) {
 }
 function viewReceipts() {
   const rows = live().sort((a, b) => byDue(b, a)).map(o => `<a class="row" href="#/shop/receipts/${o.id}"><span class="row-main"><b><bdi dir="ltr">${esc(invoiceNo(o))}</bdi></b><small>${esc(cName(customerOf(o)))} · ${esc(fmtDate(new Date(o.dueAt)))}</small></span><b class="amt">${esc(money(totals(o).total))}</b>${icon('chev', 'chev')}</a>`).join('');
-  const hint = vatOn() ? '' : `<p class="note">${esc(t('receipt.vatOff'))} <a href="#/shop/settings">${esc(t('shop.settings'))}</a></p>`;
+  const hint = vatOn() || Live.on ? '' : `<p class="note">${esc(t('receipt.vatOff'))} <a href="#/shop/settings">${esc(t('shop.settings'))}</a></p>`;
   return { title: t('shop.receipts'), back: 'shop', body: `<div class="stack">${hint}${rows ? `<div class="card list">${rows}</div>` : empty(t('shop.noOrders'))}</div>` };
 }
 function receiptText(o) {
-  const T = totals(o), d = new Date(o.dueAt);
-  return [shopName(), vatOn() ? t('receipt.taxInvoiceTitle') : t('receipt.title'), vatOn() && S.vat.trn ? t('receipt.trn', S.vat.trn) : '', t('receipt.invoiceNumber', invoiceNo(o)), `${fmtDate(d)} ${fmtTime(d)}`, '',
+  const T = totals(o), d = new Date(o.dueAt), rate = orderVatRate(o);
+  return [shopName(), rate ? t('receipt.taxInvoiceTitle') : t('receipt.title'), rate && S.vat.trn ? t('receipt.trn', S.vat.trn) : '', t('receipt.invoiceNumber', invoiceNo(o)), `${fmtDate(d)} ${fmtTime(d)}`, '',
     ...o.items.map(it => `${it.qty}× ${pick(it.nameAr, it.nameEn)} — ${money(it.qty * it.price)}`),
-    '', vatOn() ? `${t('orders.vatPercent', vatRate() + '%')}: ${money(T.vat)}` : '', `${t('orders.total')}: ${money(T.total)}`, `${t('orders.paid')}: ${money(T.paid)}`].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
+    '', rate ? `${t('orders.vatPercent', rate + '%')}: ${money(T.vat)}` : '', `${t('orders.total')}: ${money(T.total)}`, `${t('orders.paid')}: ${money(T.paid)}`].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
 }
 function viewReceipt(id) {
   const o = orderById(id);
   if (!o) return { title: t('shop.receipt'), back: 'shop/receipts', body: empty(t('orders.notFound')) };
-  const T = totals(o), d = new Date(o.dueAt);
+  const T = totals(o), d = new Date(o.dueAt), rate = orderVatRate(o);
   const line = (a, b, cls = '') => `<div class="line${cls ? ' ' + cls : ''}"><span>${esc(a)}</span><span>${esc(b)}</span></div>`;
   const body = `<article class="receipt">
     <header class="rc-head"><img src="favicon.svg" width="44" height="44" alt=""><div><h2>${esc(shopName())}</h2><p><bdi dir="ltr">${esc(S.shop.phone)}</bdi></p></div></header>
-    <h3 class="rc-title">${esc(vatOn() ? t('receipt.taxInvoiceTitle') : t('receipt.title'))}</h3>
-    <div class="rc-meta">${vatOn() && S.vat.trn ? `<p>${esc(t('receipt.trn', S.vat.trn))}</p>` : ''}<p>${esc(t('receipt.invoiceNumber', invoiceNo(o)))}</p><p>${esc(fmtDate(d))} · ${esc(fmtTime(d))}</p><p>${esc(t('neworder.customerTitle'))}: ${esc(cName(customerOf(o)))}</p></div>
+    <h3 class="rc-title">${esc(rate ? t('receipt.taxInvoiceTitle') : t('receipt.title'))}</h3>
+    <div class="rc-meta">${rate && S.vat.trn ? `<p>${esc(t('receipt.trn', S.vat.trn))}</p>` : ''}<p>${esc(t('receipt.invoiceNumber', invoiceNo(o)))}</p><p>${esc(fmtDate(d))} · ${esc(fmtTime(d))}</p><p>${esc(t('neworder.customerTitle'))}: ${esc(cName(customerOf(o)))}</p></div>
     <table class="rc-table"><thead><tr><th>${esc(t('receipt.item'))}</th><th>${esc(t('receipt.qty'))}</th><th>${esc(t('payment.amount'))}</th></tr></thead><tbody>${o.items.map(it => `<tr><td>${esc(pick(it.nameAr, it.nameEn))}</td><td>${it.qty}</td><td>${esc(money(it.qty * it.price))}</td></tr>`).join('')}${o.deliveryFee ? `<tr><td>${esc(t('orders.deliveryFee'))}</td><td></td><td>${esc(money(o.deliveryFee))}</td></tr>` : ''}</tbody></table>
-    <div class="rc-totals">${vatOn() ? line(t('orders.subtotal'), money(T.subtotal)) + line(t('orders.vatPercent', vatRate() + '%'), money(T.vat)) : ''}${line(t('orders.total'), money(T.total), 'total')}${line(t('orders.paid'), money(T.paid))}${T.due > 0 ? line(t('orders.remaining'), money(T.due)) : ''}</div>
-    ${vatOn() && country() === 'SA' ? `<figure class="rc-qr">${pseudoQr(invoiceNo(o) + shopName())}<figcaption>${esc(t('receipt.qr'))}</figcaption></figure>` : ''}
+    <div class="rc-totals">${rate ? line(t('orders.subtotal'), money(T.subtotal)) + line(t('orders.vatPercent', rate + '%'), money(T.vat)) : ''}${line(t('orders.total'), money(T.total), 'total')}${line(t('orders.paid'), money(T.paid))}${T.due > 0 ? line(t('orders.remaining'), money(T.due)) : ''}</div>
+    ${rate && country() === 'SA' ? `<figure class="rc-qr">${pseudoQr(invoiceNo(o) + shopName())}<figcaption>${esc(t('receipt.qr'))}</figcaption></figure>` : ''}
     <p class="rc-thanks">${esc(t('receipt.thanks'))}</p>
   </article>
   <div class="btn-row no-print"><button class="btn ghost" data-act="print">${icon('print')} ${esc(t('receipt.print'))}</button><button class="btn primary" data-act="share-receipt" data-id="${o.id}">${icon('share')} ${esc(t('shop.shareReceipt'))}</button></div>`;
@@ -1151,6 +1180,7 @@ function viewReceipt(id) {
 // ---------- Settings and team ----------
 
 function viewSettings() {
+  if (Live.on) return viewLiveSettings();
   const C = S.cloud;
   const vat = vatRate()
     ? `${toggle('vat', t('settings.vatEnabled'), S.vat.enabled, 'vat-enabled')}${S.vat.enabled ? `<div class="grid2">${field(t('settings.vatTRN'), `<input data-live="vat-trn" value="${esc(S.vat.trn)}" dir="ltr" inputmode="numeric">`)}<div class="field"><span>${esc(t('settings.vatRate'))}</span><b class="static"><bdi dir="ltr">${vatRate()}%</bdi></b></div></div><div class="field"><span>${esc(t('settings.vatPricesInclude'))}</span>${seg('pricesInclude', ['yes', 'no'], S.vat.pricesInclude ? 'yes' : 'no', k => t(k === 'yes' ? 'settings.vatIncludedYes' : 'settings.vatIncludedNo'), 'vat-include')}</div>` : ''}`
@@ -1176,6 +1206,7 @@ function viewSettings() {
     </section>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('settings.vat'))}</h3>${vat}</section>
     <section class="card stack-sm">${toggle('stock', t('settings.trackStock'), S.stockEnabled, 'stock-enabled')}<p class="muted small">${esc(t('settings.trackStockFooter'))}</p>${toggle('ask', t('settings.askOrderat'), S.askEnabled, 'ask-enabled')}</section>
+    <a class="card row" href="#/start"><span class="row-ic">${icon('users')}</span><span class="row-main"><b>${esc(t('live.logIn'))}</b><small>${esc(t('live.logInHint'))}</small></span>${icon('chev', 'chev')}</a>
     <section class="card stack-sm"><h3 class="card-title">${icon('cloud')} ${esc(t('cloud.sectionTitle'))}</h3>${cloud}<p class="note">${esc(t('cloud.demoNote'))}</p></section>
     <section class="card list">
       <button class="row" data-act="export"><span class="row-ic">${icon('download')}</span><span class="row-main"><b>${esc(t('settingsBackupExport'))}</b></span></button>
@@ -1185,14 +1216,46 @@ function viewSettings() {
     </section>
     <section class="card list">
       <a class="row" href="${SITE_URL}${S.lang === 'en' ? '/en/' : '/'}" target="_blank" rel="noopener"><span class="row-ic">${icon('external')}</span><span class="row-main"><b>${esc(t('web.about'))}</b></span></a>
-      <a class="row" href="terms.html" target="_blank" rel="noopener"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('paywallTerms'))}</b></span></a>
-      <a class="row" href="privacy.html" target="_blank" rel="noopener"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('paywallPrivacy'))}</b></span></a>
+      <a class="row" href="${legalUrl('terms')}" target="_blank" rel="noopener"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('paywallTerms'))}</b></span></a>
+      <a class="row" href="${legalUrl('privacy')}" target="_blank" rel="noopener"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('paywallPrivacy'))}</b></span></a>
+    </section>
+  </div>`;
+  return { title: t('shop.settings'), back: 'shop', body };
+}
+
+// The live shop's settings: the account and sync, device prefs, and the shop's own settings (the
+// currency stays with the phones: changing it would reread every amount in another unit).
+function viewLiveSettings() {
+  const vat = vatRate()
+    ? `${toggle('vat', t('settings.vatEnabled'), S.vat.enabled, 'vat-enabled')}${S.vat.enabled ? `<div class="grid2">${field(t('settings.vatTRN'), `<input data-live="vat-trn" value="${esc(S.vat.trn)}" dir="ltr" inputmode="numeric">`)}<div class="field"><span>${esc(t('settings.vatRate'))}</span><b class="static"><bdi dir="ltr">${vatRate()}%</bdi></b></div></div><div class="field"><span>${esc(t('settings.vatPricesInclude'))}</span>${seg('pricesInclude', ['yes', 'no'], S.vat.pricesInclude ? 'yes' : 'no', k => t(k === 'yes' ? 'settings.vatIncludedYes' : 'settings.vatIncludedNo'), 'vat-include')}</div>` : ''}`
+    : `<p class="muted">${esc(t('settings.vatNoCountryVAT'))}</p>`;
+  const body = `<div class="stack">
+    ${Live.settingsTop()}
+    <section class="card stack-sm">
+      <div class="field"><span>${esc(t('settings.language'))}</span>${seg('lang', ['ar', 'en'], S.lang, k => (k === 'ar' ? 'العربية' : 'English'), 'setting')}</div>
+      ${S.lang === 'ar' ? `<div class="field"><span>${esc(t('settings.addressAs'))}</span>${seg('addressAs', ['male', 'female'], S.addressAs, k => t(k === 'male' ? 'settings.addressAsMale' : 'settings.addressAsFemale'), 'setting')}</div>` : ''}
+      <div class="field"><span>${esc(t('settings.appearance'))}</span>${seg('theme', ['system', 'light', 'dark'], S.theme, k => t('settings.appearance' + k[0].toUpperCase() + k.slice(1)), 'setting')}</div>
+    </section>
+    <section class="card grid2">
+      <div class="field"><span>${esc(t('shop.currency'))}</span><b class="static">${esc(S.shop.currency)}</b><small class="muted">${esc(t('live.currencyInApp'))}</small></div>
+      ${field(t('settings.businessType'), `<select data-live="business-type">${options(BUSINESS_TYPES, S.shop.businessType, b => t('businessType.' + b))}</select>`)}
+    </section>
+    <section class="card stack-sm"><h3 class="card-title">${esc(t('settings.vat'))}</h3>${vat}</section>
+    <section class="card stack-sm">${toggle('stock', t('settings.trackStock'), S.stockEnabled, 'stock-enabled')}<p class="muted small">${esc(t('settings.trackStockFooter'))}</p>${can('money') ? toggle('ask', t('settings.askOrderat'), S.askEnabled, 'ask-enabled') : ''}</section>
+    <section class="card list">
+      <button class="row" data-act="export"><span class="row-ic">${icon('download')}</span><span class="row-main"><b>${esc(t('settingsBackupExport'))}</b></span></button>
+    </section>
+    <section class="card list">
+      <a class="row" href="${SITE_URL}${S.lang === 'en' ? '/en/' : '/'}" target="_blank" rel="noopener"><span class="row-ic">${icon('external')}</span><span class="row-main"><b>${esc(t('web.about'))}</b></span></a>
+      <a class="row" href="${legalUrl('terms')}" target="_blank" rel="noopener"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('paywallTerms'))}</b></span></a>
+      <a class="row" href="${legalUrl('privacy')}" target="_blank" rel="noopener"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('paywallPrivacy'))}</b></span></a>
     </section>
   </div>`;
   return { title: t('shop.settings'), back: 'shop', body };
 }
 
 function viewTeam() {
+  if (Live.on) return Live.viewTeam();
   const C = S.cloud;
   if (!C.signedIn) return { title: t('cloud.team'), back: 'shop/settings', body: empty(t('cloud.signInSubtitle')) };
   const inv = C.invite && new Date(C.invite.expires) > new Date() ? C.invite : null;
@@ -1257,6 +1320,7 @@ function renderAsk() {
   if (el) el.scrollTop = el.scrollHeight;
 }
 function askQuestion(kind, label) {
+  if (Live.on) { Live.ask(label); return; } // orderat-ask with the shop's numbers
   if (ASK.busy) return;
   ASK.msgs.push({ me: true, html: esc(label) });
   ASK.busy = true;
@@ -1270,6 +1334,7 @@ function askQuestion(kind, label) {
 
 const trialNotice = plan => t('paywallTrialNotice', TRIAL_DAYS, `${usd(PRICE[plan])} ${t(plan === 'yearly' ? 'paywall.perYear' : 'paywall.perMonth')}`);
 function openPaywall() {
+  if (Live.on) { Live.paywall(); return; }
   const saving = Math.round(100 - (PRICE.yearly / (PRICE.monthly * 12)) * 100);
   const features = ['whatsapp', 'ai', 'profit', 'vat', 'stock', 'link', 'studio', 'staff'];
   openModal(t('paywallTitle'), `<div class="paywall stack">
@@ -1282,7 +1347,7 @@ function openPaywall() {
     <p class="muted small center" id="pw-trial">${esc(trialNotice('yearly'))}</p>
     <button class="btn primary block big" data-act="paywall-cta">${esc(t('paywallCta'))}</button>
     <p class="note hidden" id="pw-note">${esc(t('paywall.appsOnly'))}</p>
-    <p class="small center"><a href="terms.html" target="_blank" rel="noopener">${esc(t('paywallTerms'))}</a> · <a href="privacy.html" target="_blank" rel="noopener">${esc(t('paywallPrivacy'))}</a></p>
+    <p class="small center"><a href="${legalUrl('terms')}" target="_blank" rel="noopener">${esc(t('paywallTerms'))}</a> · <a href="${legalUrl('privacy')}" target="_blank" rel="noopener">${esc(t('paywallPrivacy'))}</a></p>
   </div>`);
 }
 
@@ -1316,14 +1381,14 @@ const ACTIONS = {
   'item-qty'(el) { const it = itemList(el.dataset.p)[+el.dataset.i]; if (it) { it.qty = Math.max(1, it.qty + +el.dataset.d); rerenderItems(el.dataset.p); } },
   'item-add'(el) { itemList(el.dataset.p).push(newItem()); rerenderItems(el.dataset.p); },
   'item-del'(el) { itemList(el.dataset.p).splice(+el.dataset.i, 1); rerenderItems(el.dataset.p); },
-  parse() { if (D.text.trim()) readDraft(D.text, t('neworder.demoRead')); },
+  parse() { if (D.text.trim()) { if (Live.on) Live.parseText(D.text); else readDraft(D.text, t('neworder.demoRead')); } },
   example(el) { const ex = examples()[+el.dataset.i]; if (ex) { D.text = ex.text; readDraft(ex.text, t('neworder.demoRead')); } },
   'money-range'(el) { moneyRange = el.dataset.v; render(); },
   'add-expense': openExpense,
   'edit-shop': openShop,
   'add-product'() { openProduct(null); },
   'edit-product'(el) { openProduct(productOf(el.dataset.id)); },
-  'delete-product'(el) { if (confirm(t('common.delete') + '?')) { S.products = S.products.filter(p => p.id !== el.dataset.id); save(); closeModal(); render(); } },
+  'delete-product'(el) { if (can('products') && confirm(t('common.delete') + '?')) { S.products = S.products.filter(p => p.id !== el.dataset.id); save(); closeModal(); render(); } },
   'add-customer'() { openCustomer(null); },
   'edit-customer'(el) { openCustomer(S.customers.find(c => c.id === el.dataset.id)); },
   'add-occasion': openOccasion,
@@ -1333,19 +1398,20 @@ const ACTIONS = {
   'caption-ai'() {
     CAP.busy = true;
     render();
+    if (Live.on) { Live.caption(); return; }
     setTimeout(() => { CAP.ai = aiCaption(productOf(CAP.pid) || S.products.find(p => p.active)); CAP.busy = false; if (route()[1] === 'marketing') render(); }, 1100);
   },
   'campaign-photo'(el) { ST.campaign = el.dataset.id; ST.style = 'campaign'; ST.result = null; go('shop/marketing/studio'); },
   'campaign-occasion'(el) {
     const c = (CAMPAIGNS || []).find(x => x.id === el.dataset.id);
     if (!c) return;
-    S.occasions.push({ id: uid(), kind: 'custom', nameAr: c.name.ar, nameEn: c.name.en, start: c.startDate, end: c.endDate, cap: null, blocked: false, campaignId: c.id });
+    S.occasions.push({ id: nid(), kind: 'custom', nameAr: c.name.ar, nameEn: c.name.en, start: c.startDate, end: c.endDate, cap: null, blocked: false, campaignId: c.id });
     save(); render(); toast(t('campaign.addedToOccasions'));
   },
   'studio-sample'() { ST.photo = samplePhoto(); ST.result = null; render(); },
   'studio-style'(el) { ST.style = el.dataset.id; ST.result = null; render(); },
-  'studio-generate': generateStudio,
-  'studio-use'() { toast(t('studio.saved')); },
+  'studio-generate'() { if (Live.on) Live.studioGenerate(); else generateStudio(); },
+  'studio-use'() { if (Live.on) Live.studioUse(); else toast(t('studio.saved')); },
   'studio-again'() { ST.result = null; render(); },
   lead(el) { S.shopLink.leadDays = Math.max(0, Math.min(30, S.shopLink.leadDays + +el.dataset.d)); save(); render(); },
   unpublish() { if (confirm(t('shoplink.unpublishConfirm'))) { S.shopLink.published = false; save(); render(); } },
@@ -1392,13 +1458,26 @@ const LIVE = {
     it[el.dataset.f] = el.value;
     updateTotal(el.dataset.p);
   },
-  shot(el) { if (el.files?.[0]) { const ex = examples()[0]; readDraft(ex ? ex.text : '', t('neworder.demoShot')); } el.value = ''; },
+  shot(el) {
+    const f = el.files?.[0];
+    el.value = '';
+    if (!f) return;
+    if (Live.on) { Live.parseImage(f); return; }
+    const ex = examples()[0];
+    readDraft(ex ? ex.text : '', t('neworder.demoShot'));
+  },
   setting(el) { S[el.name] = el.value; save(); render(); },
   currency(el) { S.shop.currency = el.value; save(); render(); },
   'business-type'(el) {
+    if (Live.on) { S.shop.businessType = el.value; save(); render(); return; }
     if (confirm(t('settings.restoreDemoConfirm'))) { seed(el.value); go('today'); } else el.value = S.shop.businessType;
   },
-  'vat-enabled'(el) { S.vat.enabled = el.checked; save(); render(); },
+  'vat-enabled'(el) {
+    S.vat.enabled = el.checked;
+    // The phones prefill the currency's rate the first time VAT is turned on.
+    if (Live.on && el.checked && typeof S.vat.rateBps !== 'number') S.vat.rateBps = OrderatLiveCore.defaultRateBps(S.shop.currency);
+    save(); render();
+  },
   'vat-trn'(el) { S.vat.trn = el.value.trim(); save(); },
   'vat-include'(el) { S.vat.pricesInclude = el.value === 'yes'; save(); },
   'stock-enabled'(el) { S.stockEnabled = el.checked; save(); },
@@ -1450,11 +1529,11 @@ const FORMS = {
     if (!name) { toast(t('neworder.needName')); return; }
     const tail = digits(D.phone).slice(-8);
     let c = S.customers.find(x => (tail.length === 8 && digits(x.phone).endsWith(tail)) || x.name === name || x.nameEn === name);
-    if (!c) { c = { id: uid(), name, nameEn: '', phone: tail.length === 8 && !D.phone.trim().startsWith('+') ? '+973' + tail : D.phone.trim(), area: D.area, notes: '' }; S.customers.push(c); }
+    if (!c) { c = { id: nid(), name, nameEn: '', phone: tail.length === 8 && !D.phone.trim().startsWith('+') ? '+973' + tail : D.phone.trim(), area: D.area, notes: '' }; S.customers.push(c); }
     const now = new Date().toISOString(), delivery = D.fulfillment === 'delivery';
     const due = new Date(D.due);
     const order = {
-      id: uid(), no: S.nextOrderNo++, customerId: c.id, dueAt: (isNaN(due) ? new Date() : due).toISOString(), items,
+      id: nid(), no: Live.on ? undefined : S.nextOrderNo++, customerId: c.id, dueAt: (isNaN(due) ? new Date() : due).toISOString(), items,
       fulfillment: D.fulfillment, area: delivery ? D.area || c.area || '' : '', deliveryFee: delivery ? parseFloat(D.fee) || 0 : 0,
       source: D.source, payments: [], notes: D.notes.trim(), changes: [{ kind: 'created', at: now }], status: 'new', stockApplied: false,
     };
@@ -1462,6 +1541,11 @@ const FORMS = {
     if (deposit > 0) {
       order.payments.push({ amount: round(deposit), method: D.method, note: '', at: now });
       order.changes.push({ kind: 'payment', value: round(deposit), at: now });
+    }
+    if (Live.on) {
+      delete order.no; // display numbers come from creation order
+      order.createdAt = now;
+      Live.applyOrderVat(order); // the VAT snapshot and invoice number, like the phones
     }
     S.orders.push(order);
     save();
@@ -1482,16 +1566,22 @@ const FORMS = {
     if (!o) return;
     const items = cleanItems(E.items);
     if (!items.length) { toast(t('neworder.needItem')); return; }
-    if (o.stockApplied) applyStock(o, 1);
-    o.items = items;
-    if (o.stockApplied) applyStock(o, -1);
+    if (Live.on) {
+      Live.stockForEdit(o, items);
+      o.items = items;
+      Live.applyOrderVat(o);
+    } else {
+      if (o.stockApplied) applyStock(o, 1);
+      o.items = items;
+      if (o.stockApplied) applyStock(o, -1);
+    }
     o.changes.push({ kind: 'items', at: new Date().toISOString() });
     save(); closeModal(); render();
   },
   expense(f, fd) {
     const amount = parseFloat(fd.get('amount'));
     if (!(amount > 0)) return;
-    S.expenses.push({ id: uid(), amount: round(amount), category: fd.get('category'), note: String(fd.get('note') || ''), date: new Date(`${fd.get('date')}T12:00`).toISOString() });
+    S.expenses.push({ id: nid(), amount: round(amount), category: fd.get('category'), note: String(fd.get('note') || ''), date: new Date(`${fd.get('date')}T12:00`).toISOString() });
     save(); closeModal(); render(); toast(t('common.saved'));
   },
   shop(f, fd) {
@@ -1505,7 +1595,9 @@ const FORMS = {
     const data = { nameAr: get('nameAr') || get('nameEn'), nameEn: get('nameEn') || get('nameAr'), price: +get('price') || 0, cost: +get('cost') || 0, cap: get('cap') ? +get('cap') : null, active: fd.has('active') };
     if (S.stockEnabled) Object.assign(data, { track: fd.has('track'), qty: +get('qty') || 0, low: +get('low') || 0 });
     const p = productOf(f.dataset.id);
-    if (p) Object.assign(p, data); else S.products.push({ id: uid(), aliases: [], track: false, qty: 0, low: 3, ...data });
+    if (!can('products')) return;
+    if (p && Live.on && S.stockEnabled && data.track) Live.stockCorrection(Object.assign(p, { track: true }), data.qty);
+    if (p) Object.assign(p, data); else S.products.push({ id: nid(), aliases: [], track: false, qty: 0, low: 3, ...(Live.on ? { stockMoves: [], photoId: null } : {}), ...data });
     save(); closeModal(); render(); toast(t('common.saved'));
   },
   customer(f, fd) {
@@ -1517,14 +1609,14 @@ const FORMS = {
       // Keep the other language's name when the shown one is unchanged.
       if (get('name') !== cName(c)) Object.assign(c, { name: get('name'), nameEn: '' });
       Object.assign(c, data);
-    } else S.customers.push({ id: uid(), name: get('name'), nameEn: '', ...data });
+    } else S.customers.push({ id: nid(), name: get('name'), nameEn: '', ...data });
     save(); closeModal(); render(); toast(t('common.saved'));
   },
   occasion(f, fd) {
     const get = k => String(fd.get(k) || '').trim();
     const kind = get('kind') || 'custom', label = I18N['occasion.kind.' + kind] || ['', ''];
     const start = get('start'), end = get('end') < start ? start : get('end');
-    S.occasions.push({ id: uid(), kind, nameAr: get('nameAr') || label[1], nameEn: get('nameEn') || label[0], start, end, cap: get('cap') ? +get('cap') : null, blocked: fd.has('blocked') });
+    S.occasions.push({ id: nid(), kind, nameAr: get('nameAr') || label[1], nameEn: get('nameEn') || label[0], start, end, cap: get('cap') ? +get('cap') : null, blocked: fd.has('blocked') });
     save(); closeModal(); render(); toast(t('common.saved'));
   },
   shoplink() {
@@ -1548,6 +1640,9 @@ function onLive(e) {
   const typed = el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'file'].includes(el.type));
   if (typed === (e.type === 'input')) LIVE[el.dataset.live]?.(el, e);
 }
+Object.assign(ACTIONS, Live.actions);
+Object.assign(LIVE, Live.liveHandlers);
+Object.assign(FORMS, Live.forms);
 document.addEventListener('input', onLive);
 document.addEventListener('change', onLive);
 document.addEventListener('click', e => {
@@ -1567,5 +1662,5 @@ document.addEventListener('submit', e => {
 });
 window.addEventListener('hashchange', render);
 
-render();
+Live.boot(); // the signed-in shop when there is a session, else the demo or the start screen
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
