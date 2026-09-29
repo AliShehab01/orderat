@@ -5,8 +5,9 @@
 //
 // Every action authenticates itself from the X-Orderat-Session header (server/auth/store.ts's
 // resolveSession) — never from anything in the body, the same convention server/auth/handler.ts uses
-// for everything but `signin`. No CORS wrapper: like orderat-studio, this is called by the
-// iPhone/Android apps directly, never by a browser page.
+// for everything but `signin`. No CORS in this handler itself: the iPhone/Android apps call it
+// directly, and the browser web app is let in by supabase/functions/orderat-sync/index.ts wrapping
+// it with server/shared/cors.ts's withAppCors.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { resolveSession } from "../auth/store.ts";

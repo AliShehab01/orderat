@@ -2,8 +2,10 @@
 // Request -> Response, like server/ask/handler.ts, so it runs the same under Deno, Node or a test;
 // supabase/functions/orderat-studio/index.ts only wires in env + the content bundle.
 //
-// No CORS here (unlike server/campaigns/handler.ts and server/shop/handler.ts): orderat-studio is
-// called by the iPhone/Android apps directly, never by a browser page, per docs/marketing-tools.md.
+// No CORS in this handler itself (unlike server/campaigns/handler.ts and server/shop/handler.ts):
+// docs/marketing-tools.md has orderat-studio called by the iPhone/Android apps directly, and the
+// browser web app is let in by supabase/functions/orderat-studio/index.ts wrapping it with
+// server/shared/cors.ts's withAppCors.
 //
 // Order of work per task, matching server/ask/handler.ts: validate the body (never counted against a
 // limit if invalid) -> resolve content (campaign/style; an unknown campaignId is silently ignored, an

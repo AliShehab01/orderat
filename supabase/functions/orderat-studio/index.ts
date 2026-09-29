@@ -3,12 +3,15 @@
 // Deployed as: npm run hosting:deploy -- orderat-studio (supabase functions deploy orderat-studio --use-api)
 // URL: https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-studio
 //
-// Called directly by the iPhone/Android apps (not a browser — no CORS here, unlike orderat-campaigns
-// and orderat-shop). All the actual logic (body validation, content lookups, rate limiting, both
-// Gemini calls) is the same server/studio/handler.ts a test can exercise directly; this file only
-// wires it to real dependencies. See supabase/functions/orderat-whatsapp/index.ts for notes on the
-// import layout, --use-api and the orderat- / ORDERAT_ prefixing this shares with the other
-// functions.
+// Called directly by the iPhone/Android apps and by the browser web app at
+// https://orderat-app.pages.dev/app/ — so the handler is wrapped with withAppCors
+// (server/shared/cors.ts) here, rather than applying its own CORS inside the factory the way
+// orderat-campaigns and orderat-shop do; it allows that site's origin (and localhost for development)
+// and leaves the phones, which send no Origin header, exactly as they were. All the actual logic (body
+// validation, content lookups, rate limiting, both Gemini calls) is the same server/studio/handler.ts
+// a test can exercise directly; this file only wires it to real dependencies. See
+// supabase/functions/orderat-whatsapp/index.ts for notes on the import layout, --use-api and the
+// orderat- / ORDERAT_ prefixing this shares with the other functions.
 //
 // content/campaigns.json and content/studio-styles.json are imported with Deno's
 // `with { type: "json" }` import attribute — see server/campaigns/content.ts's header for why.
@@ -16,6 +19,7 @@
 import campaignsFile from "../../../content/campaigns.json" with { type: "json" };
 import studioStylesFile from "../../../content/studio-styles.json" with { type: "json" };
 import type { Campaign, StudioStyle } from "../../../server/campaigns/content.ts";
+import { withAppCors } from "../../../server/shared/cors.ts";
 import { createStudioHandler } from "../../../server/studio/handler.ts";
 import { orderatEnv as env } from "../_shared/env.ts";
 import { getSqlClient } from "../_shared/db.ts";
@@ -37,7 +41,7 @@ function parseCap(raw: string | undefined): number | undefined {
 const captionDailyCap = parseCap(env("CAPTION_DAILY_CAP"));
 const photoDailyCap = parseCap(env("PHOTO_DAILY_CAP"));
 
-const handler = createStudioHandler({
+const handler = withAppCors(createStudioHandler({
   sql,
   text,
   image,
@@ -45,6 +49,6 @@ const handler = createStudioHandler({
   styles: studioStylesFile.styles as StudioStyle[],
   captionLimits: captionDailyCap ? { globalCap: captionDailyCap } : undefined,
   photoLimits: photoDailyCap ? { globalCap: photoDailyCap } : undefined,
-});
+}));
 
 Deno.serve((req) => handler(req));

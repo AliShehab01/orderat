@@ -2,14 +2,18 @@
 // Deployed as: npm run hosting:deploy (supabase functions deploy orderat-ask --use-api)
 // URL: https://ckjmbdbvlbxfofjgqiuj.supabase.co/functions/v1/orderat-ask
 //
-// Called directly by the iPhone/Android apps (not a Meta webhook), with `apikey` +
-// `Authorization: Bearer <anon key>` like the other orderat functions — see
-// supabase/functions/orderat-whatsapp/index.ts for notes on the import layout, --use-api and the
-// orderat- / ORDERAT_ prefixing this shares with the other three functions. All the actual logic
-// (body validation, rate limiting, the Gemini call, action validation) is the same
-// server/ask/handler.ts a test can exercise directly; this file only wires it to real dependencies.
+// Called directly by the iPhone/Android apps (not a Meta webhook) and by the browser web app at
+// https://orderat-app.pages.dev/app/, with `apikey` + `Authorization: Bearer <anon key>` like the
+// other orderat functions — so the handler is wrapped with withAppCors (server/shared/cors.ts), which
+// allows that site's origin (and localhost for development) and leaves the phones, which send no
+// Origin header, exactly as they were. See supabase/functions/orderat-whatsapp/index.ts for notes on
+// the import layout, --use-api and the orderat- / ORDERAT_ prefixing this shares with the other three
+// functions. All the actual logic (body validation, rate limiting, the Gemini call, action
+// validation) is the same server/ask/handler.ts a test can exercise directly; this file only wires it
+// to real dependencies.
 
 import { createAskHandler } from "../../../server/ask/handler.ts";
+import { withAppCors } from "../../../server/shared/cors.ts";
 import { orderatEnv as env } from "../_shared/env.ts";
 import { getSqlClient } from "../_shared/db.ts";
 
@@ -24,10 +28,10 @@ const gemini = geminiKey ? { apiKey: geminiKey, model: env("GEMINI_MODEL"), fall
 const dailyCapRaw = env("ASK_DAILY_CAP");
 const dailyCap = dailyCapRaw && /^\d+$/.test(dailyCapRaw) ? Number(dailyCapRaw) : undefined;
 
-const handler = createAskHandler({
+const handler = withAppCors(createAskHandler({
   sql,
   gemini,
   limits: dailyCap ? { globalCap: dailyCap } : undefined,
-});
+}));
 
 Deno.serve((req) => handler(req));
