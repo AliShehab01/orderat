@@ -5,7 +5,7 @@
 // xToWeb(id, data, ctx) reads a record. xToCloud(webObj, rawData, ctx) writes one back, starting from a
 // copy of rawData (the last cloud data for that id, undefined for a new record) and overwriting only the
 // fields the web owns, so:
-// - unknown keys, and the known ones the web does not own (address.block, stockMoves, vat.rateBps, ...),
+// - unknown keys, and the known ones the web does not own (address.block, stockMoves, ...),
 //   survive a web edit;
 // - a field the web did not change keeps its exact raw form (null or missing, another app's date format,
 //   an enum code this build does not know), so toCloud(toWeb(raw), raw) deep-equals raw for any record
@@ -204,14 +204,17 @@
     ['nameAr', 'nameAr', text], ['nameEn', 'nameEn', optText], ['phone', 'phone', text], ['currency', 'currencyCode', CURRENCY],
     ['pickupHours', 'pickupHours', optText], ['dailyCapacity', 'dailyCapacity', capacity], ['businessType', 'businessType', BUSINESS],
   ];
-  const VAT_FIELDS = [['enabled', 'enabled', flag(false)], ['trn', 'trn', text], ['pricesInclude', 'pricesIncludeVat', flag(true)]];
+  // The VAT rate in basis points (1000 = 10%), null when the shop never set one; a web object without
+  // it (undefined) leaves the key out of a new record.
+  const RATE_BPS = { read: nullableInt.read, write: v => (v === undefined ? undefined : nullableInt.write(v)) };
+  const VAT_FIELDS = [['enabled', 'enabled', flag(false)], ['trn', 'trn', text], ['pricesInclude', 'pricesIncludeVat', flag(true)], ['rateBps', 'rateBps', RATE_BPS]];
   const STOCK_ON = flag(false);
 
   function shopToWeb(id, data) {
     const d = obj(data);
     return { shop: readFields(SHOP_FIELDS, d, {}), vat: readFields(VAT_FIELDS, obj(d.vat), {}), stockEnabled: STOCK_ON.read(obj(d.stock).enabled) };
   }
-  // Keeps vat.rateBps, stock.defaultLowStockThreshold and createdAt (now for a new shop).
+  // Keeps stock.defaultLowStockThreshold and createdAt (now for a new shop).
   function shopToCloud(web, raw, ctx) {
     const w = obj(web), r = obj(raw), isNew = !isObj(raw), out = start(raw);
     putFields(SHOP_FIELDS, obj(w.shop), out, r, isNew);

@@ -204,7 +204,7 @@ describe('start', () => {
     const state = await sync.start();
     expect(Object.keys(state).sort()).toEqual(['customers', 'expenses', 'occasions', 'orders', 'products', 'shop', 'stockEnabled', 'subscription', 'vat', 'waTemplates']);
     expect(state.shop).toEqual({ nameAr: 'حلويات أم أحمد', nameEn: 'Umm Ahmed Sweets', phone: '+97336005005', currency: 'SAR', pickupHours: '4:00 PM - 8:00 PM', dailyCapacity: 35, businessType: 'home' });
-    expect(state.vat).toEqual({ enabled: true, trn: '220012345600003', pricesInclude: true });
+    expect(state.vat).toEqual({ enabled: true, trn: '220012345600003', pricesInclude: true, rateBps: 1000 });
     expect(state.stockEnabled).toBe(true);
     expect(state.products.map(p => [p.id, p.price])).toEqual([[CAKE_ID, 9.99]]);
     expect(state.customers.map(c => c.id)).toEqual([FATIMA_ID]);

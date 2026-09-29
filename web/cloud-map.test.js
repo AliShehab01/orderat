@@ -95,7 +95,7 @@ describe('shop', () => {
   it('reads the record into shop, vat and stockEnabled', () => {
     expect(map.shopToWeb(SHOP_ID, shopRecord())).toEqual({
       shop: { nameAr: 'حلويات أم أحمد', nameEn: 'Umm Ahmed Sweets', phone: '+97336005005', currency: 'BHD', pickupHours: '4:00 PM - 8:00 PM', dailyCapacity: 35, businessType: 'home' },
-      vat: { enabled: true, trn: '220012345600003', pricesInclude: true },
+      vat: { enabled: true, trn: '220012345600003', pricesInclude: true, rateBps: 1000 },
       stockEnabled: true,
     });
   });
@@ -110,7 +110,7 @@ describe('shop', () => {
     const sparse = frozen({ nameAr: 'عربة زاد', phone: '+97336005009', createdAt: '2026-03-01T06:00:00.000Z' });
     expect(map.shopToWeb(SHOP_ID, sparse)).toEqual({
       shop: { nameAr: 'عربة زاد', nameEn: '', phone: '+97336005009', currency: 'BHD', pickupHours: '', dailyCapacity: null, businessType: 'home' },
-      vat: { enabled: false, trn: '', pricesInclude: true },
+      vat: { enabled: false, trn: '', pricesInclude: true, rateBps: null },
       stockEnabled: false,
     });
     expect(roundTrip('shop', SHOP_ID, sparse, BHD)).toStrictEqual(sparse);
@@ -128,6 +128,18 @@ describe('shop', () => {
       vat: { enabled: true, trn: '220012345600003', rateBps: 1000, pricesIncludeVat: false },
       stock: { enabled: false, defaultLowStockThreshold: 5 },
     });
+  });
+
+  it('reads and writes vat.rateBps (the phones prefill it when VAT is turned on)', () => {
+    const noRate = frozen({ ...shopRecord(), vat: { enabled: false, trn: '', pricesIncludeVat: true } });
+    const web = map.shopToWeb(SHOP_ID, noRate);
+    expect(web.vat.rateBps).toBeNull();
+    expect(map.shopToCloud(web, noRate, BHD)).toStrictEqual(noRate);
+    web.vat.enabled = true;
+    web.vat.rateBps = 1000;
+    expect(map.shopToCloud(web, noRate, BHD).vat).toStrictEqual({ enabled: true, trn: '', pricesIncludeVat: true, rateBps: 1000 });
+    const created = map.shopToCloud({ shop: { nameAr: 'x' }, vat: { enabled: true, trn: '', pricesInclude: true, rateBps: 1500 }, stockEnabled: false }, undefined, SAR);
+    expect(created.vat).toStrictEqual({ enabled: true, trn: '', pricesIncludeVat: true, rateBps: 1500 });
   });
 
   it('maps food_truck ⇄ foodTruck and keeps a business type it does not know', () => {
