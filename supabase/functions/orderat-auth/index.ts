@@ -16,7 +16,7 @@
 import { appleKeyConfigFromEnv, createAppleTokenClient } from "../../../server/auth/apple-tokens.ts";
 import { createAuthHandler } from "../../../server/auth/handler.ts";
 import { createJwksCache } from "../../../server/auth/jwks.ts";
-import { APPLE_JWKS_URL, GOOGLE_JWKS_URL, resolveAudiences } from "../../../server/auth/providers.ts";
+import { APPLE_JWKS_URL, GOOGLE_JWKS_URL, resolveAudiences, withExtraAudience } from "../../../server/auth/providers.ts";
 import { withAppCors } from "../../../server/shared/cors.ts";
 import { sha256HexOfString } from "../../../server/shared/crypto.ts";
 import { orderatEnv as env } from "../_shared/env.ts";
@@ -38,7 +38,15 @@ const appleAudiences = resolveAudiences(env("APPLE_AUDIENCES"), ["com.ams.ordera
 // Default: the Orderat project's Web OAuth client (Google Cloud project gen-lang-client-0326595565). The
 // Android app requests ID tokens with it as serverClientId, so it is the token audience. Client IDs
 // are public identifiers, not secrets.
-const googleAudiences = resolveAudiences(env("GOOGLE_AUDIENCES"), ["799835600648-rj4qq9ia615jfob5eg6k4lgop3aq3i6l.apps.googleusercontent.com"]);
+// Plus the iPhone app's own iOS OAuth client (Google Sign-In on iOS issues ID tokens for it), when
+// ORDERAT_GOOGLE_IOS_CLIENT_ID is set. Nonce: Google copies the `nonce` it was given into the token
+// verbatim, and the server compares the signin body's `nonce` with it unchanged for Google
+// (verify-token.ts expectedNonceFor hashes only for Apple). So the body's `nonce` must be exactly the
+// value handed to Google: if the app gives Google SHA-256(rawNonce), it sends that hash, not rawNonce.
+const googleAudiences = withExtraAudience(
+  resolveAudiences(env("GOOGLE_AUDIENCES"), ["799835600648-rj4qq9ia615jfob5eg6k4lgop3aq3i6l.apps.googleusercontent.com"]),
+  env("GOOGLE_IOS_CLIENT_ID"),
+);
 
 // The salt pair_start's per-IP rate limit hashes a client IP with, so no row ever holds the IP (the
 // same approach as orderat-shop's ORDERAT_SHOP_IP_SALT). A dedicated ORDERAT_AUTH_IP_SALT if set;

@@ -37,3 +37,11 @@ export function resolveAudiences(raw: string | undefined, fallback: string[] = [
   const parsed = (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   return parsed.length > 0 ? parsed : fallback;
 }
+
+/** `audiences` plus one more client id when it is set (and not already listed) — how orderat-auth adds
+ * the iPhone app's own Google OAuth client (ORDERAT_GOOGLE_IOS_CLIENT_ID) to the Google audiences,
+ * whether those come from ORDERAT_GOOGLE_AUDIENCES or the built-in default. */
+export function withExtraAudience(audiences: string[], extra: string | undefined): string[] {
+  const id = extra?.trim();
+  return id && !audiences.includes(id) ? [...audiences, id] : audiences;
+}

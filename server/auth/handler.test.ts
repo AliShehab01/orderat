@@ -181,6 +181,30 @@ describe("createAuthHandler / session-authenticated actions", () => {
   });
 });
 
+// Google sign-in from the iPhone (ORDERAT_GOOGLE_IOS_CLIENT_ID): the token's aud is the iOS OAuth client,
+// and Google copies the nonce it was given verbatim, so the signin body's nonce must be that same value.
+describe("createAuthHandler / Google sign-in from the iPhone's own client", () => {
+  const IOS_AUD = "ios-client.apps.googleusercontent.com";
+  const googleToken = async (claims: Record<string, unknown>) =>
+    signTestToken(googleKeyPair, { iss: "https://accounts.google.com", sub: "g-ios", exp: Math.floor(NOW.getTime() / 1000) + 3600, ...claims });
+
+  it("accepts a token for the iOS client once it is among the Google audiences", async () => {
+    const handler = makeHandler(() => NOW, { googleAudiences: [GOOGLE_AUD, IOS_AUD] });
+    expect((await handler(post({ action: "signin", provider: "google", idToken: await googleToken({ aud: IOS_AUD }) }))).status).toBe(200);
+    const without = makeHandler();
+    expect((await without(post({ action: "signin", provider: "google", idToken: await googleToken({ aud: IOS_AUD }) }))).status).toBe(401);
+  });
+
+  it("compares the body's nonce with the token's verbatim: send the exact value given to Google", async () => {
+    const handler = makeHandler(() => NOW, { googleAudiences: [GOOGLE_AUD, IOS_AUD] });
+    const raw = "raw-nonce-123";
+    const hashed = await sha256HexOfString(raw);
+    const idToken = await googleToken({ aud: IOS_AUD, nonce: hashed }); // the app gave Google SHA-256(raw)
+    expect((await handler(post({ action: "signin", provider: "google", idToken, nonce: hashed }))).status).toBe(200);
+    expect((await handler(post({ action: "signin", provider: "google", idToken, nonce: raw }))).status).toBe(401);
+  });
+});
+
 // Sign in with Apple revocation (App Store Review Guideline 5.1.1(v)): an Apple signin's
 // authorizationCode is exchanged for a refresh token, which delete_account revokes. Apple's endpoints
 // are a fake fetch here.

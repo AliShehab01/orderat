@@ -45,6 +45,8 @@ export const ALLOWLIST = [
   // docs/sme-phase-2-cloud.md (orderat-auth/orderat-sync/orderat-parse, SME phase 2).
   "APPLE_AUDIENCES",
   "GOOGLE_AUDIENCES",
+  // orderat-auth: the iPhone app's Google iOS OAuth client id, added to the Google audiences (optional).
+  "GOOGLE_IOS_CLIENT_ID",
   "PARSE_DAILY_CAP",
   // orderat-auth's pair_start rate limit (optional; derived from the database URL when unset).
   "AUTH_IP_SALT",
