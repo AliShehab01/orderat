@@ -28,6 +28,7 @@ import {
   purgeOldOrders,
   resolveOrderDoc,
 } from "./orders.ts";
+import { legacyIbanOf, validatePaymentMethods } from "./payment-methods.ts";
 import { validatePhotoUpload } from "./photos.ts";
 import { isAcceptableSlug } from "./slug.ts";
 import {
@@ -94,6 +95,16 @@ export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Prom
   const shopUrl = (slug: string) => `${deps.shopBaseUrl}${slug}`;
   const photoUrl = (path: string) => `${deps.publicPhotoBaseUrl}${path}`;
 
+  /** The public shop JSON: the stored document (without the dropped legacy ibanName), its payment
+   * methods, the legacy `iban` from the bank_transfer method for shop pages cached before
+   * paymentMethods existed, and the computed url. Never the raw row (token_hash, install_id, ...). */
+  function publicShopJson(shop: ShopRow) {
+    const { ibanName: _dropped, iban: storedIban, ...doc } = shop.doc;
+    void _dropped;
+    const iban = shop.paymentMethods.length ? legacyIbanOf(shop.paymentMethods) : storedIban;
+    return { ...doc, ...(iban ? { iban } : {}), paymentMethods: shop.paymentMethods, url: shopUrl(shop.slug) };
+  }
+
   async function handlePublicGet(url: URL): Promise<Response> {
     const slug = url.searchParams.get("slug") ?? "";
     const shop = await findShopBySlug(deps.sql, slug);
@@ -105,7 +116,7 @@ export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Prom
     log({ event: "shop_get", status: 200 });
     // Spread only `doc` (the public shape) plus the computed url — never the raw row, which also
     // carries token_hash/install_id/blocked/publish_count_*.
-    return jsonResponse({ ...shop.doc, url: shopUrl(shop.slug) }, 200, { "Cache-Control": "public, max-age=60" });
+    return jsonResponse(publicShopJson(shop), 200, { "Cache-Control": "public, max-age=60" });
   }
 
   async function handleSlugCheck(slug: string): Promise<Response> {
@@ -120,11 +131,19 @@ export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Prom
   }
 
   async function handlePublish(body: PublishBody): Promise<Response> {
-    const doc = validateShopDoc(body.shop);
-    if (!doc) {
+    const validDoc = validateShopDoc(body.shop);
+    if (!validDoc) {
       log({ event: "shop_publish", status: 400, reason: "bad_doc" });
       return invalidBodyResponse();
     }
+    // Payment methods: all valid or nothing stored (the first bad entry is named in `field`).
+    const methods = validatePaymentMethods(body.shop.paymentMethods, validDoc.iban);
+    if (!methods.ok) {
+      log({ event: "shop_publish", status: 400, reason: "bad_payment_method" });
+      return jsonResponse({ error: "invalid_body", field: methods.field }, 400);
+    }
+    const paymentMethods = methods.methods;
+    const doc = { ...validDoc, iban: legacyIbanOf(paymentMethods) };
 
     // Validate every photo before touching the database or Storage — sequential, so the first bad
     // photo wins deterministically and no upload is attempted for a request that's going to fail
@@ -173,7 +192,7 @@ export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Prom
       // created here first — with every photo reference dropped, since none can possibly be known yet
       // for a brand-new id — and corrected below to the real resolved doc once uploads are done.
       const placeholderDoc = resolveShopDoc(doc, body.slug, new Map());
-      await createShop(deps.sql, { id: shopId, slug: body.slug, tokenHash: created.tokenHash, installId: body.installId, doc: placeholderDoc, day });
+      await createShop(deps.sql, { id: shopId, slug: body.slug, tokenHash: created.tokenHash, installId: body.installId, doc: placeholderDoc, paymentMethods, day });
     }
 
     const knownPhotos = await getShopPhotoMap(deps.sql, shopId);
@@ -190,7 +209,7 @@ export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Prom
 
     const photoUrls = await resolvePhotoUrls(shopId);
     const resolvedDoc = resolveShopDoc(doc, body.slug, photoUrls);
-    await updateShopDoc(deps.sql, shopId, body.slug, resolvedDoc);
+    await updateShopDoc(deps.sql, shopId, body.slug, resolvedDoc, paymentMethods);
 
     log({ event: "shop_publish", status: 200, firstPublish: !existing, photoCount: referencedPhotoIds(doc).length });
     return jsonResponse({
@@ -214,7 +233,7 @@ export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Prom
       return notFoundResponse();
     }
 
-    const resolved = resolveOrderDoc(shop.doc, body);
+    const resolved = resolveOrderDoc(shop.doc, body, shop.paymentMethods);
     if (!resolved.ok) {
       log({ event: "shop_order", status: 400, reason: "bad_items" });
       return invalidBodyResponse();

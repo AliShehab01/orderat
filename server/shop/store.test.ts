@@ -160,3 +160,24 @@ describe("incrementShopView / getShopStats", () => {
     expect(stats).toEqual({ views7d: 0, orders7d: 0, pending: 0 });
   });
 });
+
+// db/migrations/0008_shop_payment_methods.sql: a shop published before payment methods existed gets its
+// IBAN as one bank_transfer method (no account-holder name); re-running the migration changes nothing.
+describe("migration 0008 payment_methods backfill", () => {
+  it("backfills bank_transfer from the doc's iban, only for shops with no methods", async () => {
+    const { readFileSync } = await import("node:fs");
+    const migration = readFileSync(new URL("../../db/migrations/0008_shop_payment_methods.sql", import.meta.url), "utf8");
+    const withIban = { ...DOC, iban: "BH67BMAG00001299123456", ibanName: "Old holder" };
+    await createShop(sql, { id: SHOP_ID, slug: "sweetstudio", tokenHash: "h1", installId: "i1", doc: withIban, day: "2026-09-26" });
+    await createShop(sql, { id: "22222222-2222-2222-2222-222222222222", slug: "noiban", tokenHash: "h2", installId: "i2", doc: { ...DOC, slug: "noiban" }, day: "2026-09-26" });
+    await createShop(sql, { id: "33333333-3333-3333-3333-333333333333", slug: "already", tokenHash: "h3", installId: "i3", doc: { ...withIban, slug: "already" }, paymentMethods: [{ type: "cash" }], day: "2026-09-26" });
+
+    for (let run = 0; run < 2; run++) {
+      for (const statement of migration.replace(/--.*$/gm, "").split(";").map((s) => s.trim()).filter(Boolean)) await sql.query(statement);
+    }
+
+    expect((await findShopBySlug(sql, "sweetstudio"))?.paymentMethods).toEqual([{ type: "bank_transfer", value: "BH67BMAG00001299123456" }]);
+    expect((await findShopBySlug(sql, "noiban"))?.paymentMethods).toEqual([]);
+    expect((await findShopBySlug(sql, "already"))?.paymentMethods).toEqual([{ type: "cash" }]);
+  });
+});

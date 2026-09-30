@@ -188,10 +188,10 @@ describe("validateShopDoc", () => {
     expect(validateShopDoc(validDoc({ items }))).toBeUndefined();
   });
 
-  it("accepts a valid iban and holder name", () => {
+  it("accepts a valid iban, and a legacy holder name without error while dropping it", () => {
     const result = validateShopDoc(validDoc({ iban: "BH67BMAG00001299123456", ibanName: "Sweets Studio" }));
     expect(result?.iban).toBe("BH67BMAG00001299123456");
-    expect(result?.ibanName).toBe("Sweets Studio");
+    expect(result).not.toHaveProperty("ibanName");
   });
 
   it("normalizes a spaced, lowercase iban", () => {
@@ -270,11 +270,11 @@ describe("resolveShopDoc / referencedPhotoIds", () => {
     expect((resolved.items as Record<string, unknown>[])[0]).not.toHaveProperty("photoId");
   });
 
-  it("carries a present iban and ibanName through unchanged", () => {
-    const withIban: ShopDocRequest = { ...doc, iban: "BH67BMAG00001299123456", ibanName: "Sweets Studio" };
+  it("carries a present iban through unchanged, never an account holder name", () => {
+    const withIban: ShopDocRequest = { ...doc, iban: "BH67BMAG00001299123456" };
     const resolved = resolveShopDoc(withIban, "sweetstudio", new Map());
     expect(resolved.iban).toBe("BH67BMAG00001299123456");
-    expect(resolved.ibanName).toBe("Sweets Studio");
+    expect(resolved).not.toHaveProperty("ibanName");
   });
 
   it("omits iban and ibanName from the resolved doc when absent on the input", () => {

@@ -6,6 +6,7 @@
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { formatMoney } from "../shared/money.ts";
 import type { ShopDocPublic } from "./doc.ts";
+import { chosenPaymentMethod, PAYMENT_METHOD_LABELS, type PaymentMethod } from "./payment-methods.ts";
 import type { Fulfillment, OrderBody } from "./validate.ts";
 
 export interface OrderLine {
@@ -25,6 +26,8 @@ export interface OrderDoc {
   fulfillment?: Fulfillment;
   address?: string;
   notes?: string;
+  /** The shop's payment method type the customer chose (one of its configured types). */
+  paymentMethod?: string;
 }
 
 export type ResolveOrderResult = { ok: true; doc: OrderDoc } | { ok: false; error: "invalid_body" };
@@ -37,7 +40,7 @@ export type ResolveOrderResult = { ok: true; doc: OrderDoc } | { ok: false; erro
  * `lang` (this becomes the WhatsApp message the seller reads, so it follows her shop's language, not
  * anything the customer picked).
  */
-export function resolveOrderDoc(shopDoc: ShopDocPublic, body: OrderBody): ResolveOrderResult {
+export function resolveOrderDoc(shopDoc: ShopDocPublic, body: OrderBody, paymentMethods: readonly PaymentMethod[] = []): ResolveOrderResult {
   const byId = new Map(shopDoc.items.map((item) => [item.id, item]));
   const lines: OrderLine[] = [];
   let totalMinor = 0;
@@ -59,6 +62,7 @@ export function resolveOrderDoc(shopDoc: ShopDocPublic, body: OrderBody): Resolv
       fulfillment: body.fulfillment,
       address: body.address,
       notes: body.notes,
+      ...(chosenPaymentMethod(body.paymentMethod, paymentMethods) ? { paymentMethod: body.paymentMethod } : {}),
     },
   };
 }
@@ -87,8 +91,8 @@ export function generateOrderRef(): string {
   return `W${n}`;
 }
 
-const AR_LABELS = { title: "طلب جديد", name: "الاسم", phone: "الهاتف", total: "الإجمالي", pickup: "الاستلام", address: "العنوان", notes: "ملاحظات" };
-const EN_LABELS = { title: "New order", name: "Name", phone: "Phone", total: "Total", pickup: "Pickup", address: "Address", notes: "Notes" };
+const AR_LABELS = { title: "طلب جديد", name: "الاسم", phone: "الهاتف", total: "الإجمالي", pickup: "الاستلام", address: "العنوان", notes: "ملاحظات", payment: "الدفع" };
+const EN_LABELS = { title: "New order", name: "Name", phone: "Phone", total: "Total", pickup: "Pickup", address: "Address", notes: "Notes", payment: "Payment" };
 
 /**
  * The order summary sent to the seller's own WhatsApp right after the customer checks out
@@ -109,6 +113,8 @@ export function buildWhatsappText(ref: string, doc: OrderDoc, lang: "ar" | "en")
   ];
   if (doc.address) lines.push(`${labels.address}: ${doc.address}`);
   if (doc.notes) lines.push(`${labels.notes}: ${doc.notes}`);
+  const payment = doc.paymentMethod ? PAYMENT_METHOD_LABELS[doc.paymentMethod] : undefined;
+  if (payment) lines.push(`${labels.payment}: ${payment[lang]}`);
   return lines.join("\n");
 }
 
@@ -155,6 +161,7 @@ export interface InboxOrder {
   fulfillment?: Fulfillment;
   address?: string;
   notes?: string;
+  paymentMethod?: string;
 }
 
 /** `inbox` (docs/marketing-tools.md): every order still waiting for this shop's app to `ack` it,
@@ -176,6 +183,7 @@ export async function listInboxOrders(sql: SqlClient, shopId: string): Promise<I
     fulfillment: row.doc.fulfillment,
     address: row.doc.address,
     notes: row.doc.notes,
+    ...(row.doc.paymentMethod ? { paymentMethod: row.doc.paymentMethod } : {}),
   }));
 }
 

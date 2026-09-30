@@ -231,7 +231,23 @@ the base so it can move to a custom domain later).
 Limits: 60 items, name 60 chars, description 200, bio 300, each photo at most 400 KB (the apps
 resize to 1080 px, JPEG 0.8). `delivery`: `pickup` | `delivery` | `pickup_and_delivery`.
 
-`iban` and `ibanName` (1-70 chars, the account holder's name as the bank shows it) are both
+**Payment methods** (`paymentMethods`, db/migrations/0008_shop_payment_methods.sql,
+server/shop/payment-methods.ts; the full contract is the payment-methods spec): at most 8 entries of
+`{ type, value?, name? }`. Types: `bank_transfer` (value = IBAN, normalized and checksummed as below; no
+account-holder name, any `name` is dropped), the phone wallets `benefitpay`, `stcpay`, `urpay`, `aani`,
+`wamd`, `fawran` and `mobile_transfer` (value = E.164 `+` and 8-15 digits; `mobile_transfer` may carry a
+bank or app `name`, 1-40), `paypal` (a paypal.me username, `^[A-Za-z0-9]{1,20}$`), `payment_link` (an
+`https://` URL of at most 300 characters with a dotted host, plus a required label `name`, 1-40; up to 3)
+and `cash` (no value). One entry per type otherwise. An unknown type matching `^[a-z_]{2,30}$` from a
+newer app is kept (value at most 300, name at most 70). A bad entry fails the publish with 400
+`{ "error": "invalid_body", "field": "paymentMethods[i].value" }` and nothing is stored. The public
+GET returns `paymentMethods`, plus the legacy `iban` from the `bank_transfer` entry for shop pages
+cached before this change; `ibanName` is never served. A publish without `paymentMethods` (an older
+phone) turns its legacy `iban` into one `bank_transfer` entry; its `ibanName` is accepted and dropped.
+A web `order` may carry `paymentMethod`, one of the shop's configured types (anything else is dropped);
+it is kept with the order, returned by `inbox`, and added to the WhatsApp summary.
+
+The legacy `iban` and `ibanName` (1-70 chars) are both
 optional and, like every other optional field here, left out entirely rather than sent empty —
 never `""` or `null`. When sent, `iban` is normalized (uppercased, spaces/dashes stripped) and
 must match `^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$` (15-34 characters) and pass the ISO 13616 mod-97

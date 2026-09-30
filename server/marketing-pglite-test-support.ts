@@ -18,6 +18,7 @@ const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "db",
 const MIGRATION_0001 = readFileSync(join(MIGRATIONS_DIR, "0001_orderat_isolation.sql"), "utf8");
 const MIGRATION_0002 = readFileSync(join(MIGRATIONS_DIR, "0002_ai_usage.sql"), "utf8");
 const MIGRATION_0003 = readFileSync(join(MIGRATIONS_DIR, "0003_marketing.sql"), "utf8");
+const MIGRATION_0008 = readFileSync(join(MIGRATIONS_DIR, "0008_shop_payment_methods.sql"), "utf8");
 
 const MARKETING_TABLES = [
   "orderat.feature_usage",
@@ -39,6 +40,7 @@ function getDb() {
     await db.exec(MIGRATION_0001);
     await db.exec(MIGRATION_0002);
     await db.exec(MIGRATION_0003);
+    await db.exec(MIGRATION_0008); // shops.payment_methods
     return db;
   })();
   return dbPromise;

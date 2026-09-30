@@ -67,6 +67,9 @@ export interface OrderBody {
   fulfillment?: Fulfillment;
   address?: string;
   notes?: string;
+  /** The payment method type the customer picked; server/shop/payment-methods.ts keeps it only when it
+   * is one of the shop's configured types. Anything that is not a short string is simply dropped. */
+  paymentMethod?: string;
 }
 
 export type ShopRequestBody = SlugCheckBody | PublishBody | UnpublishBody | StatsBody | OrderBody | InboxBody | AckBody;
@@ -164,6 +167,7 @@ function validateOrder(json: Record<string, unknown>): ShopValidationResult {
       fulfillment: json.fulfillment as Fulfillment | undefined,
       address: json.address as string | undefined,
       notes: json.notes as string | undefined,
+      ...(typeof json.paymentMethod === "string" && json.paymentMethod.length <= 30 ? { paymentMethod: json.paymentMethod } : {}),
     },
   };
 }

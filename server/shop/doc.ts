@@ -60,9 +60,11 @@ export interface ShopDocRequest {
   accent: string;
   logoId?: string;
   /** Already normalized (uppercase, no spaces/dashes) and checksum-validated by validateShopDoc (see
-   * normalizeIban/isValidIban) — callers never need to normalize or re-validate it. */
+   * normalizeIban/isValidIban) — callers never need to normalize or re-validate it. The legacy
+   * single-IBAN field: server/shop/payment-methods.ts turns it into a bank_transfer method when a
+   * publish sends no `paymentMethods`. (The legacy `ibanName` is still accepted, then dropped: a bank
+   * transfer has no account-holder name.) */
   iban?: string;
-  ibanName?: string;
   items: ShopItemRequest[];
 }
 
@@ -92,7 +94,9 @@ export interface ShopDocPublic {
   acceptsWebOrders: boolean;
   accent: string;
   logoUrl?: string;
+  /** The bank_transfer method's IBAN, kept for shop pages cached before paymentMethods existed. */
   iban?: string;
+  /** Only ever present on documents stored before 30 Sep 2026; never served (handler strips it). */
   ibanName?: string;
   items: ShopItemPublic[];
 }
@@ -225,7 +229,7 @@ export function validateShopDoc(raw: unknown): ShopDocRequest | undefined {
     instagram: o.instagram as string | undefined, area: o.area as string | undefined,
     pickupHours: o.pickupHours as string | undefined, leadTimeDays: o.leadTimeDays,
     delivery: o.delivery, acceptsWebOrders: o.acceptsWebOrders, accent: o.accent,
-    logoId: o.logoId as string | undefined, iban, ibanName: o.ibanName as string | undefined, items,
+    logoId: o.logoId as string | undefined, iban, items,
   };
 }
 
@@ -253,7 +257,6 @@ export function resolveShopDoc(doc: ShopDocRequest, slug: string, photoUrls: Rea
     accent: doc.accent,
     logoUrl: doc.logoId ? photoUrls.get(doc.logoId) : undefined,
     iban: doc.iban,
-    ibanName: doc.ibanName,
     items: doc.items.map((item) => ({
       id: item.id,
       name: item.name,

@@ -7,6 +7,7 @@
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { constantTimeEqualHex, sha256HexOfString } from "../shared/crypto.ts";
 import type { ShopDocPublic } from "./doc.ts";
+import type { PaymentMethod } from "./payment-methods.ts";
 
 export interface ShopRow {
   id: string;
@@ -14,6 +15,8 @@ export interface ShopRow {
   tokenHash: string;
   installId: string;
   doc: ShopDocPublic;
+  /** db/migrations/0008_shop_payment_methods.sql's payment_methods (server/shop/payment-methods.ts). */
+  paymentMethods: PaymentMethod[];
   published: boolean;
   blocked: boolean;
   publishCountToday: number;
@@ -27,6 +30,7 @@ function toShopRow(row: Record<string, unknown>): ShopRow {
     tokenHash: row.token_hash as string,
     installId: row.install_id as string,
     doc: row.doc as ShopDocPublic,
+    paymentMethods: Array.isArray(row.payment_methods) ? (row.payment_methods as PaymentMethod[]) : [],
     published: row.published as boolean,
     blocked: row.blocked as boolean,
     publishCountToday: row.publish_count_today as number,
@@ -34,7 +38,7 @@ function toShopRow(row: Record<string, unknown>): ShopRow {
   };
 }
 
-const SHOP_COLUMNS = "id, slug, token_hash, install_id, doc, published, blocked, publish_count_today, publish_count_day";
+const SHOP_COLUMNS = "id, slug, token_hash, install_id, doc, payment_methods, published, blocked, publish_count_today, publish_count_day";
 
 export async function findShopBySlug(sql: SqlClient, slug: string): Promise<ShopRow | undefined> {
   const rows = await sql.query<Record<string, unknown>>(`select ${SHOP_COLUMNS} from orderat.shops where slug = $1`, [slug]);
@@ -70,6 +74,7 @@ export interface CreateShopInput {
   tokenHash: string;
   installId: string;
   doc: ShopDocPublic;
+  paymentMethods?: PaymentMethod[];
   day: string;
 }
 
@@ -78,9 +83,9 @@ export interface CreateShopInput {
  * against beforehand). */
 export async function createShop(sql: SqlClient, input: CreateShopInput): Promise<void> {
   await sql.query(
-    `insert into orderat.shops (id, slug, token_hash, install_id, doc, published, blocked, publish_count_today, publish_count_day)
-     values ($1, $2, $3, $4, $5, true, false, 1, $6)`,
-    [input.id, input.slug, input.tokenHash, input.installId, JSON.stringify(input.doc), input.day],
+    `insert into orderat.shops (id, slug, token_hash, install_id, doc, payment_methods, published, blocked, publish_count_today, publish_count_day)
+     values ($1, $2, $3, $4, $5, $7, true, false, 1, $6)`,
+    [input.id, input.slug, input.tokenHash, input.installId, JSON.stringify(input.doc), input.day, JSON.stringify(input.paymentMethods ?? [])],
   );
 }
 
@@ -105,10 +110,10 @@ export async function bumpPublishCounter(sql: SqlClient, shopId: string, day: st
 
 /** Writes a re-publish's new slug/doc and marks the shop published again — called only after
  * bumpPublishCounter confirms this publish is within the daily limit. */
-export async function updateShopDoc(sql: SqlClient, shopId: string, slug: string, doc: ShopDocPublic): Promise<void> {
+export async function updateShopDoc(sql: SqlClient, shopId: string, slug: string, doc: ShopDocPublic, paymentMethods: PaymentMethod[] = []): Promise<void> {
   await sql.query(
-    `update orderat.shops set slug = $2, doc = $3, published = true, updated_at = now() where id = $1`,
-    [shopId, slug, JSON.stringify(doc)],
+    `update orderat.shops set slug = $2, doc = $3, payment_methods = $4, published = true, updated_at = now() where id = $1`,
+    [shopId, slug, JSON.stringify(doc), JSON.stringify(paymentMethods)],
   );
 }
 

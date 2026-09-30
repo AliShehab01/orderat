@@ -480,6 +480,74 @@ describe("createShopHandler / order validation", () => {
   });
 });
 
+// Shop link payment methods (payment-methods spec; bank_transfer has no account-holder name).
+describe("createShopHandler / payment methods", () => {
+  const IBAN = "BH67BMAG00001299123456";
+  const methods = [{ type: "benefitpay", value: "+973 3333 4444" }, { type: "bank_transfer", value: IBAN }, { type: "cash" }];
+
+  async function publicShop(handler: (req: Request) => Promise<Response>) {
+    return (await handler(getReq("?slug=sweetstudio"))).json() as Promise<Record<string, unknown>>;
+  }
+
+  it("stores and serves paymentMethods, with the legacy iban (and never an account holder name)", async () => {
+    const { handler } = makeHandler();
+    const { res } = await publish(handler, { shop: shopDoc({ paymentMethods: methods, ibanName: "Old name" }) });
+    expect(res.status).toBe(200);
+    const shop = await publicShop(handler);
+    expect(shop.paymentMethods).toEqual([{ type: "benefitpay", value: "+97333334444" }, { type: "bank_transfer", value: IBAN }, { type: "cash" }]);
+    expect(shop.iban).toBe(IBAN);
+    expect(shop).not.toHaveProperty("ibanName");
+  });
+
+  it("treats a legacy iban (and ibanName) from an older phone as one bank_transfer method", async () => {
+    const { handler } = makeHandler();
+    await publish(handler, { shop: shopDoc({ iban: "bh67 bmag 0000 1299 1234 56", ibanName: "Sweet Studio" }) });
+    const shop = await publicShop(handler);
+    expect(shop.paymentMethods).toEqual([{ type: "bank_transfer", value: IBAN }]);
+    expect(shop.iban).toBe(IBAN);
+    expect(shop).not.toHaveProperty("ibanName");
+  });
+
+  it("rejects a bad entry with a field-specific error and stores nothing", async () => {
+    const { handler } = makeHandler();
+    const first = await publish(handler, { shop: shopDoc({ paymentMethods: [{ type: "cash" }] }) });
+    const token = first.json.token as string;
+    const { res, json } = await publish(handler, { token, shop: shopDoc({ name: { ar: "جديد", en: "New" }, paymentMethods: [{ type: "cash" }, { type: "stcpay", value: "123" }] }) });
+    expect(res.status).toBe(400);
+    expect(json).toEqual({ error: "invalid_body", field: "paymentMethods[1].value" });
+    const shop = await publicShop(handler);
+    expect(shop.paymentMethods).toEqual([{ type: "cash" }]);
+    expect((shop.name as { en: string }).en).toBe("Sweet Studio");
+  });
+
+  it("serves a shop stored before payment methods with its old iban, and drops its ibanName", async () => {
+    const { handler } = makeHandler();
+    await publish(handler);
+    await sql.query(`update orderat.shops set doc = doc || $1::jsonb, payment_methods = '[]'::jsonb`, [JSON.stringify({ iban: IBAN, ibanName: "Old" })]);
+    const shop = await publicShop(handler);
+    expect(shop.iban).toBe(IBAN);
+    expect(shop).not.toHaveProperty("ibanName");
+    expect(shop.paymentMethods).toEqual([]);
+  });
+
+  it("keeps a web order's paymentMethod only when the shop offers it, and passes it to the inbox and WhatsApp text", async () => {
+    const { handler } = makeHandler();
+    const first = await publish(handler, { shop: shopDoc({ paymentMethods: methods }) });
+    const token = first.json.token as string;
+    const order = (paymentMethod: unknown) => handler(req({
+      action: "order", slug: "sweetstudio", customer: { name: "Sara", phone: "97300001111" },
+      items: [{ id: "p1", qty: 1 }], pickupDate: "2026-09-28", paymentMethod,
+    }));
+    const ok = await order("benefitpay");
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { whatsappText: string }).whatsappText).toContain("الدفع: بنفت باي");
+    expect((await order("paypal")).status).toBe(200); // not offered: dropped, not an error
+    expect((await order({ evil: true })).status).toBe(200);
+    const inbox = (await (await handler(req({ action: "inbox", token }))).json()) as { orders: { paymentMethod?: string }[] };
+    expect(inbox.orders.map((o) => o.paymentMethod ?? null).sort()).toEqual(["benefitpay", null, null]);
+  });
+});
+
 describe("createShopHandler / CORS", () => {
   it("answers an allowed OPTIONS preflight without reaching the shop logic", async () => {
     const { handler } = makeHandler();
