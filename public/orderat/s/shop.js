@@ -57,6 +57,8 @@
       remove: "إنقاص",
       increase: "زيادة",
       unavailable: "غير متوفر",
+      soldOut: "نفد",
+      soldOutRemoved: "نفد من المتجر وتمت إزالته من طلبك: {names}",
       pickup: "استلام",
       delivery: "توصيل",
       pickupAndDelivery: "استلام أو توصيل",
@@ -144,6 +146,8 @@
       remove: "Decrease",
       increase: "Increase",
       unavailable: "Unavailable",
+      soldOut: "Sold out",
+      soldOutRemoved: "Sold out, so it was taken out of your order: {names}",
       pickup: "Pickup",
       delivery: "Delivery",
       pickupAndDelivery: "Pickup or delivery",
@@ -450,10 +454,22 @@
     return null;
   }
 
+  // A product the seller tracks and has run out of: still shown, never orderable (s/sold-out.js).
+  var SoldOut = window.OrderatSoldOut;
+  var isSoldOut = SoldOut.isSoldOut;
+
+  // The lines that can be ordered (a sold-out product left in a saved cart is not one of them).
   function cartLines() {
     return Object.keys(state.cart)
       .map(function (id) { return { item: itemById(id), qty: state.cart[id] }; })
-      .filter(function (l) { return l.item && l.item.available !== false && l.qty > 0; });
+      .filter(function (l) { return l.item && l.item.available !== false && !isSoldOut(l.item) && l.qty > 0; });
+  }
+
+  // Takes the given (or every sold-out) products out of the cart; returns their names for the message.
+  function dropSoldOut(ids) {
+    var removed = SoldOut.takeOut(state.cart, (state.shop && state.shop.items) || [], ids);
+    if (removed.length) saveCart();
+    return removed.map(function (item) { return localized(item.name); });
   }
 
   function cartTotal() {
@@ -549,7 +565,7 @@
         { id: "p1", name: { ar: "كب تشيز كيك", en: "Cheesecake cups" }, description: state.lang === "ar" ? "علبة 6 حبات، نكهات مشكلة" : "Box of 6, mixed flavors", priceMinor: 4500, photoUrl: null, available: true },
         { id: "p2", name: { ar: "كيكة شوكولاتة", en: "Chocolate cake" }, description: state.lang === "ar" ? "تكفي 8 أشخاص" : "Serves 8", priceMinor: 12000, photoUrl: null, available: true },
         { id: "p3", name: { ar: "بوكس براونيز", en: "Brownies box" }, description: state.lang === "ar" ? "12 قطعة" : "12 pieces", priceMinor: 6000, photoUrl: null, available: true },
-        { id: "p4", name: { ar: "لقيمات", en: "Luqaimat" }, description: state.lang === "ar" ? "مع دبس التمر" : "With date syrup", priceMinor: 3000, photoUrl: null, available: true },
+        { id: "p4", name: { ar: "لقيمات", en: "Luqaimat" }, description: state.lang === "ar" ? "مع دبس التمر" : "With date syrup", priceMinor: 3000, photoUrl: null, available: true, soldOut: true },
         { id: "p5", name: { ar: "كوكيز", en: "Cookies" }, description: state.lang === "ar" ? "10 حبات" : "10 pieces", priceMinor: 3500, photoUrl: null, available: false },
         { id: "p6", name: { ar: "صينية كنافة", en: "Kunafa tray" }, description: state.lang === "ar" ? "وسط، بالقشطة" : "Medium, with cream", priceMinor: 9500, photoUrl: null, available: true },
       ],
@@ -747,14 +763,15 @@
 
   function productCard(item) {
     var available = item.available !== false;
+    var soldOut = available && isSoldOut(item);
     var qty = state.cart[item.id] || 0;
     var name = localized(item.name);
     var photo = h("div", { class: "photo" }, [
       item.photoUrl ? h("img", { src: item.photoUrl, alt: name, loading: "lazy" }) : h("div", { class: "ph", "aria-hidden": "true", text: name.trim().charAt(0) }),
-      available ? null : h("span", { class: "badge", text: t("unavailable") }),
+      !available ? h("span", { class: "badge", text: t("unavailable") }) : soldOut ? h("span", { class: "badge sold-out", text: t("soldOut") }) : null,
     ]);
     var control;
-    if (!available || !canOrder()) {
+    if (!available || soldOut || !canOrder()) {
       control = null;
     } else if (qty === 0) {
       control = h("button", { class: "add", type: "button", onclick: function () { setQty(item.id, 1); }, text: t("add"), "aria-label": t("add") + " " + name });
@@ -765,7 +782,7 @@
         h("button", { type: "button", "aria-label": t("increase") + " " + name, onclick: function () { setQty(item.id, qty + 1); }, text: "+" }),
       ]);
     }
-    return h("article", { class: "card" + (available ? "" : " off") }, [
+    return h("article", { class: "card" + (available ? "" : " off") + (soldOut ? " sold-out" : "") }, [
       photo,
       h("div", { class: "card-body" }, [
         h("h3", { text: name }),
@@ -967,6 +984,15 @@
 
   function submit() {
     var values = readForm();
+    // Opened before the product sold out: say so, take it out, and let the buyer check the order again.
+    var gone = dropSoldOut(null);
+    if (gone.length) {
+      var goneMsg = t("soldOutRemoved", { names: gone.join(state.lang === "ar" ? "، " : ", ") });
+      renderShop();
+      if (cartCount() === 0) { closeSheet(); toast(goneMsg); return; }
+      renderCheckout(values, {}, goneMsg);
+      return;
+    }
     var errors = validate(values);
     if (Object.keys(errors).length) {
       renderCheckout(values, errors);
@@ -1005,6 +1031,14 @@
     request.then(function (res) {
       if (res.ok && res.data && res.data.orderRef) return showDone(res.data, values);
       var code = res.data && res.data.error;
+      var refused = SoldOut.refusedIds(res.status, res.data);
+      if (refused) {
+        var names = dropSoldOut(refused);
+        renderShop();
+        var msg = t("soldOutRemoved", { names: names.join(state.lang === "ar" ? "، " : ", ") });
+        if (cartCount() === 0) { closeSheet(); toast(msg); return; }
+        return renderCheckout(values, {}, msg);
+      }
       var message = res.status === 429 ? t("errRate") : res.status === 404 ? t("errClosed") : code === "invalid_body" || res.status === 400 ? t("errInvalid") : t("errNetwork");
       renderCheckout(values, {}, message);
     }).catch(function () {
