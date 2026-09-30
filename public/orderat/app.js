@@ -521,14 +521,18 @@ function viewOrder(id) {
     </section>
     <section class="card lines">${lines}</section>
     ${open && can('status') ? `<div class="btn-col">${NEXT[o.status] ? `<button class="btn primary block big" data-act="advance" data-id="${esc(o.id)}">${esc(t(NEXT_LABEL[o.status]))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${esc(o.id)}">${esc(t('orders.cancel'))}</button></div>` : ''}
+    ${o.status === 'cancelled' && can('status') ? `<button class="btn ghost block" data-act="reopen-order" data-id="${esc(o.id)}">${esc(t('orders.reopen'))}</button>` : ''}
     <section class="card"><h3 class="card-title">${icon('whatsapp')} ${esc(t('orders.sendWhatsApp'))}</h3>${wa}</section>
     <a class="card row" href="#/shop/receipts/${esc(o.id)}"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('shop.receipt'))}</b><small><bdi dir="ltr">${esc(invoiceNo(o))}</bdi></small></span>${icon('chev', 'chev')}</a>
     <section class="card"><h3 class="card-title">${esc(t('changeHistory'))}</h3>${history}</section>
+    ${canDeleteOrder(o) ? `<button class="btn danger-soft block" data-act="delete-order" data-id="${esc(o.id)}">${icon('trash')} ${esc(t('orders.delete'))}</button>` : ''}
   </div>`;
   const actions = o.status === 'cancelled' || !can('orders') ? '' : `<button class="icon-btn" data-act="edit-items" data-id="${esc(o.id)}" aria-label="${esc(t('orders.editItems'))}">${icon('edit')}</button>`;
   return { title: t('tab.orders'), back: 'orders', actions, body };
 }
 
+// Only a mistaken order: still New (or cancelled), nothing paid on it.
+const canDeleteOrder = o => can('orders') && (o.status === 'new' || o.status === 'cancelled') && !(o.payments || []).length;
 // Stock follows the website's promise: auto-deduct on confirm, put back on cancel.
 function applyStock(o, sign) {
   o.items.forEach(it => { const p = productOf(it.pid); if (p && p.track) p.qty = round(p.qty + sign * it.qty); });
@@ -536,7 +540,7 @@ function applyStock(o, sign) {
 function setStatus(o, status) {
   if (Live.on) Live.stockForStatus(o, status); // with the phones' stock moves
   else if (S.stockEnabled && status === 'confirmed' && !o.stockApplied) { applyStock(o, -1); o.stockApplied = true; }
-  if (status === 'cancelled' && o.stockApplied) { applyStock(o, 1); o.stockApplied = false; }
+  if ((status === 'cancelled' || status === 'new') && o.stockApplied) { applyStock(o, 1); o.stockApplied = false; }
   o.status = status;
   o.changes.push({ kind: 'status', value: status, at: new Date().toISOString() });
   save();
@@ -944,7 +948,7 @@ function openCustomer(c) {
     ${field(t('neworder.customerPhone'), `<input name="phone" value="${esc(x.phone)}" dir="ltr" inputmode="tel">`)}
     ${field(t('shop.area'), `<select name="area"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, x.area, a => t('area.' + a))}</select>`)}
     ${field(t('shop.notes'), `<textarea name="notes" rows="2">${esc(x.notes)}</textarea>`)}
-    <button class="btn primary block">${esc(t('common.save'))}</button></form>`);
+    <div class="btn-row">${c && can('orders') && !S.orders.some(o => o.customerId === c.id) ? `<button type="button" class="btn danger-soft" data-act="delete-customer" data-id="${esc(c.id)}">${esc(t('customers.delete'))}</button>` : ''}<button class="btn primary grow">${esc(t('common.save'))}</button></div></form>`);
 }
 
 function viewOccasions() {
@@ -1439,8 +1443,34 @@ const ACTIONS = {
   },
   'web-dismiss'(el) { S.webOrders = S.webOrders.filter(x => x.id !== el.dataset.id); save(); render(); },
   'orders-filter'(el) { ordersFilter = el.dataset.v; render(); },
-  advance(el) { const o = orderById(el.dataset.id); if (o && NEXT[o.status]) { setStatus(o, NEXT[o.status]); render(); } },
+  advance(el) {
+    const id = el.dataset.id, o = orderById(id);
+    if (!o || !NEXT[o.status]) return;
+    const prev = o.status, next = NEXT[o.status];
+    setStatus(o, next);
+    render();
+    undoToast(t('orders.statusChanged', t('order.status.' + next)), () => {
+      const now = orderById(id);
+      if (now && now.status === next) { setStatus(now, prev); render(); }
+    });
+  },
   'cancel-order'(el) { const o = orderById(el.dataset.id); if (o && confirm(t('orders.cancelConfirm'))) { setStatus(o, 'cancelled'); render(); } },
+  'reopen-order'(el) { const o = orderById(el.dataset.id); if (o && o.status === 'cancelled' && can('status')) { setStatus(o, 'new'); render(); toast(t('orders.statusChanged', t('order.status.new'))); } },
+  'delete-order'(el) {
+    const o = orderById(el.dataset.id);
+    if (!o || !canDeleteOrder(o) || !confirm(t('orders.deleteConfirm'))) return;
+    if (o.stockApplied) { if (Live.on) Live.stockForStatus(o, 'cancelled'); else applyStock(o, 1); o.stockApplied = false; }
+    S.orders = S.orders.filter(x => x.id !== o.id);
+    save();
+    toast(t('common.saved'));
+    go('orders');
+  },
+  'delete-customer'(el) {
+    const id = el.dataset.id;
+    if (!can('orders') || S.orders.some(o => o.customerId === id) || !confirm(t('customers.delete') + '?')) return;
+    S.customers = S.customers.filter(c => c.id !== id);
+    save(); closeModal(); render(); toast(t('common.saved'));
+  },
   pay(el) { const o = orderById(el.dataset.id); if (o) openPayment(o); },
   'edit-items'(el) { const o = orderById(el.dataset.id); if (o) openEditItems(o); },
   'item-qty'(el) {
