@@ -435,13 +435,16 @@ function viewToday() {
   const low = S.stockEnabled ? S.products.filter(p => p.track && p.qty <= p.low) : [];
   const occ = S.occasions.filter(x => x.end >= dayKey(now)).sort((a, b) => a.start.localeCompare(b.start)).slice(0, 3);
   const camp = todayCampaign();
+  // An occasion's own daily capacity wins over the shop's for its days (like the phones).
+  const k = dayKey(now), occCap = S.occasions.find(x => x.start <= k && k <= x.end && typeof x.cap === 'number');
+  const cap = occCap ? occCap.cap : S.shop.dailyCapacity;
   const cards = [
     S.askEnabled && can('money') ? `<button class="card ask-card" data-act="ask"><span class="ask-ic">${icon('sparkle')}</span><span class="row-main"><b>${esc(t('ask.cardTitle'))}</b><small>${esc(t('ask.cardSubtitle'))}</small></span>${icon('chev', 'chev')}</button>` : '',
     camp ? campaignCard(camp) : '',
     webOrdersCard(),
     S.isDemo ? `<div class="card demo-banner"><p>${esc(t('today.demoHint', TRIAL_DAYS))}</p><button class="btn primary small" data-act="paywall">${esc(t('today.demoCta'))}</button></div>` : '',
     `<div class="kpis ${can('money') ? 'three' : 'two'}">${kpi(todays.length, t('today.orders'))}${kpi(toPrepare, t('today.toPrepare'))}${can('money') ? kpiLink('show-unpaid', money(unpaid), t('today.unpaid'), unpaid > 0 ? 'bad' : '') : ''}</div>`,
-    S.shop.dailyCapacity ? capacityCard(sum(todays, qtyOf), S.shop.dailyCapacity) : '',
+    cap > 0 ? capacityCard(sum(todays, qtyOf), cap) : '',
     low.length ? `<section class="card"><h3 class="card-title warn-text">${icon('alert')} ${esc(t('today.lowStock'))}</h3>${low.map(p => `<a class="row" href="#/shop/menu"><span class="row-main"><b>${esc(pName(p))}</b></span>${badge(p.qty <= 0 ? 'bad' : 'warn', t('stock.qtyBadge', p.qty))}</a>`).join('')}</section>` : '',
     overdue.length ? `<section class="card overdue-card"><h3 class="card-title bad-text">${icon('alert')} ${esc(t('orders.overdue'))}</h3><div class="list">${overdue.map(o => orderRow(o, true)).join('')}</div></section>` : '',
     `<section class="card"><h3 class="card-title">${esc(t('today.nextPickups'))}</h3>${upcoming.length ? `<div class="list">${upcoming.map(o => orderRow(o, true)).join('')}</div><a class="link-btn see-all" href="#/orders">${esc(t('today.seeAll'))}</a>` : empty(t('today.allCaughtUp'))}</section>`,
