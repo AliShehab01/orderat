@@ -235,16 +235,28 @@ const options = (list, value, label) => list.map(o => `<option value="${esc(o)}"
 
 // Created fresh each time, inside the open dialog when there is one: a modal dialog sits in the top
 // layer, above anything z-index can reach.
-function toast(msg) {
+// With an action ({ label, fn }, say Undo) it stays 5 s and its button runs fn once.
+function toast(msg, action) {
   document.querySelectorAll('.toast').forEach(x => x.remove());
   const el = document.createElement('div');
-  el.className = 'toast';
+  el.className = action ? 'toast has-action' : 'toast';
   el.setAttribute('role', 'status');
-  el.textContent = msg;
+  const span = document.createElement('span');
+  span.textContent = msg;
+  el.append(span);
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'toast-act';
+    b.textContent = action.label;
+    b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); el.remove(); action.fn(); });
+    el.append(b);
+  }
   (modalEl().open ? modalEl() : document.body).append(el);
   requestAnimationFrame(() => el.classList.add('show'));
-  setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 2600);
+  setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, action ? 5000 : 2600);
 }
+const undoToast = (msg, fn) => toast(msg, { label: t('common.undo'), fn });
 const modalEl = () => $('#modal');
 function openModal(title, body, cls = '') {
   const m = modalEl();
@@ -541,25 +553,66 @@ function openPayment(o) {
 
 // ---------- Items editor (New order and Edit items) ----------
 
-function newItem() {
-  const p = S.products.find(x => x.active);
-  return p ? { pid: p.id, name: '', qty: 1, price: p.price } : { pid: 'custom', name: '', qty: 1, price: 0 };
-}
 const itemList = p => (p === 'd' ? D.items : E.items);
 const rerenderItems = p => (p === 'd' ? render() : renderEditItems());
-const itemsTotal = items => sum(items, it => (it.qty || 0) * (parseFloat(it.price) || 0));
+const qtyNum = v => Math.max(0, parseInt(v, 10) || 0);
+const itemsTotal = items => sum(items, it => qtyNum(it.qty) * (parseFloat(it.price) || 0));
+const lineName = it => (it.pid === 'custom' ? it.name : pName(productOf(it.pid) || { nameAr: it.name, nameEn: it.name }));
+// Adds a picked product: one more on the line that already has it (merged here only, never when an
+// order is cleaned or saved: a phone order may hold two lines of one product at different prices).
+function addProduct(list, pid) {
+  if (pid === 'custom') { list.push({ pid: 'custom', name: '', qty: 1, price: 0 }); return null; }
+  const p = productOf(pid);
+  if (!p) return null;
+  const line = list.find(it => it.pid === pid);
+  if (line) line.qty = qtyNum(line.qty) + 1;
+  else list.push({ pid, name: '', qty: 1, price: p.price });
+  return line || list[list.length - 1];
+}
+// Takes a line out, with an Undo that puts it back where it was (while the same editor is still open).
+function removeLine(p, i) {
+  const list = itemList(p), it = list[i];
+  if (!it) return;
+  list.splice(i, 1);
+  rerenderItems(p);
+  undoToast(t('neworder.itemRemoved'), () => {
+    if (list !== (p === 'd' ? D && D.items : E && E.items)) return;
+    list.splice(Math.min(i, list.length), 0, it);
+    if (p === 'e' && !modalEl().open) return;
+    rerenderItems(p);
+  });
+}
+// The product picker: active products with their price, an "x2" badge for those already in the order.
+function pickerHtml(p) {
+  const list = itemList(p), inOrder = pid => sum(list.filter(it => it.pid === pid), it => qtyNum(it.qty));
+  const rows = S.products.filter(x => x.active).map(x => `<button type="button" class="row" data-act="item-add" data-p="${p}" data-pid="${esc(x.id)}"><span class="row-main"><b>${esc(pName(x))}</b><small>${esc(money(x.price))}</small></span>${inOrder(x.id) ? badge('brand', `x${inOrder(x.id)}`) : ''}${icon('plus', 'chev')}</button>`).join('');
+  return `<div class="card list picker">${rows}<button type="button" class="row" data-act="item-add" data-p="${p}" data-pid="custom"><span class="row-main"><b>${esc(t('neworder.customItem'))}</b></span>${icon('plus', 'chev')}</button></div>`;
+}
+function openItemPicker(p) {
+  if (p === 'e') { E.picking = true; renderEditItems(); return; }
+  openModal(t('neworder.pickItem'), pickerHtml(p));
+}
 function itemsEditor(items, p) {
   const products = S.products.filter(x => x.active);
   const attrs = i => `data-p="${p}" data-i="${i}"`;
-  return `<div class="items-ed">${items.map((it, i) => `<div class="item-row">
-    <select data-live="item" ${attrs(i)} data-f="pid" aria-label="${esc(t('neworder.menuItem'))}">${products.map(x => `<option value="${esc(x.id)}"${x.id === it.pid ? ' selected' : ''}>${esc(pName(x))}</option>`).join('')}<option value="custom"${it.pid === 'custom' ? ' selected' : ''}>${esc(t('neworder.customItem'))}</option></select>
-    ${it.pid === 'custom' ? `<input data-live="item" ${attrs(i)} data-f="name" value="${esc(it.name)}" placeholder="${esc(t('neworder.itemName'))}" aria-label="${esc(t('neworder.itemName'))}">` : ''}
+  const hint = p === 'd' ? ' enterkeyhint="next"' : '';
+  return `<div class="items-ed">${items.map((it, i) => {
+    const q = qtyNum(it.qty);
+    const gone = it.pid !== 'custom' && !products.some(x => x.id === it.pid);
+    const missing = gone ? `<option value="${esc(it.pid)}" selected>${esc(lineName(it))} ${esc(t('items.inactive'))}</option>` : '';
+    const minus = q <= 1
+      ? `<button type="button" data-act="item-qty" ${attrs(i)} data-d="-1" aria-label="${esc(t('neworder.removeItem'))}">${icon('trash')}</button>`
+      : `<button type="button" data-act="item-qty" ${attrs(i)} data-d="-1" aria-label="−">${icon('minus')}</button>`;
+    return `<div class="item-row">
+    <select data-live="item" ${attrs(i)} data-f="pid" aria-label="${esc(t('neworder.menuItem'))}">${missing}${products.map(x => `<option value="${esc(x.id)}"${x.id === it.pid ? ' selected' : ''}>${esc(pName(x))}</option>`).join('')}<option value="custom"${it.pid === 'custom' ? ' selected' : ''}>${esc(t('neworder.customItem'))}</option></select>
+    ${it.pid === 'custom' ? `<input data-live="item" ${attrs(i)} data-f="name" value="${esc(it.name)}" placeholder="${esc(t('neworder.itemName'))}" aria-label="${esc(t('neworder.itemName'))}"${hint}>` : ''}
     <div class="item-controls">
-      <div class="stepper"><button type="button" data-act="item-qty" ${attrs(i)} data-d="-1" aria-label="−">${icon('minus')}</button><b aria-label="${esc(t('neworder.quantity'))}">${it.qty}</b><button type="button" data-act="item-qty" ${attrs(i)} data-d="1" aria-label="+">${icon('plus')}</button></div>
-      <input class="price" type="number" inputmode="decimal" step="any" min="0" data-live="item" ${attrs(i)} data-f="price" value="${esc(it.price)}" aria-label="${esc(t('neworder.price'))}">
-      <button type="button" class="icon-btn" data-act="item-del" ${attrs(i)} aria-label="${esc(t('common.delete'))}">${icon('trash')}</button>
+      <div class="stepper">${minus}<input class="qty" type="number" inputmode="numeric" min="1" max="99" step="1" data-live="item" ${attrs(i)} data-f="qty" value="${q}" aria-label="${esc(t('neworder.quantity'))}"${hint}><button type="button" data-act="item-qty" ${attrs(i)} data-d="1" aria-label="+">${icon('plus')}</button></div>
+      <input class="price" type="number" inputmode="decimal" step="any" min="0" data-live="item" ${attrs(i)} data-f="price" value="${esc(it.price)}" aria-label="${esc(t('neworder.price'))}"${hint}>
+      <button type="button" class="icon-btn" data-act="item-del" ${attrs(i)} aria-label="${esc(t('neworder.removeItem'))}" title="${esc(t('neworder.removeItem'))}">${icon('trash')}</button>
     </div>
-  </div>`).join('')}</div>`;
+  </div>`;
+  }).join('')}</div>`;
 }
 // Lines keep their item id (and cost while on the same product), so a cloud edit changes those lines only.
 const cleanItems = items => OrderatLiveCore.cleanItems(items, S.products);
@@ -568,14 +621,23 @@ function openEditItems(o) {
   renderEditItems();
 }
 function renderEditItems() {
+  const sb = $('#modal .sheet-body'), y = sb && modalEl().open ? sb.scrollTop : 0;
+  if (E.picking) {
+    openModal(t('neworder.pickItem'), `${pickerHtml('e')}<button type="button" class="btn ghost block" data-act="item-pick-back">${icon('back')} ${esc(t('common.back'))}</button>`, 'wide');
+    return;
+  }
   openModal(t('orders.editItems'), `<form data-form="edit-items" class="stack">${itemsEditor(E.items, 'e')}
-    <button type="button" class="btn ghost small" data-act="item-add" data-p="e">${icon('plus')} ${esc(t('neworder.addItem'))}</button>
+    <button type="button" class="btn ghost small" data-act="item-pick" data-p="e">${icon('plus')} ${esc(t('neworder.addItem'))}</button>
     <div class="line total"><span>${esc(t('orders.total'))}</span><b id="e-total">${esc(money(itemsTotal(E.items)))}</b></div>
     <button class="btn primary block">${esc(t('common.save'))}</button></form>`, 'wide');
+  const nb = $('#modal .sheet-body');
+  if (nb && y) nb.scrollTop = y;
 }
 function updateTotal(p) {
   const el = $(p === 'd' ? '#d-total' : '#e-total');
   if (el) el.textContent = money(p === 'd' ? draftTotal() : itemsTotal(E.items));
+  const save = p === 'd' && $('#d-save');
+  if (save) save.disabled = draftEmpty();
 }
 
 // ---------- New order ----------
@@ -583,9 +645,10 @@ function updateTotal(p) {
 function newDraft() {
   const due = addDays(startOfDay(new Date()), 1);
   due.setHours(17);
-  return { text: '', name: '', phone: '', source: 'whatsapp', items: [newItem()], due: inputDateTime(due), fulfillment: 'pickup', area: '', fee: '1', deposit: '', method: 'benefit', notes: '', note: '', reading: false };
+  return { text: '', name: '', phone: '', source: 'whatsapp', items: [], due: inputDateTime(due), fulfillment: 'pickup', area: '', fee: '1', deposit: '', method: 'benefit', notes: '', note: '', reading: false };
 }
-const draftTotal = () => totals({ items: D.items.map(it => ({ qty: it.qty, price: parseFloat(it.price) || 0 })), deliveryFee: D.fulfillment === 'delivery' ? parseFloat(D.fee) || 0 : 0 }).total;
+const draftEmpty = () => !D.items.some(it => qtyNum(it.qty) > 0);
+const draftTotal = () => totals({ items: D.items.map(it => ({ qty: qtyNum(it.qty), price: parseFloat(it.price) || 0 })), deliveryFee: D.fulfillment === 'delivery' ? parseFloat(D.fee) || 0 : 0 }).total;
 
 function examples() {
   const ps = S.products.filter(p => p.active);
@@ -620,29 +683,30 @@ function viewNew() {
   <form data-form="new-order" class="stack" novalidate>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.customerTitle'))}</h3>
       <div class="grid2">
-        ${field(t('neworder.customerName'), `<input name="name" data-live="draft" value="${esc(D.name)}" list="customer-names" autocomplete="off">`)}
-        ${field(t('neworder.customerPhone'), `<input name="phone" data-live="draft" value="${esc(D.phone)}" dir="ltr" inputmode="tel" autocomplete="off">`)}
+        ${field(t('neworder.customerName'), `<input name="name" data-live="draft" enterkeyhint="next" value="${esc(D.name)}" list="customer-names" autocomplete="off">`)}
+        ${field(t('neworder.customerPhone'), `<input name="phone" data-live="draft" enterkeyhint="next" value="${esc(D.phone)}" dir="ltr" inputmode="tel" autocomplete="off">`)}
       </div>
       <datalist id="customer-names">${S.customers.map(c => `<option value="${esc(cName(c))}">`).join('')}</datalist>
       <div class="field"><span>${esc(t('neworder.source'))}</span>${seg('source', ['whatsapp', 'instagram', 'manual'], D.source, k => t('source.' + k), 'draft')}</div>
     </section>
-    <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.itemsTitle'))}</h3>
-      ${itemsEditor(D.items, 'd')}
-      <button type="button" class="btn ghost small" data-act="item-add" data-p="d">${icon('plus')} ${esc(t('neworder.addItem'))}</button>
+    <section class="card stack-sm" id="d-items"><h3 class="card-title">${esc(t('neworder.itemsTitle'))}</h3>
+      ${D.items.length
+        ? `${itemsEditor(D.items, 'd')}<button type="button" class="btn ghost small" data-act="item-pick" data-p="d">${icon('plus')} ${esc(t('neworder.addItem'))}</button>`
+        : `<div class="items-empty"><p class="muted small">${esc(t('neworder.needItem'))}</p><button type="button" class="btn primary" data-act="item-pick" data-p="d">${icon('plus')} ${esc(t('neworder.addFirstItem'))}</button></div>`}
     </section>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.scheduleTitle'))}</h3>
-      ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" data-live="draft" value="${esc(D.due)}">`)}
+      ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" enterkeyhint="next" data-live="draft" value="${esc(D.due)}">`)}
       <div class="field"><span>${esc(t('neworder.fulfillment'))}</span>${seg('fulfillment', ['pickup', 'delivery'], D.fulfillment, k => t('fulfillment.' + k), 'draft')}</div>
-      ${D.fulfillment === 'delivery' ? `<div class="grid2">${field(t('shop.area'), `<select name="area" data-live="draft"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, D.area, a => t('area.' + a))}</select>`)}${field(t('orders.deliveryFee'), `<input name="fee" type="number" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.fee)}">`)}</div>` : ''}
+      ${D.fulfillment === 'delivery' ? `<div class="grid2">${field(t('shop.area'), `<select name="area" data-live="draft"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, D.area, a => t('area.' + a))}</select>`)}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.fee)}">`)}</div>` : ''}
     </section>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.paymentTitle'))}</h3>
       <div class="grid2">
-        ${field(t('neworder.depositOptional'), `<input name="deposit" type="number" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.deposit)}">`)}
+        ${field(t('neworder.depositOptional'), `<input name="deposit" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.deposit)}">`)}
         ${field(t('payment.method'), `<select name="method" data-live="draft">${options(METHODS, D.method, m => t('payment.method.' + m))}</select>`)}
       </div>
     </section>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.notesTitle'))}</h3><textarea name="notes" rows="2" data-live="draft" aria-label="${esc(t('neworder.notesTitle'))}">${esc(D.notes)}</textarea></section>
-    <div class="save-bar"><span>${esc(t('orders.total'))} <b id="d-total">${esc(money(draftTotal()))}</b></span><button class="btn primary big">${esc(t('neworder.save'))}</button></div>
+    <div class="save-bar"><span>${esc(t('orders.total'))} <b id="d-total">${esc(money(draftTotal()))}</b></span><button class="btn primary big" id="d-save"${draftEmpty() ? ' disabled' : ''}>${esc(t('neworder.save'))}</button></div>
   </form></div>`;
   return { title: t('tab.new'), body };
 }
@@ -1379,9 +1443,27 @@ const ACTIONS = {
   'cancel-order'(el) { const o = orderById(el.dataset.id); if (o && confirm(t('orders.cancelConfirm'))) { setStatus(o, 'cancelled'); render(); } },
   pay(el) { const o = orderById(el.dataset.id); if (o) openPayment(o); },
   'edit-items'(el) { const o = orderById(el.dataset.id); if (o) openEditItems(o); },
-  'item-qty'(el) { const it = itemList(el.dataset.p)[+el.dataset.i]; if (it) { it.qty = Math.max(1, it.qty + +el.dataset.d); rerenderItems(el.dataset.p); } },
-  'item-add'(el) { itemList(el.dataset.p).push(newItem()); rerenderItems(el.dataset.p); },
-  'item-del'(el) { itemList(el.dataset.p).splice(+el.dataset.i, 1); rerenderItems(el.dataset.p); },
+  'item-qty'(el) {
+    const p = el.dataset.p, i = +el.dataset.i, it = itemList(p)[i];
+    if (!it) return;
+    const q = Math.min(99, qtyNum(it.qty) + +el.dataset.d);
+    if (q <= 0) { removeLine(p, i); return; }
+    it.qty = q;
+    rerenderItems(p);
+  },
+  'item-pick'(el) { openItemPicker(el.dataset.p); },
+  'item-pick-back'() { if (E) { E.picking = false; renderEditItems(); } },
+  'item-add'(el) {
+    const p = el.dataset.p, pid = el.dataset.pid;
+    if (p === 'd' && !D) return;
+    if (p === 'e' && !E) return;
+    const line = addProduct(itemList(p), pid);
+    if (p === 'e') E.picking = false; else closeModal();
+    rerenderItems(p);
+    if (line && line.qty > 1) toast(t('neworder.itemAdded', lineName(line), line.qty));
+    if (pid === 'custom') { const inputs = document.querySelectorAll(`[data-p="${p}"][data-f="name"]`); inputs[inputs.length - 1]?.focus(); }
+  },
+  'item-del'(el) { removeLine(el.dataset.p, +el.dataset.i); },
   parse() { if (D.text.trim()) { if (Live.on) Live.parseText(D.text); else readDraft(D.text, t('neworder.demoRead')); } },
   example(el) { const ex = examples()[+el.dataset.i]; if (ex) { D.text = ex.text; readDraft(ex.text, t('neworder.demoRead')); } },
   'money-range'(el) { moneyRange = el.dataset.v; render(); },
@@ -1455,8 +1537,15 @@ const LIVE = {
   item(el) {
     const it = itemList(el.dataset.p)[+el.dataset.i];
     if (!it) return;
-    if (el.dataset.f === 'pid') { it.pid = el.value; const p = productOf(el.value); if (p) it.price = p.price; rerenderItems(el.dataset.p); return; }
-    it[el.dataset.f] = el.value;
+    if (el.dataset.f === 'pid') {
+      it.pid = el.value;
+      const p = productOf(el.value);
+      it.price = p ? p.price : 0;
+      rerenderItems(el.dataset.p);
+      if (it.pid === 'custom') $(`[data-p="${el.dataset.p}"][data-i="${el.dataset.i}"][data-f="name"]`)?.focus();
+      return;
+    }
+    it[el.dataset.f] = el.dataset.f === 'qty' ? qtyNum(el.value) : el.value;
     updateTotal(el.dataset.p);
   },
   shot(el) {
@@ -1664,6 +1753,18 @@ document.addEventListener('submit', e => {
   if (!f) return;
   e.preventDefault();
   FORMS[f.dataset.form]?.(f, new FormData(f));
+});
+// Return in a New order field moves to the next field and never saves (implicit submission would
+// report the Save button as the submitter, so this does not look at e.submitter).
+document.addEventListener('keydown', e => {
+  const el = e.target;
+  if (e.key !== 'Enter' || e.isComposing || el.tagName !== 'INPUT') return;
+  const f = el.closest("form[data-form='new-order']");
+  if (!f) return;
+  e.preventDefault();
+  const fields = [...f.querySelectorAll('input, select, textarea')].filter(x => !x.disabled && !['hidden', 'radio', 'checkbox', 'file', 'submit', 'button'].includes(x.type) && x.offsetParent !== null);
+  const next = fields[fields.indexOf(el) + 1];
+  if (next) next.focus(); else el.blur();
 });
 window.addEventListener('hashchange', render);
 
