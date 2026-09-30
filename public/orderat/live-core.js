@@ -120,6 +120,24 @@
   };
   const callingCode = currency => phonePlan(currency)[0];
   const localDigits = currency => phonePlan(currency)[1];
+  // One phone number in the international form WhatsApp takes (+97333001001) where it can tell:
+  // Arabic-Indic and Persian digits become ASCII, spaces and punctuation go, a leading 00 becomes +,
+  // a single leading 0 is dropped, and a local mobile number gets the shop country's calling code.
+  // Anything else comes back as its digits (with its + when it had one); nothing typed comes back ''.
+  function normalizePhone(raw, currency) {
+    const s = String(raw == null ? '' : raw).trim()
+      .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660))
+      .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06F0));
+    let d = s.replace(/\D/g, '');
+    if (!d) return '';
+    if (s.startsWith('+')) return '+' + d;
+    if (d.startsWith('00')) return '+' + d.slice(2);
+    const cc = callingCode(currency), local = localDigits(currency);
+    if (d.startsWith('0')) d = d.slice(1);
+    if (d.length === local) return '+' + cc + d;
+    if (d.length === cc.length + local && d.startsWith(cc)) return '+' + d;
+    return d;
+  }
   function defaultRateBps(currency) {
     const k = String(currency || '').toUpperCase();
     return Object.prototype.hasOwnProperty.call(DEFAULT_RATE_BPS, k) ? DEFAULT_RATE_BPS[k] : 0;
@@ -401,7 +419,7 @@
   }
 
   return {
-    subscriptionAllowed, subscriptionActive, aiDemo, callingCode, localDigits, access, formatInvoice, nextInvoice, invoiceLabel,
+    subscriptionAllowed, subscriptionActive, aiDemo, callingCode, localDigits, normalizePhone, access, formatInvoice, nextInvoice, invoiceLabel,
     vatMinor, defaultRateBps, applyVat, orderMinor, stockForStatus, stockForEdit, orderNumbers, historyLabel,
     cleanItems, parseProducts, draftFields, buildAskSnapshot, canMoveOrderStock, flushBeforeLeaving, createPermissionEditor,
   };

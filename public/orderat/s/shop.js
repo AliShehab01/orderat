@@ -936,7 +936,11 @@
     var minDate = addDays(todayRiyadh(), shop.leadTimeDays);
     if (webOrders && !values.name) errors.name = t("errRequired");
     if (webOrders) {
-      var phone = values.phone.replace(/[\s()-]/g, "");
+      // Arabic-Indic and Persian digits are accepted and sent as ASCII; a leading 00 becomes +.
+      var phone = values.phone
+        .replace(/[٠-٩]/g, function (d) { return String(d.charCodeAt(0) - 0x0660); })
+        .replace(/[۰-۹]/g, function (d) { return String(d.charCodeAt(0) - 0x06F0); })
+        .replace(/[\s().-]/g, "").replace(/^00/, "+");
       if (!/^\+?\d{8,15}$/.test(phone)) errors.phone = t("errPhone");
       values.phone = phone;
     }

@@ -580,6 +580,8 @@ const I18N = {
   'common.saved': ['Saved.', 'تم الحفظ.'],
   'common.undo': ['Undo', 'تراجع'],
   'today.seeAll': ['See all', 'عرض الكل'],
+  'customers.sameName': ['A customer with this name already exists. Same person?', 'يوجد عميل بنفس الاسم. هل هو نفس الشخص؟'],
+  'customers.search': ['Search customers', 'ابحث في العملاء', 'ابحثي في العملاء'],
   'orders.fOpen': ['Open', 'مفتوحة'],
   'orders.fToday': ['Today', 'اليوم'],
   'orders.fUnpaid': ['Unpaid', 'غير مدفوعة'],

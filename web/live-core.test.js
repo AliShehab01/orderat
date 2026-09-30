@@ -28,6 +28,19 @@ describe('subscription gate', () => {
     expect(core.subscriptionAllowed({ status: 'none', expiresAt: at(-30) }, NOW)).toBe(false);
   });
 
+  it('normalizes a typed phone to the international form where it can tell', () => {
+    expect(core.normalizePhone('3300 1001', 'BHD')).toBe('+97333001001');
+    expect(core.normalizePhone('٣٣٠٠١٠٠١', 'BHD')).toBe('+97333001001');
+    expect(core.normalizePhone('۳۳۰۰۱۰۰۱', 'BHD')).toBe('+97333001001');
+    expect(core.normalizePhone('00973 3300-1001', 'BHD')).toBe('+97333001001');
+    expect(core.normalizePhone('+973 (3300) 1001', 'BHD')).toBe('+97333001001');
+    expect(core.normalizePhone('97333001001', 'BHD')).toBe('+97333001001');
+    expect(core.normalizePhone('0501234567', 'SAR')).toBe('+966501234567');
+    expect(core.normalizePhone('12345', 'BHD')).toBe('12345');
+    expect(core.normalizePhone('  ', 'BHD')).toBe('');
+    expect(core.normalizePhone(null, 'BHD')).toBe('');
+  });
+
   it('maps the shop currency to its calling code', () => {
     expect(core.callingCode('SAR')).toBe('966');
     expect(core.callingCode('AED')).toBe('971');

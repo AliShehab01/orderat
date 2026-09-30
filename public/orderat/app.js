@@ -100,6 +100,7 @@ let S = loadState();
 let D = null; // the New order draft
 let E = null; // the order-items editor's working copy
 let lastPath = '', prevPath = '';
+let customersQuery = '';
 let ordersFilter = 'open', ordersMore = false, ordersCustomer = '', ordersQuery = '', moneyRange = 'week';
 let CAMPAIGNS = readCachedCampaigns(), campaignsFetched = false;
 const ST = { photo: null, style: 'white', shape: 'square', result: null, busy: false, left: 3, campaign: null };
@@ -318,7 +319,28 @@ function copyText(s) {
 }
 // The site's own terms and privacy pages, in the app's language.
 const legalUrl = page => `${SITE_URL}${S.lang === 'en' ? '/en' : ''}/${page}/`;
-const waLink = (phone, msg) => `https://wa.me/${digits(phone)}?text=${encodeURIComponent(msg)}`;
+const normPhone = v => OrderatLiveCore.normalizePhone(v, S.shop.currency);
+const waLink = (phone, msg) => `https://wa.me/${digits(normPhone(phone))}?text=${encodeURIComponent(msg)}`;
+const samePhone = (a, b) => { const x = digits(normPhone(a)), y = digits(normPhone(b)); return !!x && x === y; };
+const customerNamed = name => S.customers.find(x => x.name === name || x.nameEn === name);
+// New order's customer: the one with this phone; with no phone typed, the one with this name. A name
+// that exists with another phone is asked about, so two people called Sara stay two customers.
+function draftCustomer(name) {
+  const phone = normPhone(D.phone);
+  if (phone) {
+    const byPhone = S.customers.find(x => samePhone(x.phone, phone));
+    if (byPhone) return byPhone;
+    const named = customerNamed(name);
+    if (named && !named.phone) { named.phone = phone; return named; }
+    if (named && confirm(t('customers.sameName'))) return named;
+  } else {
+    const named = customerNamed(name);
+    if (named) return named;
+  }
+  const c = { id: nid(), name, nameEn: '', phone, area: D.area, notes: '' };
+  S.customers.push(c);
+  return c;
+}
 
 // ---------- Rendering ----------
 
@@ -567,7 +589,7 @@ function viewOrder(id) {
   const body = `<div class="stack">
     <section class="card od-head">
       <div class="split"><h2>${esc(fmtDay(d))} · ${esc(fmtTime(d))}</h2>${statusBadge(o.status)}</div>
-      <p class="od-meta">${sourceTag(o.source)}<b>${esc(cName(c))}</b>${c?.phone ? `<span dir="ltr">${esc(c.phone)}</span>` : ''}</p>
+      <p class="od-meta">${sourceTag(o.source)}<b>${esc(cName(c))}</b>${c?.phone ? `<a dir="ltr" href="tel:${esc(normPhone(c.phone))}">${esc(c.phone)}</a>` : ''}</p>
       <p class="od-meta muted">${icon(o.fulfillment === 'delivery' ? 'truck' : 'bag')}<span>${esc(t('fulfillment.' + o.fulfillment))}${o.area ? ' · ' + esc(t('area.' + o.area)) : ''} · ${esc(t('orders.via', t('source.' + o.source)))}</span></p>
       ${o.fulfillment === 'delivery' && addressText(o) ? `<div class="od-address"><p><span class="muted small">${esc(t('order.address'))}</span><br>${esc(addressText(o))}</p><div class="chips wrap"><button class="chip small" data-act="copy" data-text="${esc(addressText(o))}">${icon('copy')} ${esc(t('order.copyAddress'))}</button><a class="chip small" href="${esc('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent([addressText(o), o.area ? t('area.' + o.area) : ''].filter(Boolean).join(', ')))}" target="_blank" rel="noopener">${icon('external')} ${esc(t('order.openMaps'))}</a></div></div>` : ''}
       ${o.notes ? `<p class="od-notes">${esc(o.notes)}</p>` : ''}
@@ -989,11 +1011,16 @@ function openProduct(p) {
   </form>`);
 }
 
-function viewCustomers() {
+function viewCustomers(customersOnly = false) {
   const counts = new Map();
   S.orders.forEach(o => counts.set(o.customerId, (counts.get(o.customerId) || 0) + 1));
-  const rows = S.customers.slice().sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0)).map(c => `<button class="row" data-act="edit-customer" data-id="${esc(c.id)}"${can('orders') ? '' : ' disabled'}><span class="avatar sm">${esc(initial(cName(c)))}</span><span class="row-main"><b>${esc(cName(c))}</b><small><span dir="ltr">${esc(c.phone)}</span>${c.area ? ' · ' + esc(t('area.' + c.area)) : ''}</small></span><span class="muted small">${esc(t('shop.orderCount', counts.get(c.id) || 0))}</span>${icon('chev', 'chev')}</button>`).join('');
-  return { title: t('shop.customersTitle'), back: 'shop', actions: can('orders') ? addBtn('add-customer', t('shop.addCustomer')) : '', body: rows ? `<div class="card list">${rows}</div>` : empty(t('shop.noCustomers')) };
+  const q = customersQuery.trim().toLowerCase(), qd = digits(normPhone(customersQuery));
+  const hit = c => !q || [c.name, c.nameEn, c.phone].some(v => String(v || '').toLowerCase().includes(q)) || (qd.length >= 3 && digits(c.phone).includes(qd));
+  const rows = S.customers.filter(hit).sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0)).map(c => `<button class="row" data-act="edit-customer" data-id="${esc(c.id)}"${can('orders') ? '' : ' disabled'}><span class="avatar sm">${esc(initial(cName(c)))}</span><span class="row-main"><b>${esc(cName(c))}</b><small><span dir="ltr">${esc(c.phone)}</span>${c.area ? ' · ' + esc(t('area.' + c.area)) : ''}</small></span><span class="muted small">${esc(t('shop.orderCount', counts.get(c.id) || 0))}</span>${icon('chev', 'chev')}</button>`).join('');
+  const list = rows ? `<div class="card list">${rows}</div>` : empty(t(S.customers.length ? 'orders.noMatch' : 'shop.noCustomers'));
+  if (customersOnly) return list;
+  const search = S.customers.length ? `<label class="search">${icon('search')}<input type="search" data-live="customers-q" value="${esc(customersQuery)}" placeholder="${esc(t('customers.search'))}" aria-label="${esc(t('customers.search'))}"></label>` : '';
+  return { title: t('shop.customersTitle'), back: 'shop', actions: can('orders') ? addBtn('add-customer', t('shop.addCustomer')) : '', body: `<div class="stack">${search}<div id="customers-list">${list}</div></div>` };
 }
 function openCustomer(c) {
   const x = c || { name: '', phone: '', area: '', notes: '' };
@@ -1488,7 +1515,7 @@ const ACTIONS = {
   'web-add'(el) {
     const w = S.webOrders.find(x => x.id === el.dataset.id);
     if (!w) return;
-    let c = S.customers.find(x => digits(x.phone) === digits(w.phone));
+    let c = S.customers.find(x => samePhone(x.phone, w.phone));
     if (!c) { c = { id: uid(), name: w.name, nameEn: w.nameEn, phone: w.phone, area: '', notes: '' }; S.customers.push(c); }
     const items = w.items.map(it => { const p = productOf(it.pid); return p && { pid: p.id, nameAr: p.nameAr, nameEn: p.nameEn, qty: it.qty, price: p.price, cost: p.cost }; }).filter(Boolean);
     S.orders.push({ id: uid(), no: S.nextOrderNo++, customerId: c.id, dueAt: w.dueAt, items, fulfillment: 'pickup', area: '', deliveryFee: 0, source: 'link', payments: [], notes: '', changes: [{ kind: 'created', at: new Date().toISOString() }], status: 'new', stockApplied: false });
@@ -1640,8 +1667,15 @@ const ACTIONS = {
 
 const LIVE = {
   'orders-q'(el) { ordersQuery = el.value; $('#orders-list').innerHTML = ordersListHtml(); },
+  'customers-q'(el) { customersQuery = el.value; $('#customers-list').innerHTML = viewCustomers(true); },
   draft(el) {
     D[el.name] = el.value;
+    // A name that is exactly a known customer fills in their phone and area when those are still empty.
+    if (el.name === 'name') {
+      const c = customerNamed(el.value.trim());
+      if (c && !D.phone.trim() && c.phone) { D.phone = c.phone; const ph = $('form[data-form="new-order"] input[name="phone"]'); if (ph) ph.value = c.phone; }
+      if (c && !D.area && c.area) D.area = c.area;
+    }
     if (D.errors && D.errors[el.name]) { delete D.errors[el.name]; el.removeAttribute('aria-invalid'); el.closest('.field')?.querySelector('.field-error')?.remove(); }
     if (el.name === 'text') { const b = $('[data-act="parse"]'); if (b) b.disabled = D.reading || !D.text.trim(); }
     if (el.name === 'fulfillment') render(); else updateTotal('d');
@@ -1733,10 +1767,8 @@ const FORMS = {
     if (!name) errors.name = t('err.name');
     if (Object.keys(errors).length) { showDraftErrors(errors); return; }
     D.errors = null;
-    const localLen = OrderatLiveCore.localDigits(S.shop.currency);
-    const tail = digits(D.phone).slice(-localLen);
-    let c = S.customers.find(x => (tail.length === localLen && digits(x.phone).endsWith(tail)) || x.name === name || x.nameEn === name);
-    if (!c) { c = { id: nid(), name, nameEn: '', phone: tail.length === localLen && !D.phone.trim().startsWith('+') ? '+' + OrderatLiveCore.callingCode(S.shop.currency) + tail : D.phone.trim(), area: D.area, notes: '' }; S.customers.push(c); }
+    const c = draftCustomer(name);
+    if (!c) return;
     const now = new Date().toISOString(), delivery = D.fulfillment === 'delivery';
     const due = new Date(D.due);
     const order = {
@@ -1826,7 +1858,7 @@ const FORMS = {
     const get = k => String(fd.get(k) || '').trim();
     if (!get('name')) return;
     const c = S.customers.find(x => x.id === f.dataset.id);
-    const data = { phone: get('phone'), area: get('area'), notes: get('notes') };
+    const data = { phone: normPhone(get('phone')), area: get('area'), notes: get('notes') };
     if (c) {
       // Keep the other language's name when the shown one is unchanged.
       if (get('name') !== cName(c)) Object.assign(c, { name: get('name'), nameEn: '' });
