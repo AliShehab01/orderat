@@ -689,7 +689,8 @@ function parseMessage(raw) {
   });
   items.sort((a, b) => a.pos - b.pos);
 
-  const ph = norm(raw).match(/(?:\+?973[\s-]?)?(\d{8})(?!\d)/);
+  const cc = OrderatLiveCore.callingCode(S.shop.currency);
+  const ph = norm(raw).match(new RegExp(String.raw`(?:\+?${cc}[\s-]?)?(\d{${OrderatLiveCore.localDigits(S.shop.currency)}})(?!\d)`));
   let customer = ph ? S.customers.find(c => digits(c.phone).endsWith(ph[1])) : null;
   if (!customer) customer = S.customers.find(c => [c.name, c.nameEn].some(n => n && s.includes(norm(n))));
   let name = customer ? cName(customer) : '';
@@ -727,7 +728,7 @@ function parseMessage(raw) {
   }
   const fulfillment = /توصيل|deliver/.test(s) ? 'delivery' : /استلام|pick ?up|collect/.test(s) ? 'pickup' : '';
   const area = Object.keys(AREA_WORDS).find(k => AREA_WORDS[k].some(w => s.includes(w))) || '';
-  return { items: items.map(({ pos, ...it }) => it), name, phone: customer?.phone || (ph ? '+973' + ph[1] : ''), due, fulfillment, area };
+  return { items: items.map(({ pos, ...it }) => it), name, phone: customer?.phone || (ph ? '+' + cc + ph[1] : ''), due, fulfillment, area };
 }
 
 function readDraft(source, note) {
@@ -1527,9 +1528,10 @@ const FORMS = {
     if (!items.length) { toast(t('neworder.needItem')); return; }
     const name = D.name.trim();
     if (!name) { toast(t('neworder.needName')); return; }
-    const tail = digits(D.phone).slice(-8);
-    let c = S.customers.find(x => (tail.length === 8 && digits(x.phone).endsWith(tail)) || x.name === name || x.nameEn === name);
-    if (!c) { c = { id: nid(), name, nameEn: '', phone: tail.length === 8 && !D.phone.trim().startsWith('+') ? '+973' + tail : D.phone.trim(), area: D.area, notes: '' }; S.customers.push(c); }
+    const localLen = OrderatLiveCore.localDigits(S.shop.currency);
+    const tail = digits(D.phone).slice(-localLen);
+    let c = S.customers.find(x => (tail.length === localLen && digits(x.phone).endsWith(tail)) || x.name === name || x.nameEn === name);
+    if (!c) { c = { id: nid(), name, nameEn: '', phone: tail.length === localLen && !D.phone.trim().startsWith('+') ? '+' + OrderatLiveCore.callingCode(S.shop.currency) + tail : D.phone.trim(), area: D.area, notes: '' }; S.customers.push(c); }
     const now = new Date().toISOString(), delivery = D.fulfillment === 'delivery';
     const due = new Date(D.due);
     const order = {

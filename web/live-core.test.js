@@ -21,11 +21,32 @@ describe('subscription gate', () => {
     expect(core.subscriptionAllowed(undefined, NOW)).toBe(true);
   });
 
-  it('allows until three days after expiresAt, whatever the status', () => {
+  it('allows until seven days after expiresAt, whatever the status', () => {
     expect(core.subscriptionAllowed({ status: 'active', expiresAt: at(10) }, NOW)).toBe(true);
-    expect(core.subscriptionAllowed({ status: 'expired', expiresAt: at(-2.9) }, NOW)).toBe(true);
-    expect(core.subscriptionAllowed({ status: 'active', expiresAt: at(-3.1) }, NOW)).toBe(false);
+    expect(core.subscriptionAllowed({ status: 'expired', expiresAt: at(-6.9) }, NOW)).toBe(true);
+    expect(core.subscriptionAllowed({ status: 'active', expiresAt: at(-7.1) }, NOW)).toBe(false);
     expect(core.subscriptionAllowed({ status: 'none', expiresAt: at(-30) }, NOW)).toBe(false);
+  });
+
+  it('maps the shop currency to its calling code', () => {
+    expect(core.callingCode('SAR')).toBe('966');
+    expect(core.callingCode('AED')).toBe('971');
+    expect(core.callingCode('KWD')).toBe('965');
+    expect(core.callingCode('QAR')).toBe('974');
+    expect(core.callingCode('OMR')).toBe('968');
+    expect(core.callingCode('BHD')).toBe('973');
+    expect(core.callingCode('XXX')).toBe('973');
+    expect(core.callingCode(undefined)).toBe('973');
+    expect(core.callingCode('sar')).toBe('966');
+    expect(core.callingCode('constructor')).toBe('973');
+  });
+
+  it('knows how many digits a local mobile number has', () => {
+    expect(core.localDigits('SAR')).toBe(9);
+    expect(core.localDigits('AED')).toBe(9);
+    expect(core.localDigits('BHD')).toBe(8);
+    expect(core.localDigits('KWD')).toBe(8);
+    expect(core.localDigits(undefined)).toBe(8);
   });
 
   it('without expiresAt, allows active or trial reported less than 35 days ago', () => {

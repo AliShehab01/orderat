@@ -116,7 +116,8 @@ const Live = (() => {
       ${info.error ? `<p class="form-error" role="alert">${esc(info.error)}</p>` : ''}
       <div class="or"><span>${esc(t('start.or'))}</span></div>
       <button class="btn primary block big" data-act="live-demo">${esc(t(S.onboarded ? 'start.backToDemo' : 'start.demo'))}</button>
-      <p class="note">${esc(t('start.note'))}</p>`, 'start');
+      <p class="note">${esc(t('start.note'))}</p>
+      <p class="note legal">${esc(t('start.legalPre'))} <a href="${S.lang === 'en' ? '/en/terms/' : '/terms/'}" target="_blank" rel="noopener">${esc(t('start.terms'))}</a> ${esc(t('start.legalAnd'))} <a href="${S.lang === 'en' ? '/en/privacy/' : '/privacy/'}" target="_blank" rel="noopener">${esc(t('start.privacy'))}</a></p>`, 'start');
   }
   // Google's and Apple's sign-in scripts load the first time the sign-in buttons show, so demo visitors
   // make no third-party requests.
@@ -202,7 +203,7 @@ const Live = (() => {
   function signIn(token) {
     info = { busy: true };
     if (screen === 'start' || screen === null) { screen = 'start'; render(); }
-    return api().signin({ provider: token.provider, idToken: token.idToken, nonce: token.rawNonce, deviceName: deviceName() })
+    return api().signin({ provider: token.provider, idToken: token.idToken, nonce: token.rawNonce, authorizationCode: token.authorizationCode, deviceName: deviceName() })
       .then(answer => {
         Auth().setSession(answer);
         const who = answer.user && (answer.user.email || answer.user.name);
@@ -225,12 +226,12 @@ const Live = (() => {
     return card(`<h1>${esc(t('shops.title'))}</h1><p class="muted small">${esc(t('live.signedInAs', accountName()))}</p><div class="card list">${rows}</div>
       <button class="btn ghost block" data-act="live-sign-out">${esc(t('cloud.signOut'))}</button>`, 'start');
   }
-  const viewNoShops = () => card(`<h1>${esc(t('noShops.title'))}</h1><p class="muted">${esc(t('noShops.body'))}</p>${storeText()}
+  const viewNoShops = () => card(`<h1>${esc(t('noShops.title'))}</h1><p class="muted">${esc(t('noShops.body'))}</p><p class="muted small">${esc(t('noShops.trial'))}</p>${storeText()}
       <p class="muted small">${esc(t('live.signedInAs', accountName()))}</p>
       <button class="btn primary block" data-act="live-account">${esc(t('noShops.again'))}</button>
       <button class="btn ghost block" data-act="live-demo">${esc(t('start.demo'))}</button>
       <button class="btn ghost block" data-act="live-sign-out">${esc(t('cloud.signOut'))}</button>`, 'start');
-  const viewEnded = () => card(`<h1>${esc(t('ended.title'))}</h1><p class="muted">${esc(t('ended.body'))}</p>${storeText()}
+  const viewEnded = () => card(`<h1>${esc(t('ended.title'))}</h1><p class="muted">${esc(t(info.role === 'staff' ? 'ended.bodyStaff' : 'ended.body'))}</p>${storeText()}
       ${shops.length > 1 ? `<button class="btn primary block" data-act="live-switch">${esc(t('live.switchShop'))}</button>` : ''}
       <button class="btn ghost block" data-act="live-sign-out">${esc(t('cloud.signOut'))}</button>`, 'start');
   const viewError = () => card(`<h1>${esc(t('live.errorTitle'))}</h1><p class="muted">${esc(info.msg || t('live.error'))}</p>
@@ -331,8 +332,9 @@ const Live = (() => {
     setOffline(false);
   }
   function endShop() {
+    const role = sync && sync.membership ? sync.membership.role : (shops.find(s => s.shopId === shopId) || {}).role;
     stopShop();
-    show('ended');
+    show('ended', { role });
   }
   // Back to the start screen; the demo's own data is still there.
   function signedOut(message) {
@@ -368,6 +370,21 @@ const Live = (() => {
     const out = api().signout().catch(() => {});
     signedOut();
     return out;
+  }
+
+  // Deletes the signed-in account on the server after the seller types the confirmation word, then leaves.
+  async function deleteAccount() {
+    const word = t('live.deleteWord');
+    const typed = prompt(t('live.deleteAccountPrompt', word));
+    if (typed === null) return;
+    if (typed.trim().toLowerCase() !== word.toLowerCase()) { toast(t('live.deleteMismatch')); return; }
+    try {
+      await api().deleteAccount();
+    } catch (error) {
+      if (!(error && error.kind === 'unauthorized')) { toast(t(error && error.kind === 'offline' ? 'ai.offline' : 'live.deleteFailed')); return; }
+    }
+    signedOut();
+    toast(t('live.deleteDone'));
   }
 
   // ---------- Sync wiring ----------
@@ -700,6 +717,7 @@ const Live = (() => {
       <div class="line"><span>${esc(t('cloud.lastSynced'))}: ${esc(when)}${pending ? ` · ${esc(t('live.pending', pending))}` : ''}</span><button class="btn ghost small" data-act="live-sync-now">${esc(t('cloud.syncNow'))}</button></div>
       ${a.owner ? navRow('shop/settings/team', 'users', t('cloud.team')) : ''}
       <div class="btn-row"><button class="btn ghost small" data-act="live-switch">${esc(t('live.switchShop'))}</button><button class="btn danger-soft small" data-act="live-sign-out">${esc(t('cloud.signOut'))}</button></div>
+      <button class="link-btn danger" data-act="live-delete-account">${esc(t('live.deleteAccount'))}</button>
     </section>`;
   }
 
@@ -746,6 +764,7 @@ const Live = (() => {
     'live-switch'() { openAccount({ choose: true }); },
     'live-retry'() { if (typeof info.retry === 'function') info.retry(); else openAccount(); },
     'live-sign-out': signOut,
+    'live-delete-account': deleteAccount,
     'live-sync-now'() { pull().then(ok => { toast(ok ? t('cloud.justNow') : t('ai.offline')); render(); }); },
     'live-invite'() {
       api().inviteCreate(shopId).then(a => { team = team || { members: [] }; team.invite = a; render(); }, () => toast(t('live.serverError')));

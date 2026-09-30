@@ -90,6 +90,13 @@ describe('requests', () => {
     expect(calls[1].body.deviceName).toBe('x'.repeat(100));
   });
 
+  it('sends the Apple authorization code when there is one', async () => {
+    const { fetchImpl, calls } = fakeFetch();
+    const api = createApi({ baseUrl: BASE, getSession: () => null, fetchImpl });
+    await api.signin({ provider: 'apple', idToken: 't', nonce: 'n', authorizationCode: 'code1' });
+    expect(calls[0].body.authorizationCode).toBe('code1');
+  });
+
   it('names every account action', async () => {
     const { api, calls } = signedIn();
     await api.signout();

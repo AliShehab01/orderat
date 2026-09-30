@@ -1,7 +1,7 @@
 // Orderat web: the pure rules of the signed-in (live) web app, kept apart from the screens in live.js
 // so they can be unit-tested (web/live-core.test.js). Each one follows the phones:
 // - subscriptionAllowed: the paid gate on the shop's `setting/subscription` value
-//   { status, expiresAt, platform, updatedAt } (missing → allowed; expiresAt + 3 days; no expiresAt →
+//   { status, expiresAt, platform, updatedAt } (missing → allowed; expiresAt + 7 days; no expiresAt →
 //   active/trial reported within 35 days). aiDemo: the AI calls' `demo` flag (no current subscription,
 //   and not staff, like FeatureAccess.isEntitled).
 // - access: staff permissions (Store.canSeeMoney / canEditProducts / canManageOrders /
@@ -21,7 +21,7 @@
   'use strict';
 
   const DAY = 864e5;
-  const GRACE_DAYS = 3;
+  const GRACE_DAYS = 7;
   const REPORT_MAX_AGE_DAYS = 35;
   const INVOICE_KEY = 'orderat.web.invoice.';
   const MAX_STOCK_MOVES = 50;
@@ -109,6 +109,17 @@
     if (included) return amountMinor - halfUp(amountMinor * 10000, 10000 + rateBps);
     return halfUp(amountMinor * rateBps, 10000);
   }
+  // The shop country's phone numbering, from its currency (default Bahrain): the WhatsApp calling code
+  // and how many digits a local mobile number has (Saudi and UAE mobiles have 9, the rest 8).
+  const PHONE_PLAN = {
+    BHD: ['973', 8], SAR: ['966', 9], AED: ['971', 9], KWD: ['965', 8], QAR: ['974', 8], OMR: ['968', 8],
+  };
+  const phonePlan = currency => {
+    const k = String(currency || '').toUpperCase();
+    return Object.prototype.hasOwnProperty.call(PHONE_PLAN, k) ? PHONE_PLAN[k] : PHONE_PLAN.BHD;
+  };
+  const callingCode = currency => phonePlan(currency)[0];
+  const localDigits = currency => phonePlan(currency)[1];
   function defaultRateBps(currency) {
     const k = String(currency || '').toUpperCase();
     return Object.prototype.hasOwnProperty.call(DEFAULT_RATE_BPS, k) ? DEFAULT_RATE_BPS[k] : 0;
@@ -346,7 +357,7 @@
   }
 
   return {
-    subscriptionAllowed, subscriptionActive, aiDemo, access, formatInvoice, nextInvoice, invoiceLabel,
+    subscriptionAllowed, subscriptionActive, aiDemo, callingCode, localDigits, access, formatInvoice, nextInvoice, invoiceLabel,
     vatMinor, defaultRateBps, applyVat, orderMinor, stockForStatus, stockForEdit, orderNumbers, historyLabel,
     cleanItems, parseProducts, draftFields, buildAskSnapshot,
   };

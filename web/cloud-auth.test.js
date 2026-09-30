@@ -128,7 +128,7 @@ describe('Apple', () => {
     const appleAuth = { init: vi.fn(), signIn: vi.fn(async () => ({ authorization: { id_token: 'apple.id.token', code: 'c1' }, user: { email: 'fatima@example.com' } })) };
     vi.stubGlobal('AppleID', { auth: appleAuth });
     const result = await auth.appleSignIn();
-    expect(result).toEqual({ provider: 'apple', idToken: 'apple.id.token', rawNonce: expect.any(String) });
+    expect(result).toEqual({ provider: 'apple', idToken: 'apple.id.token', rawNonce: expect.any(String), authorizationCode: 'c1' });
     expect(result.rawNonce.length).toBeGreaterThanOrEqual(32);
     expect(appleAuth.init).toHaveBeenCalledWith({ clientId: 'com.ams.orderat.web', scope: 'name email', redirectURI: 'https://orderatweb.com/app/', usePopup: true, nonce: sha256hex(result.rawNonce) });
     expect(appleAuth.init.mock.invocationCallOrder[0]).toBeLessThan(appleAuth.signIn.mock.invocationCallOrder[0]);

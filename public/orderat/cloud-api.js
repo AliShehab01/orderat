@@ -141,7 +141,7 @@
       signin(p) {
         const q = p || {};
         const deviceName = typeof q.deviceName === 'string' && q.deviceName ? q.deviceName.slice(0, MAX_DEVICE_NAME) : undefined;
-        return authCall({ action: 'signin', provider: q.provider, idToken: q.idToken, nonce: q.nonce || undefined, deviceName, client: 'web' }, false);
+        return authCall({ action: 'signin', provider: q.provider, idToken: q.idToken, nonce: q.nonce || undefined, authorizationCode: typeof q.authorizationCode === 'string' && q.authorizationCode ? q.authorizationCode : undefined, deviceName, client: 'web' }, false);
       },
       me: () => authCall({ action: 'me' }, true),
       signout: () => authCall({ action: 'signout' }, true),

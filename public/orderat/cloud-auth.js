@@ -129,7 +129,8 @@
     const response = await apple.signIn();
     const idToken = response && response.authorization && response.authorization.id_token;
     if (typeof idToken !== 'string' || !idToken) throw failure('apple_no_token');
-    return { provider: 'apple', idToken, rawNonce };
+    const code = response.authorization.code;
+    return { provider: 'apple', idToken, rawNonce, authorizationCode: typeof code === 'string' && code ? code : undefined };
   }
 
   // ---------- Pairing with the phone ----------
