@@ -99,7 +99,7 @@ function icon(name, cls = '') {
 let S = loadState();
 let D = null; // the New order draft
 let E = null; // the order-items editor's working copy
-let lastPath = '';
+let lastPath = '', prevPath = '';
 let ordersFilter = 'all', ordersQuery = '', moneyRange = 'week';
 let CAMPAIGNS = readCachedCampaigns(), campaignsFetched = false;
 const ST = { photo: null, style: 'white', shape: 'square', result: null, busy: false, left: 3, campaign: null };
@@ -350,7 +350,7 @@ function render() {
   document.body.classList.toggle('route-new', tab === 'new');
   document.title = `${v.title} · ${brand}`;
   const path = r.join('/');
-  if (path !== lastPath) { window.scrollTo(0, 0); lastPath = path; }
+  if (path !== lastPath) { window.scrollTo(0, 0); prevPath = lastPath; lastPath = path; }
   Live.afterRender();
 }
 // Staff without `orders` get no New order tab, without `money` no Money tab (RootView on the phones).
@@ -415,7 +415,7 @@ function viewToday() {
     `<div class="kpis ${can('money') ? 'three' : 'two'}">${kpi(todays.length, t('today.orders'))}${kpi(toPrepare, t('today.toPrepare'))}${can('money') ? kpi(money(unpaid), t('today.unpaid'), unpaid > 0 ? 'bad' : '') : ''}</div>`,
     S.shop.dailyCapacity ? capacityCard(sum(todays, qtyOf), S.shop.dailyCapacity) : '',
     low.length ? `<section class="card"><h3 class="card-title warn-text">${icon('alert')} ${esc(t('today.lowStock'))}</h3>${low.map(p => `<a class="row" href="#/shop/menu"><span class="row-main"><b>${esc(pName(p))}</b></span>${badge(p.qty <= 0 ? 'bad' : 'warn', t('stock.qtyBadge', p.qty))}</a>`).join('')}</section>` : '',
-    `<section class="card"><h3 class="card-title">${esc(t('today.nextPickups'))}</h3>${upcoming.length ? `<div class="list">${upcoming.map(o => orderRow(o, true)).join('')}</div>` : empty(t('today.allCaughtUp'))}</section>`,
+    `<section class="card"><h3 class="card-title">${esc(t('today.nextPickups'))}</h3>${upcoming.length ? `<div class="list">${upcoming.map(o => orderRow(o, true)).join('')}</div><a class="link-btn see-all" href="#/orders">${esc(t('today.seeAll'))}</a>` : empty(t('today.allCaughtUp'))}</section>`,
     occ.length ? `<section class="card"><h3 class="card-title">${esc(t('today.occasions'))}</h3>${occ.map(x => occasionRow(x)).join('')}</section>` : '',
   ];
   return { title: t('tab.today'), sub: fmtDay(now), body: `<div class="stack">${cards.join('')}</div>` };
@@ -429,7 +429,7 @@ function capacityCard(booked, cap) {
 function orderRow(o, withDay = false) {
   const d = new Date(o.dueAt);
   const when = withDay ? `${fmtShort(d)} · ${fmtTime(d)}` : fmtTime(d);
-  return `<a class="row order-row" href="#/orders/${esc(o.id)}"><span class="row-main"><b>${esc(cName(customerOf(o)))}</b><small>${sourceTag(o.source)}<span>${esc(when)}${o.fulfillment === 'delivery' ? ' · ' + esc(t('orders.delivery')) : ''}</span></small></span><span class="row-end"><b class="amt">${esc(money(totals(o).total))}</b>${statusBadge(o.status)}</span>${icon('chev', 'chev')}</a>`;
+  return `<a class="row order-row" href="#/orders/${esc(o.id)}"><span class="row-main"><b>${esc(cName(customerOf(o)))}</b><small class="one-line">${sourceTag(o.source)}<span class="when">${esc(when)}${o.fulfillment === 'delivery' ? ' · ' + esc(t('orders.delivery')) : ''}</span><span class="what">${esc(itemsLine(o))}</span></small></span><span class="row-end"><b class="amt">${esc(money(totals(o).total))}</b>${statusBadge(o.status)}</span>${icon('chev', 'chev')}</a>`;
 }
 
 function occasionRow(x, withDelete = false) {
@@ -530,6 +530,7 @@ function viewOrder(id) {
   const o = orderById(id);
   if (!o) return { title: t('tab.orders'), back: 'orders', body: empty(t('orders.notFound')) };
   const c = customerOf(o), T = totals(o), d = new Date(o.dueAt);
+  const back = prevPath.split('/')[0] === 'today' ? 'today' : 'orders';
   const open = o.status !== 'collected' && o.status !== 'cancelled';
   const line = (label, value, cls = '') => `<div class="line${cls ? ' ' + cls : ''}"><span>${esc(label)}</span><span>${esc(value)}</span></div>`;
   const lines = [
@@ -562,7 +563,7 @@ function viewOrder(id) {
     ${canDeleteOrder(o) ? `<button class="btn danger-soft block" data-act="delete-order" data-id="${esc(o.id)}">${icon('trash')} ${esc(t('orders.delete'))}</button>` : ''}
   </div>`;
   const actions = o.status === 'cancelled' || !can('orders') ? '' : `<button class="icon-btn" data-act="edit-items" data-id="${esc(o.id)}" aria-label="${esc(t('orders.editItems'))}">${icon('edit')}</button>`;
-  return { title: t('tab.orders'), back: 'orders', actions, body };
+  return { title: t('tab.orders'), back, actions, body };
 }
 
 // Only a mistaken order: still New (or cancelled), nothing paid on it.

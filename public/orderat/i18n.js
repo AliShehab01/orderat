@@ -579,6 +579,7 @@ const I18N = {
   'common.edit': ['Edit', 'تعديل'],
   'common.saved': ['Saved.', 'تم الحفظ.'],
   'common.undo': ['Undo', 'تراجع'],
+  'today.seeAll': ['See all', 'عرض الكل'],
   'common.discard': ['Discard changes?', 'تجاهل التغييرات؟'],
   'neworder.clear': ['Clear', 'مسح'],
   'neworder.clearConfirm': ['Clear this order?', 'مسح هذا الطلب؟'],
