@@ -67,13 +67,13 @@ const Live = (() => {
     if (!d || d.v !== 1) d = { v: 1, onboarded: false };
     Object.assign(d, { lang: S.lang, addressAs: S.addressAs, theme: S.theme });
     write(STORE_KEY, JSON.stringify(d));
-    write(PREFS_KEY, JSON.stringify({ askEnabled: S.askEnabled !== false, hiddenCampaigns: S.hiddenCampaigns || [] }));
+    write(PREFS_KEY, JSON.stringify({ askEnabled: S.askEnabled !== false, hiddenCampaigns: S.hiddenCampaigns || [], setupHidden: S.setupHidden === true }));
   }
   function liveState() {
     const p = readPrefs();
     return {
       v: 1, lang: S.lang, addressAs: S.addressAs, theme: S.theme, onboarded: true, live: true, isDemo: false,
-      askEnabled: p.askEnabled !== false, hiddenCampaigns: Array.isArray(p.hiddenCampaigns) ? p.hiddenCampaigns : [],
+      askEnabled: p.askEnabled !== false, hiddenCampaigns: Array.isArray(p.hiddenCampaigns) ? p.hiddenCampaigns : [], setupHidden: p.setupHidden === true,
       webOrders: [], nextOrderNo: 1, cloud: { signedIn: true, email: accountName(), team: [], invite: null },
       shopLink: { slug: '', bio: '', leadDays: 1, delivery: 'both', acceptsWebOrders: true, showAll: true, published: false },
       shop: { nameAr: '', nameEn: '', phone: '', currency: 'BHD', pickupHours: '', dailyCapacity: null, businessType: 'home' },

@@ -443,6 +443,7 @@ function viewToday() {
   const cap = occCap ? occCap.cap : S.shop.dailyCapacity;
   const cards = [
     S.askEnabled && can('money') ? `<button class="card ask-card" data-act="ask"><span class="ask-ic">${icon('sparkle')}</span><span class="row-main"><b>${esc(t('ask.cardTitle'))}</b><small>${esc(t('ask.cardSubtitle'))}</small></span>${icon('chev', 'chev')}</button>` : '',
+    setupCard(),
     camp ? campaignCard(camp) : '',
     webOrdersCard(),
     S.isDemo ? `<div class="card demo-banner"><p>${esc(t('today.demoHint', TRIAL_DAYS))}</p><button class="btn primary small" data-act="paywall">${esc(t('today.demoCta'))}</button></div>` : '',
@@ -454,6 +455,36 @@ function viewToday() {
     occ.length ? `<section class="card"><h3 class="card-title">${esc(t('today.occasions'))}</h3>${occ.map(x => occasionRow(x)).join('')}</section>` : '',
   ];
   return { title: t('tab.today'), sub: fmtDay(now), body: `<div class="stack">${cards.join('')}</div>` };
+}
+
+// "Set up your shop" (the phones' Today checklist) for the owner of a live shop, until the steps the web
+// can see are done or the owner hides it. Each step opens its screen and ticks itself when done. The
+// shop link's payment methods and publishing live in the phone app (the web cannot see them), so those
+// two rows open the shop link page and say "In the app"; cloud sync and the computer are done here.
+function setupCard() {
+  if (!Live.on || !Live.access().owner || S.setupHidden) return '';
+  const steps = [
+    { key: 'shopInfo', done: !!(shopName().trim() && String(S.shop.phone || '').trim()), act: 'edit-shop' },
+    { key: 'products', done: S.products.length > 0, href: 'shop/menu' },
+    { key: 'firstOrder', done: S.orders.length > 0, href: 'new' },
+    { key: 'paymentMethods', done: null, href: 'shop/marketing/link' },
+    { key: 'shopLink', done: null, href: 'shop/marketing/link' },
+    { key: 'cloudSync', done: true },
+    { key: 'computer', done: true },
+  ];
+  const known = steps.filter(x => x.done !== null), doneCount = known.filter(x => x.done).length;
+  if (doneCount === known.length) return '';
+  const mark = x => `<span class="setup-mark${x.done ? ' done' : ''}">${x.done ? icon('check') : ''}</span>`;
+  const label = x => `${mark(x)}<span class="row-main"><b>${esc(t('today.setup.' + x.key))}</b>${x.done === null ? `<small>${esc(t('today.setup.inApp'))}</small>` : ''}</span>`;
+  const row = x => (x.done ? `<div class="row setup-row done">${label(x)}</div>`
+    : x.act ? `<button class="row setup-row" data-act="${x.act}">${label(x)}${icon('chev', 'chev')}</button>`
+      : `<a class="row setup-row" href="#/${x.href}">${label(x)}${icon('chev', 'chev')}</a>`);
+  return `<section class="card setup-card">
+    <div class="split"><h3 class="card-title">${esc(t('today.setup.title'))}</h3><b class="accent-text">${esc(t('today.setup.progress', doneCount, known.length))}</b></div>
+    <div class="meter"><span style="width:${Math.round((doneCount / known.length) * 100)}%"></span></div>
+    <div class="list">${steps.map(row).join('')}</div>
+    <button class="link-btn small muted" data-act="setup-hide">${esc(t('today.setup.hide'))}</button>
+  </section>`;
 }
 
 function capacityCard(booked, cap) {
@@ -1552,6 +1583,7 @@ const ACTIONS = {
   'ask-suggest'(el) { askQuestion(el.dataset.q, t('ask.suggestion.' + el.dataset.q)); },
   paywall: openPaywall,
   'paywall-cta'() { $('#pw-note')?.classList.remove('hidden'); },
+  'setup-hide'() { S.setupHidden = true; save(); render(); },
   'hide-campaign'(el) { S.hiddenCampaigns.push(el.dataset.id); save(); render(); },
   'web-add'(el) {
     const w = S.webOrders.find(x => x.id === el.dataset.id);

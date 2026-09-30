@@ -297,6 +297,13 @@ textarea + .btn-row { margin-top: 0.75rem; }
 .meter { height: 10px; margin: 0.6rem 0 0.4rem; border-radius: 999px; background: var(--neutral-soft); overflow: hidden; }
 .meter span { display: block; height: 100%; border-radius: inherit; background: var(--brand-grad); }
 .meter span.full { background: var(--bad); }
+.accent-text { color: var(--accent); }
+.setup-row { width: 100%; min-height: 48px; }
+.setup-row.done .row-main b { color: var(--muted); font-weight: 500; }
+.setup-mark { display: grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--border); color: #fff; }
+.setup-mark.done { background: #34c759; border-color: transparent; }
+.setup-mark .ic { width: 16px; height: 16px; stroke-width: 2.4; }
+.setup-card .link-btn { margin-top: 0.3rem; color: var(--muted); font-weight: 500; }
 .line { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.45rem 0; }
 .line + .line { border-top: 1px dashed var(--border); }
 .line.muted { color: var(--muted); }
