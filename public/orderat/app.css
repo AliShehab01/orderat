@@ -405,6 +405,9 @@ textarea { resize: vertical; line-height: 1.6; }
   position: fixed; z-index: 90; inset-inline: 0; top: 0; padding: 0.45rem 1rem; text-align: center;
   background: var(--bad-soft); color: var(--bad); font-size: 0.85rem; font-weight: 500;
 }
+.banner-chip { display: inline-block; margin-inline-start: 0.4rem; padding: 0.05rem 0.55rem; border-radius: 999px; background: var(--surface); font-weight: 700; }
+body.has-banner .main { padding-top: calc(1.75rem + 2.4rem); }
+@media (max-width: 899px) { body.has-banner .main { padding-top: calc(1rem + 2.4rem); } }
 .thumb { width: 40px; height: 40px; border-radius: 0.6rem; object-fit: cover; flex: none; background: var(--surface-2); }
 .thumb.lg { width: 72px; height: 72px; }
 .photo-row { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }

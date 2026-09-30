@@ -455,8 +455,30 @@
       return run;
     }
 
+    // The changes not sent yet, as plain data to keep across a reload (see importPending).
+    function exportPending() {
+      return Array.from(pending.values()).map(p => ({ entity: p.entity, id: p.id, data: p.data, deleted: p.deleted, baseSeq: p.baseSeq }));
+    }
+    // Before start() only: lays changes kept from an earlier visit over the records start() loads. They
+    // go out with their old baseSeq, so a record another device changed meanwhile is a conflict, not lost.
+    // Returns how many were taken (entries of an unknown entity or with a bad id are skipped).
+    function importPending(list) {
+      if (started || stopped || !Array.isArray(list)) return 0;
+      let n = 0;
+      list.forEach(c => {
+        if (!isObj(c) || typeof c.entity !== 'string' || typeof c.id !== 'string' || !c.id) return;
+        const known = LISTS[c.entity] ? map.safeId(c.id) : c.entity === 'shop' ? c.id === shopId : c.entity === 'setting' && !!WEB_SETTINGS[c.id];
+        if (!known || (!c.deleted && !isObj(c.data))) return;
+        pending.set(keyOf(c.entity, c.id), { entity: c.entity, id: c.id, data: isObj(c.data) ? c.data : {}, deleted: c.deleted === true, baseSeq: seqOf(c.baseSeq), gen: 0 });
+        n++;
+      });
+      return n;
+    }
+
     return {
       start,
+      exportPending,
+      importPending,
       commit: webState => schedule(false, webState),
       pull: webState => schedule(true, webState),
       buildState,

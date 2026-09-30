@@ -17,6 +17,9 @@ const Live = (() => {
   const Auth = () => window.OrderatCloudAuth;
   const SHOP_KEY = 'orderat.web.shop';
   const PREFS_KEY = 'orderat.web.prefs';
+  // Changes not sent yet, per shop, so a reload while offline does not lose them. Removed on sign-out
+  // and when switching shops: the next person on this computer must not see them.
+  const PENDING_PREFIX = 'orderat.web.pending.';
   const SAVE_DELAY = 800;
   const PULL_EVERY = 20000;
   const PHOTO_MAX_BYTES = 1024 * 1024; // orderat-sync photo_upload
@@ -290,6 +293,10 @@ const Live = (() => {
     sync = s;
     shopId = id;
     try {
+      const kept = JSON.parse(read(PENDING_PREFIX + id) || 'null');
+      if (Array.isArray(kept)) s.importPending(kept);
+    } catch { /* nothing kept, or unreadable: start from the cloud */ }
+    try {
       await s.start();
     } catch (error) {
       if (sync !== s) return;
@@ -301,6 +308,7 @@ const Live = (() => {
     }
     if (sync !== s) return;
     lastSynced = new Date();
+    keepPending();
     if (!core().subscriptionAllowed(S.subscription, new Date())) return endShop();
     on = true;
     screen = null;
@@ -344,6 +352,7 @@ const Live = (() => {
     stopShop();
     Auth().clearSession();
     write(SHOP_KEY, null);
+    dropPending();
     shops = [];
     S = loadState();
     D = null; E = null;
@@ -427,12 +436,27 @@ const Live = (() => {
     if (kind === 'invalid' && Array.isArray(detail)) return toast(t('live.tooLarge'));
     toast(t('live.serverError'));
   }
-  const settled = ok => { if (ok) { setOffline(false); lastSynced = new Date(); } return ok; };
+  const settled = ok => { keepPending(); if (ok) { setOffline(false); lastSynced = new Date(); } return ok; };
+  const failed = () => { keepPending(); return false; };
   function commit() {
-    return sync && on ? sync.commit(S).then(settled, () => false) : Promise.resolve(false);
+    return sync && on ? sync.commit(S).then(settled, failed) : Promise.resolve(false);
   }
   function pull() {
-    return sync && on ? sync.pull(S).then(settled, () => false) : Promise.resolve(false);
+    return sync && on ? sync.pull(S).then(settled, failed) : Promise.resolve(false);
+  }
+  // Writes the open shop's unsent changes to this browser (the key goes once nothing is waiting).
+  function keepPending() {
+    if (!sync || !shopId) return;
+    const list = sync.exportPending();
+    write(PENDING_PREFIX + shopId, list.length ? JSON.stringify(list) : null);
+    paintBanner();
+  }
+  // Every shop's kept changes, gone (sign-out, or one shop's on switching shops).
+  function dropPending(id) {
+    if (id) { write(PENDING_PREFIX + id, null); return; }
+    try {
+      Object.keys(localStorage).filter(k => k.startsWith(PENDING_PREFIX)).forEach(k => localStorage.removeItem(k));
+    } catch { /* storage blocked: nothing was kept */ }
   }
   function save() {
     writePrefs();
@@ -443,8 +467,14 @@ const Live = (() => {
   function setOffline(value) {
     if (offline === value) return;
     offline = value;
+    const el = document.getElementById('live-banner');
+    if (!value) { if (el) el.remove(); document.body.classList.remove('has-banner'); return; }
+    paintBanner();
+  }
+  // The offline banner, with how many changes are waiting; the page moves down under it.
+  function paintBanner() {
+    if (!offline) return;
     let el = document.getElementById('live-banner');
-    if (!value) { if (el) el.remove(); return; }
     if (!el) {
       el = document.createElement('div');
       el.id = 'live-banner';
@@ -452,7 +482,9 @@ const Live = (() => {
       el.setAttribute('role', 'status');
       document.body.append(el);
     }
-    el.textContent = t('live.offline');
+    document.body.classList.add('has-banner');
+    const n = sync ? sync.pending : 0;
+    el.innerHTML = `<span>${esc(t('live.offline'))}</span>${n ? ` <span class="banner-chip">${esc(t('live.pending', n))}</span>` : ''}`;
   }
   function listen() {
     if (listening) return;
@@ -770,7 +802,12 @@ const Live = (() => {
     'live-back-start'() { info = {}; screen = 'start'; render(); },
     'live-account'() { openAccount(); },
     'live-open-shop'(el) { openShop(el.dataset.id); },
-    async 'live-switch'() { if (await flushShop('live.switchPending')) openAccount({ choose: true }); },
+    async 'live-switch'() {
+      const from = shopId;
+      if (!(await flushShop('live.switchPending'))) return;
+      if (from) dropPending(from);
+      openAccount({ choose: true });
+    },
     'live-retry'() { if (typeof info.retry === 'function') info.retry(); else openAccount(); },
     'live-sign-out': signOut,
     'live-delete-account': deleteAccount,

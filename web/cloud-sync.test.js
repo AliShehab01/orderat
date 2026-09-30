@@ -503,6 +503,43 @@ describe('refused changes and conflicts', () => {
   });
 });
 
+describe('pending changes kept across a reload', () => {
+  it('exports what is unsent and a fresh engine sends it after start, based on the old seq', async () => {
+    const server = seeded();
+    const app = await started(server);
+    product(app, CAKE_ID).price = 7;
+    app.S.customers = app.S.customers.filter(c => c.id !== NOORA_ID);
+    server.fail = new CloudError('offline', 0, 'network');
+    await app.sync.commit(app.S);
+    const kept = JSON.parse(JSON.stringify(app.sync.exportPending()));
+    expect(kept.map(c => [c.entity, c.id, c.deleted, c.baseSeq]).sort()).toEqual([['customer', NOORA_ID, true, 5], ['product', CAKE_ID, false, 2]]);
+    app.sync.stop();
+
+    server.fail = null;
+    const again = open(server);
+    expect(again.sync.importPending(kept)).toBe(2);
+    await again.sync.start();
+    expect(product(again, CAKE_ID).price).toBe(7); // shown before it is sent
+    expect(again.S.customers.map(c => c.id)).toEqual([FATIMA_ID]);
+    expect(again.sync.pending).toBe(2);
+    await expect(again.sync.pull()).resolves.toBe(true);
+    expect(server.row('product', CAKE_ID).data.priceMinor).toBe(7000);
+    expect(server.row('customer', NOORA_ID).deleted).toBe(true);
+    expect(again.sync.pending).toBe(0);
+    expect(again.sync.exportPending()).toEqual([]);
+  });
+
+  it('skips malformed entries and takes nothing once started', async () => {
+    const server = seeded();
+    const fresh = open(server);
+    expect(fresh.sync.importPending([null, { entity: 'product', id: '<x>', data: {} }, { entity: 'stock_move', id: CAKE_ID, data: {} }, { entity: 'setting', id: 'subscription', data: {} }, { entity: 'product', id: CAKE_ID }])).toBe(0);
+    expect(fresh.sync.importPending('nope')).toBe(0);
+    await fresh.sync.start();
+    expect(fresh.sync.importPending([{ entity: 'product', id: CAKE_ID, data: CAKE(), baseSeq: 2 }])).toBe(0);
+    expect(fresh.sync.pending).toBe(0);
+  });
+});
+
 describe('offline and failures', () => {
   it('keeps a change pending while offline and sends it with the next pull', async () => {
     const server = seeded();
