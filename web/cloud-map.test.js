@@ -341,7 +341,7 @@ describe('order', () => {
         { id: ITEM_1, pid: PRODUCT_ID, nameAr: 'كيك إسفنجي بالفانيليا', nameEn: 'كيك إسفنجي بالفانيليا', qty: 2, price: 6.5, cost: 2.5 },
         { id: ITEM_2, pid: null, nameAr: 'Custom gift box', nameEn: 'Custom gift box', qty: 1, price: 3, cost: 0 },
       ],
-      fulfillment: 'delivery', area: 'riffa', deliveryFee: 1, source: 'manual',
+      fulfillment: 'delivery', area: 'riffa', address: 'Blue gate', addressLine: '935, 3510, 12', deliveryFee: 1, source: 'manual',
       payments: [{ id: PAY_1, amount: 5, method: 'benefit', note: 'Deposit', at: '2026-09-28T10:00:00.000Z' }],
       notes: 'Write "Happy birthday" on top',
       changes: [
@@ -453,6 +453,27 @@ describe('order', () => {
     expect(out.futureField).toBe(1);
     expect(out.updatedAt).toBe(NOW.toISOString());
     expect(raw.address.area).toBe('riffa');
+  });
+
+  it('reads the free-text address and the read-only block/road/building line', () => {
+    const android = map.orderToWeb(ORDER_ID, androidRecord(), BHD);
+    expect([android.address, android.addressLine]).toEqual(['', '']);
+    const link = map.orderToWeb(ORDER_ID, { ...orderRecord(), address: { area: null, notes: 'Road 12, house 4, near the park' } }, BHD);
+    expect([link.address, link.addressLine]).toEqual(['Road 12, house 4, near the park', '']);
+  });
+
+  it('writes a web-typed address as address.notes and keeps block, road and building', () => {
+    const raw = orderRecord();
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
+    web.address = '  Villa 7, next to the mosque ';
+    const out = map.orderToCloud(web, raw, BHD);
+    expect(out.address).toStrictEqual({ area: 'riffa', block: '935', road: '3510', building: '12', notes: 'Villa 7, next to the mosque' });
+    expect(out.updatedAt).toBe(NOW.toISOString());
+    const fresh = map.orderToCloud({ ...newWebOrder(), address: 'Flat 3, Block 338' }, undefined, BHD);
+    expect(fresh.address).toStrictEqual({ area: 'muharraq', notes: 'Flat 3, Block 338' });
+    const cleared = map.orderToWeb(ORDER_ID, raw, BHD);
+    cleared.address = '';
+    expect(map.orderToCloud(cleared, raw, BHD).address).toStrictEqual({ area: 'riffa', block: '935', road: '3510', building: '12', notes: null });
   });
 
   it('gives edited items new ids and snapshots, keeps an existing item\'s snapshot, and logs the edit', () => {

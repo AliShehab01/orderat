@@ -176,6 +176,8 @@ const byDue = (a, b) => a.dueAt.localeCompare(b.dueAt);
 const qtyOf = o => sum(o.items, it => it.qty);
 const costOf = o => sum(o.items, it => it.qty * (it.cost || 0));
 const itemsLine = o => o.items.map(it => `${it.qty}× ${pick(it.nameAr, it.nameEn)}`).join(S.lang === 'en' ? ', ' : '، ');
+// A delivery order's address: the phones' block, road and building (read-only), then the free text.
+const addressText = o => [o.addressLine, o.address].map(v => String(v || '').trim()).filter(Boolean).join(', ');
 const invoiceNo = o => (Live.on ? Live.invoiceNo(o) : `INV-${new Date(o.dueAt).getFullYear()}-${String(o.no || 0).padStart(4, '0')}`);
 // The VAT an order shows: its own snapshot in the live shop (like the phones), the shop setting in the demo.
 const orderVatRate = o => (Live.on ? Live.vatOf(o) : vatOn() ? vatRate() : 0);
@@ -517,6 +519,7 @@ function viewOrder(id) {
       <div class="split"><h2>${esc(fmtDay(d))} · ${esc(fmtTime(d))}</h2>${statusBadge(o.status)}</div>
       <p class="od-meta">${sourceTag(o.source)}<b>${esc(cName(c))}</b>${c?.phone ? `<span dir="ltr">${esc(c.phone)}</span>` : ''}</p>
       <p class="od-meta muted">${icon(o.fulfillment === 'delivery' ? 'truck' : 'bag')}<span>${esc(t('fulfillment.' + o.fulfillment))}${o.area ? ' · ' + esc(t('area.' + o.area)) : ''} · ${esc(t('orders.via', t('source.' + o.source)))}</span></p>
+      ${o.fulfillment === 'delivery' && addressText(o) ? `<div class="od-address"><p><span class="muted small">${esc(t('order.address'))}</span><br>${esc(addressText(o))}</p><div class="chips wrap"><button class="chip small" data-act="copy" data-text="${esc(addressText(o))}">${icon('copy')} ${esc(t('order.copyAddress'))}</button><a class="chip small" href="${esc('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent([addressText(o), o.area ? t('area.' + o.area) : ''].filter(Boolean).join(', ')))}" target="_blank" rel="noopener">${icon('external')} ${esc(t('order.openMaps'))}</a></div></div>` : ''}
       ${o.notes ? `<p class="od-notes">${esc(o.notes)}</p>` : ''}
     </section>
     <section class="card lines">${lines}</section>
@@ -649,7 +652,7 @@ function updateTotal(p) {
 function newDraft() {
   const due = addDays(startOfDay(new Date()), 1);
   due.setHours(17);
-  return { text: '', name: '', phone: '', source: 'whatsapp', items: [], due: inputDateTime(due), fulfillment: 'pickup', area: '', fee: '1', deposit: '', method: 'benefit', notes: '', note: '', reading: false };
+  return { text: '', name: '', phone: '', source: 'whatsapp', items: [], due: inputDateTime(due), fulfillment: 'pickup', area: '', address: '', fee: '1', deposit: '', method: 'benefit', notes: '', note: '', reading: false };
 }
 const draftEmpty = () => !D.items.some(it => qtyNum(it.qty) > 0);
 const draftTotal = () => totals({ items: D.items.map(it => ({ qty: qtyNum(it.qty), price: parseFloat(it.price) || 0 })), deliveryFee: D.fulfillment === 'delivery' ? parseFloat(D.fee) || 0 : 0 }).total;
@@ -701,7 +704,7 @@ function viewNew() {
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.scheduleTitle'))}</h3>
       ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" enterkeyhint="next" data-live="draft" value="${esc(D.due)}">`)}
       <div class="field"><span>${esc(t('neworder.fulfillment'))}</span>${seg('fulfillment', ['pickup', 'delivery'], D.fulfillment, k => t('fulfillment.' + k), 'draft')}</div>
-      ${D.fulfillment === 'delivery' ? `<div class="grid2">${field(t('shop.area'), `<select name="area" data-live="draft"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, D.area, a => t('area.' + a))}</select>`)}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.fee)}">`)}</div>` : ''}
+      ${D.fulfillment === 'delivery' ? `<div class="grid2">${field(t('shop.area'), `<select name="area" data-live="draft"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, D.area, a => t('area.' + a))}</select>`)}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.fee)}">`)}</div>${field(t('order.address'), `<textarea name="address" rows="2" maxlength="200" data-live="draft" autocomplete="street-address">${esc(D.address || '')}</textarea>`)}` : ''}
     </section>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.paymentTitle'))}</h3>
       <div class="grid2">
@@ -1655,7 +1658,7 @@ const FORMS = {
     const due = new Date(D.due);
     const order = {
       id: nid(), no: Live.on ? undefined : S.nextOrderNo++, customerId: c.id, dueAt: (isNaN(due) ? new Date() : due).toISOString(), items,
-      fulfillment: D.fulfillment, area: delivery ? D.area || c.area || '' : '', deliveryFee: delivery ? parseFloat(D.fee) || 0 : 0,
+      fulfillment: D.fulfillment, area: delivery ? D.area || c.area || '' : '', address: delivery ? String(D.address || '').trim() : '', deliveryFee: delivery ? parseFloat(D.fee) || 0 : 0,
       source: D.source, payments: [], notes: D.notes.trim(), changes: [{ kind: 'created', at: now }], status: 'new', stockApplied: false,
     };
     const deposit = parseFloat(D.deposit);

@@ -272,6 +272,8 @@
 
   // ---------- order ----------
 
+  // address.notes: the web's free-text delivery address; a web order without one leaves the key out.
+  const ADDRESS_NOTES = { read: text.read, write: v => (v === undefined ? undefined : optText.write(typeof v === 'string' ? v.trim() : v)) };
   const STOCK_TAKEN = ['confirmed', 'ready', 'collected']; // web statuses whose stock is already deducted
   const HISTORY_KINDS = { order: 'created', status: 'status', items: 'items', paymentStatus: 'payment' };
   // The order's plain fields; the address area, items, payments and history are mapped below.
@@ -293,7 +295,12 @@
 
   function orderToWeb(id, data, ctx) {
     const d = obj(data), m = money(decimalsOf(ctx)), web = readFields(orderFields(m, null), d, { id });
-    web.area = AREA.read(obj(d.address).area);
+    const addr = obj(d.address);
+    web.area = AREA.read(addr.area);
+    // The free-text address (what the shop link and the web write) and, read-only, the phones' block,
+    // road and building: nothing new is written unless the web edits the free text.
+    web.address = text.read(addr.notes);
+    web.addressLine = ['block', 'road', 'building'].map(k => addr[k]).filter(v => (typeof v === 'string' && v.trim()) || (typeof v === 'number' && isFinite(v))).map(v => String(v).trim()).join(', ');
     web.items = objects(d.items).map(it => {
       const name = text.read(it.nameSnapshot);
       return { id: idOf(it), pid: nullableText.read(it.productId), nameAr: name, nameEn: name, qty: QTY.read(it.quantity), price: m.read(it.unitPriceMinor), cost: m.read(it.unitCostMinor) };
@@ -394,8 +401,9 @@
     const w = obj(o), r = obj(raw), isNew = !isObj(raw), out = start(raw);
     const m = money(decimalsOf(ctx)), now = nowIso(ctx);
     let changed = putFields(orderFields(m, now), w, out, r, isNew);
-    const address = isObj(out.address) ? out.address : {}; // block, road, building and notes stay as they are
-    if (put(address, obj(r.address), 'area', w.area, AREA, isNew)) {
+    const address = isObj(out.address) ? out.address : {}; // block, road and building stay as they are
+    const areaChanged = put(address, obj(r.address), 'area', w.area, AREA, isNew);
+    if (put(address, obj(r.address), 'notes', w.address, ADDRESS_NOTES, isNew) || areaChanged) {
       out.address = address;
       changed = true;
     }
