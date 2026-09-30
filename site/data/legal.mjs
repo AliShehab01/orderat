@@ -9,7 +9,7 @@ const DATA_DELETION_URL = "https://orderatweb.com/data-deletion.html";
 const APPLE_EULA_URL = "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/";
 
 export const PRIVACY = {
-  lastUpdated: { ar: "30 سبتمبر 2026", en: "30 September 2026" },
+  lastUpdated: { ar: "1 أكتوبر 2026", en: "1 October 2026" },
   ar: {
     title: "سياسة الخصوصية",
     metaTitle: "سياسة الخصوصية | اوردرات",
@@ -27,7 +27,8 @@ export const PRIVACY = {
           "الحساب والمزامنة السحابية (اختيارية): إذا سجّل البائع الدخول عبر Apple أو Google لتفعيل النسخ الاحتياطي والمزامنة، نحفظ معرّف الحساب والبريد الإلكتروني والاسم، ونسخة من بيانات المتجر لتتزامن بين أجهزته وأجهزة موظفيه.",
           "الموظفون وأعضاء الفريق: عندما يدعو البائع موظفاً، نحفظ اسمه وبريده الإلكتروني ودوره وصلاحياته في المتجر.",
           "عناوين توصيل العملاء: تُحفظ عناوين التوصيل التي يكتبها البائع أو العميل ضمن الطلبات، وتتزامن مع بقية بيانات المتجر عند تفعيل المزامنة السحابية.",
-          "رابط المتجر: عندما ينشر البائع رابط متجره، نحفظ ما يختار نشره (اسم المتجر ونبذة عنه والمنطقة وأوقات الاستلام ورقم واتساب والمنتجات وأسعارها وصورها)، ويصبح هذا المحتوى متاحاً للعامة. وعندما يطلب عميل من صفحة المتجر، نحفظ اسمه ورقم هاتفه وتفاصيل طلبه حتى يستلمها تطبيق البائع.",
+          "رابط المتجر: عندما ينشر البائع رابط متجره، نحفظ ما يختار نشره (اسم المتجر ونبذة عنه والمنطقة وأوقات الاستلام ورقم واتساب والمنتجات وأسعارها وصورها)، ويصبح هذا المحتوى متاحاً للعامة. وعندما يطلب عميل من صفحة المتجر، نحفظ اسمه ورقم هاتفه وتفاصيل طلبه (ومنها طريقة الدفع التي اختارها) حتى يستلمها تطبيق البائع.",
+          "طرق الدفع في رابط المتجر: تظهر بيانات الدفع التي يدخلها البائع (رقم الآيبان، وأرقام الجوال للمحافظ والتحويل، وروابط الدفع واسم مستخدم PayPal) للعامة على صفحة متجره، ليتمكن عملاؤه من الدفع له. لا يُطلب اسم صاحب الحساب البنكي ولا يُعرض.",
           "حالة الاشتراك: تتم معالجة المدفوعات عبر Google Play أو App Store. نستلم حالة الاشتراك فقط، ولا نستلم بيانات البطاقات.",
           "المعلومات التقنية: سجلات أساسية مثل أوقات الطلبات وتقارير الأخطاء، نستخدمها لتشغيل الخدمة وحمايتها.",
         ],
@@ -135,7 +136,8 @@ export const PRIVACY = {
           "Account and cloud sync (optional): if a seller signs in with Apple or Google to turn on cloud backup and sync, we store the provider account id, email address and name, and a copy of the shop's data so it syncs across the seller's devices and staff.",
           "Staff and team members: when a seller invites a staff member, we store their name, email address, role and permissions in the shop.",
           "Customer delivery addresses: delivery addresses the seller or customer enters are stored inside orders, and sync with the rest of the shop's data when cloud sync is on.",
-          "Shop link: when a seller publishes a shop link, we store what they choose to publish (shop name, bio, area, pickup hours, WhatsApp number, products, prices and photos), and that content becomes public. When a customer orders from the shop page, we store their name, phone number and order details until the seller's app downloads them.",
+          "Shop link: when a seller publishes a shop link, we store what they choose to publish (shop name, bio, area, pickup hours, WhatsApp number, products, prices and photos), and that content becomes public. When a customer orders from the shop page, we store their name, phone number and order details (including the payment method they picked) until the seller's app downloads them.",
+          "Shop link payment methods: the payment details a seller enters (IBAN, phone numbers for wallets and transfers, payment links and a PayPal username) are shown publicly on their shop page so customers can pay them. No bank account holder name is asked for or shown.",
           "Subscription status: Google Play or the App Store process payments. We receive the subscription status, not card details.",
           "Technical information: basic logs such as request times and error reports, used to run the service and keep it secure.",
         ],
