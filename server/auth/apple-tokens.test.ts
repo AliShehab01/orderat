@@ -72,6 +72,14 @@ describe("createAppleTokenClient", () => {
     expect(calls[0].fields.get("code")).toBe("code-1");
     expect(calls[0].fields.get("grant_type")).toBe("authorization_code");
     expect(decodePart(calls[0].fields.get("client_secret")!.split(".")[1]).sub).toBe("com.ams.orderat");
+    expect(calls[0].fields.has("redirect_uri")).toBe(false);
+  });
+
+  it("sends the web client's redirect URI with its code", async () => {
+    const calls: Call[] = [];
+    const client = createAppleTokenClient(config, { redirectUris: { "com.ams.orderat.web": "https://orderatweb.com/app/" }, fetchImpl: fakeFetch([Response.json({ refresh_token: "r-web" })], calls) });
+    await expect(client.exchangeCode("code-2", "com.ams.orderat.web")).resolves.toBe("r-web");
+    expect(calls[0].fields.get("redirect_uri")).toBe("https://orderatweb.com/app/");
   });
 
   it("returns undefined when Apple refuses the code, answers without a refresh token, or cannot be reached", async () => {

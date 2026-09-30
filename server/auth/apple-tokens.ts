@@ -82,6 +82,9 @@ export async function createAppleClientSecret(config: AppleKeyConfig, clientId: 
 }
 
 export interface AppleTokenClientOptions {
+  /** The redirect URI a web (Services ID) client's authorization request named, by client id: Apple
+   * wants the same `redirect_uri` back when such a code is exchanged. The iPhone app's codes need none. */
+  redirectUris?: Record<string, string>;
   fetchImpl?: typeof fetch;
   now?: () => Date;
 }
@@ -110,7 +113,14 @@ export function createAppleTokenClient(config: AppleKeyConfig, options: AppleTok
       } catch {
         return undefined; // A malformed private key: the feature simply does not work, signin still does.
       }
-      const res = await postForm(APPLE_TOKEN_URL, { client_id: clientId, client_secret: clientSecret, code, grant_type: "authorization_code" });
+      const redirectUri = options.redirectUris && Object.prototype.hasOwnProperty.call(options.redirectUris, clientId) ? options.redirectUris[clientId] : undefined;
+      const res = await postForm(APPLE_TOKEN_URL, {
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        grant_type: "authorization_code",
+        ...(redirectUri ? { redirect_uri: redirectUri } : {}),
+      });
       if (!res || !res.ok) return undefined;
       try {
         const body = (await res.json()) as { refresh_token?: unknown };

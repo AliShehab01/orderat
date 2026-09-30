@@ -51,7 +51,9 @@ const ipSalt = env("AUTH_IP_SALT") || (await sha256HexOfString(`orderat-auth-ip-
 // ORDERAT_APPLE_TEAM_ID, ORDERAT_APPLE_KEY_ID and ORDERAT_APPLE_PRIVATE_KEY (the Sign in with Apple
 // key's .p8 contents). Until all three are set the handler skips it and logs that once per isolate.
 const appleKeyConfig = appleKeyConfigFromEnv(env);
-const appleTokens = appleKeyConfig ? createAppleTokenClient(appleKeyConfig) : undefined;
+// The web app's Sign in with Apple return address (public/orderat/config.js appleRedirectUri on
+// orderatweb.com), which Apple wants back when the website's codes are exchanged.
+const appleTokens = appleKeyConfig ? createAppleTokenClient(appleKeyConfig, { redirectUris: { "com.ams.orderat.web": "https://orderatweb.com/app/" } }) : undefined;
 
 const handler = withAppCors(createAuthHandler({ sql, appleJwks, googleJwks, appleAudiences, googleAudiences, ipSalt, appleTokens }));
 
