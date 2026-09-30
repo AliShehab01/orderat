@@ -226,6 +226,9 @@ function periodStats(a, b) {
 
 const badge = (tone, label) => `<span class="badge ${esc(tone || '')}">${esc(label)}</span>`;
 const statusBadge = s => badge(STATUS_TONE[s], t('order.status.' + s));
+// A delivery order ends as Delivered, not Collected (labels only: the status is shared with the phones).
+const orderBadge = o => (o.status === 'collected' && o.fulfillment === 'delivery' ? badge(STATUS_TONE.collected, t('status.delivered')) : statusBadge(o.status));
+const nextLabel = o => t(o.status === 'ready' && o.fulfillment === 'delivery' ? 'status.outForDelivery' : NEXT_LABEL[o.status]);
 const payBadge = s => badge(PAY_TONE[s], t('payment.status.' + s));
 const sourceTag = s => `<span class="src src-${esc(s)}" title="${esc(t('source.' + s))}">${icon(s)}</span>`;
 const empty = msg => `<p class="empty">${esc(msg)}</p>`;
@@ -461,7 +464,7 @@ function capacityCard(booked, cap) {
 function orderRow(o, withDay = false) {
   const d = new Date(o.dueAt);
   const when = withDay ? `${fmtShort(d)} · ${fmtTime(d)}` : fmtTime(d);
-  return `<a class="row order-row" href="#/orders/${esc(o.id)}"><span class="row-main"><b>${esc(cName(customerOf(o)))}</b><small class="one-line">${sourceTag(o.source)}<span class="when">${esc(when)}${o.fulfillment === 'delivery' ? ' · ' + esc(t('orders.delivery')) : ''}</span><span class="what">${esc(itemsLine(o))}</span></small></span><span class="row-end"><b class="amt">${esc(money(totals(o).total))}</b>${statusBadge(o.status)}</span>${icon('chev', 'chev')}</a>`;
+  return `<a class="row order-row" href="#/orders/${esc(o.id)}"><span class="row-main"><b>${esc(cName(customerOf(o)))}</b><small class="one-line">${sourceTag(o.source)}<span class="when">${esc(when)}${o.fulfillment === 'delivery' ? ' · ' + esc(t('orders.delivery')) : ''}</span><span class="what">${esc(itemsLine(o))}</span></small></span><span class="row-end"><b class="amt">${esc(money(totals(o).total))}</b>${orderBadge(o)}</span>${icon('chev', 'chev')}</a>`;
 }
 
 function occasionRow(x, withDelete = false) {
@@ -591,14 +594,14 @@ function viewOrder(id) {
   const history = o.changes.slice().reverse().map(ch => { const at = new Date(ch.at); return line(historyLabel(ch), `${fmtShort(at)} ${fmtTime(at)}`, 'small'); }).join('');
   const body = `<div class="stack">
     <section class="card od-head${canEditOrder(o) ? ' tappable" data-act="edit-order" data-id="' + esc(o.id) + '" role="button" tabindex="0' : ''}">
-      <div class="split"><h2>${esc(fmtDay(d))} · ${esc(fmtTime(d))}</h2>${statusBadge(o.status)}</div>
+      <div class="split"><h2>${esc(fmtDay(d))} · ${esc(fmtTime(d))}</h2>${orderBadge(o)}</div>
       <p class="od-meta">${sourceTag(o.source)}<b>${esc(cName(c))}</b>${c?.phone ? `<a dir="ltr" href="tel:${esc(normPhone(c.phone))}">${esc(c.phone)}</a>` : ''}</p>
       <p class="od-meta muted">${icon(o.fulfillment === 'delivery' ? 'truck' : 'bag')}<span>${esc(t('fulfillment.' + o.fulfillment))}${o.area ? ' · ' + esc(t('area.' + o.area)) : ''} · ${esc(t('orders.via', t('source.' + o.source)))}</span></p>
       ${o.fulfillment === 'delivery' && addressText(o) ? `<div class="od-address"><p><span class="muted small">${esc(t('order.address'))}</span><br>${esc(addressText(o))}</p><div class="chips wrap"><button class="chip small" data-act="copy" data-text="${esc(addressText(o))}">${icon('copy')} ${esc(t('order.copyAddress'))}</button><a class="chip small" href="${esc('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent([addressText(o), o.area ? t('area.' + o.area) : ''].filter(Boolean).join(', ')))}" target="_blank" rel="noopener">${icon('external')} ${esc(t('order.openMaps'))}</a></div></div>` : ''}
       ${o.notes ? `<p class="od-notes">${esc(o.notes)}</p>` : ''}
     </section>
     <section class="card lines">${lines}</section>
-    ${open && can('status') ? `<div class="btn-col">${NEXT[o.status] ? `<button class="btn primary block big" data-act="advance" data-id="${esc(o.id)}">${esc(t(NEXT_LABEL[o.status]))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${esc(o.id)}">${esc(t('orders.cancel'))}</button></div>` : ''}
+    ${open && can('status') ? `<div class="btn-col">${NEXT[o.status] ? `<button class="btn primary block big" data-act="advance" data-id="${esc(o.id)}">${esc(nextLabel(o))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${esc(o.id)}">${esc(t('orders.cancel'))}</button></div>` : ''}
     ${o.status === 'cancelled' && can('status') ? `<button class="btn ghost block" data-act="reopen-order" data-id="${esc(o.id)}">${esc(t('orders.reopen'))}</button>` : ''}
     <section class="card"><h3 class="card-title">${icon('whatsapp')} ${esc(t('orders.sendWhatsApp'))}</h3>${wa}</section>
     <a class="card row" href="#/shop/receipts/${esc(o.id)}"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('shop.receipt'))}</b><small><bdi dir="ltr">${esc(invoiceNo(o))}</bdi></small></span>${icon('chev', 'chev')}</a>
@@ -1571,7 +1574,7 @@ const ACTIONS = {
     const prev = o.status, next = NEXT[o.status];
     setStatus(o, next);
     render();
-    undoToast(t('orders.statusChanged', t('order.status.' + next)), () => {
+    undoToast(t('orders.statusChanged', next === 'collected' && o.fulfillment === 'delivery' ? t('status.delivered') : t('order.status.' + next)), () => {
       const now = orderById(id);
       if (now && now.status === next) { setStatus(now, prev); render(); }
     });

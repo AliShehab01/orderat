@@ -124,7 +124,7 @@ const I18N = {
   // New order
   'neworder.pasteTitle': ["Paste the customer's message", 'الصق رسالة الزبون', 'الصقي رسالة الزبون'],
   'neworder.pasteHint': ['e.g. "2 cheesecake and 1 kunafa, tomorrow at 5"', 'مثال: "بكرة الساعة 5، عايزة 2 تشيز كيك وكنافة وحدة"'],
-  'neworder.parse': ['Parse message', 'تحليل الرسالة'],
+  'neworder.parse': ['Read message', 'قراءة الرسالة'],
   'neworder.fromScreenshot': ['From a screenshot', 'من صورة شاشة'],
   'neworder.tryExample': ['Try an example', 'جرّب مثال', 'جرّبي مثال'],
   'neworder.reading': ['Reading...', 'جاري القراءة...'],
@@ -135,7 +135,9 @@ const I18N = {
   'neworder.customerName': ['Name', 'الاسم'],
   'neworder.customerPhone': ['Phone', 'رقم الهاتف'],
   'neworder.source': ['Came from', 'مصدر الطلب'],
-  'neworder.itemsTitle': ['Items', 'الطلبات'],
+  'neworder.itemsTitle': ['Items', 'الأصناف'],
+  'status.outForDelivery': ['Out for delivery', 'في الطريق للتوصيل'],
+  'status.delivered': ['Delivered', 'تم التوصيل'],
   'neworder.addItem': ['Add item', 'إضافة صنف'],
   'neworder.menuItem': ['Menu item', 'الصنف'],
   'neworder.customItem': ['Custom item', 'صنف آخر'],
@@ -621,10 +623,21 @@ const I18N = {
   'web.switchLang': ['العربية', 'English'],
 };
 
+// Counted labels. English: 1, then the rest. Arabic: 1, 2, 3 to 10, then 11 and up (and 0).
+const PLURALS = {
+  'shop.orderCount': { en: ['{1} order', '{1} orders'], ar: ['طلب واحد', 'طلبين', '{1} طلبات', '{1} طلب'] },
+  'campaign.daysUntil': { en: ['In {1} day', 'In {1} days'], ar: ['بعد يوم', 'بعد يومين', 'بعد {1} أيام', 'بعد {1} يوم'] },
+};
+function pluralForm(key, n) {
+  const f = PLURALS[key];
+  if (S.lang === 'en') return n === 1 ? f.en[0] : f.en[1];
+  return n === 1 ? f.ar[0] : n === 2 ? f.ar[1] : n >= 3 && n <= 10 ? f.ar[2] : f.ar[3];
+}
+
 function t(key, ...args) {
   const entry = I18N[key];
   if (!entry) return key;
-  let s = S.lang === 'en' ? entry[0] : (S.addressAs === 'female' && entry[2]) || entry[1];
+  let s = PLURALS[key] && typeof args[0] === 'number' ? pluralForm(key, args[0]) : S.lang === 'en' ? entry[0] : (S.addressAs === 'female' && entry[2]) || entry[1];
   args.forEach((a, i) => { s = s.split(`{${i + 1}}`).join(a); });
   return s;
 }
