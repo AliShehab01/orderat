@@ -331,6 +331,7 @@ function render() {
   const tab = VIEWS[r[0]] && tabShown(r[0]) ? r[0] : 'today';
   const v = VIEWS[tab](r.slice(1));
   $('#app').innerHTML = shell(tab, v);
+  document.body.classList.toggle('route-new', tab === 'new');
   document.title = `${v.title} · ${brand}`;
   const path = r.join('/');
   if (path !== lastPath) { window.scrollTo(0, 0); lastPath = path; }
@@ -729,7 +730,7 @@ function viewNew() {
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.notesTitle'))}</h3><textarea name="notes" rows="2" data-live="draft" aria-label="${esc(t('neworder.notesTitle'))}">${esc(D.notes)}</textarea></section>
     <div class="save-bar"><span>${esc(t('orders.total'))} <b id="d-total">${esc(money(draftTotal()))}</b></span><button class="btn primary big" id="d-save"${draftEmpty() ? ' disabled' : ''}>${esc(t('neworder.save'))}</button></div>
   </form></div>`;
-  return { title: t('tab.new'), body };
+  return { title: t('tab.new'), back: 'today', body };
 }
 
 // A small on-device reader standing in for the apps' AI order entry (orderat-parse): matches menu

@@ -145,7 +145,7 @@ h1, h2, h3, h4 { line-height: 1.35; }
   }
   .tab {
     display: flex; flex-direction: column; align-items: center; gap: 0.1rem; padding: 0.4rem 0.15rem;
-    border-radius: 1.1rem; color: var(--muted); font-size: 0.7rem; font-weight: 500; text-align: center;
+    border-radius: 1.1rem; color: var(--muted); font-size: 0.75rem; font-weight: 500; text-align: center;
   }
   .tab.on { color: var(--accent); background: var(--brand-soft); font-weight: 700; }
   .tab.is-new .ic { width: 24px; height: 24px; color: var(--accent); }
@@ -304,6 +304,12 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, tex
   width: 100%; min-width: 0; padding: 0.6rem 0.75rem; outline: none;
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2);
 }
+/* 16px on phones and tablets, so focusing a field never zooms the page on iPhone Safari. */
+@media (max-width: 899px) { input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea { font-size: 16px; } }
+@media (pointer: coarse) {
+  .stepper button, .icon-btn { width: 44px; height: 44px; }
+  .chip, .seg span { min-height: 44px; display: inline-flex; align-items: center; }
+}
 input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
 textarea { resize: vertical; line-height: 1.6; }
 .static { padding: 0.6rem 0; }
@@ -353,7 +359,13 @@ textarea { resize: vertical; line-height: 1.6; }
   border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow);
   background: color-mix(in srgb, var(--surface) 92%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
 }
-@media (max-width: 899px) { .save-bar { bottom: calc(5.6rem + env(safe-area-inset-bottom)); } }
+@media (max-width: 899px) {
+  .save-bar { bottom: calc(5.6rem + env(safe-area-inset-bottom)); }
+  /* New order: the save bar takes the tab bar's place, so the form keeps the room. */
+  body.route-new .tabbar { display: none; }
+  body.route-new .save-bar { bottom: calc(1rem + env(safe-area-inset-bottom)); }
+  body.route-new .main { padding-bottom: calc(2rem + env(safe-area-inset-bottom)); }
+}
 .join { display: flex; gap: 0.5rem; align-items: flex-end; }
 .join .field { flex: 1; }
 
