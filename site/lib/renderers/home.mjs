@@ -117,7 +117,7 @@ export function renderHome(lang) {
         <strong>$${esc(PRICING.yearly.amountUSD)}</strong> ${lang === "ar" ? "سنوياً" : "/ year"}
       </p>
       <p class="pricing-teaser__note">${esc(PRICING.note[lang])}</p>
-      <a class="link-more" href="${escAttr(path(lang, "pricing"))}">${lang === "ar" ? "تفاصيل الأسعار" : "See pricing details"} ←</a>
+      <a class="link-more" href="${escAttr(path(lang, "pricing"))}">${lang === "ar" ? "تفاصيل الأسعار" : "See pricing details"} ${lang === "ar" ? "←" : "→"}</a>
     </div>
   </div>
 </section>

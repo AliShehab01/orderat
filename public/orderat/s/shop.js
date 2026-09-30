@@ -8,7 +8,7 @@
   // Public anon key (the same one the iPhone and Android apps ship with); safe to expose.
   var ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNram1iZGJ2bGJ4Zm9mamdxaXVqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyMzkwNjYsImV4cCI6MjEwNDgxNTA2Nn0.b126zMNS0U373kp0vI7ezzj2joHpuu87Cf8FFzIENIQ";
   var HOME_URL = "../";
-  var REPORT_EMAIL = "alishehab.tech@gmail.com";
+  var REPORT_EMAIL = "orderat.world@gmail.com";
   var SLUG_RE = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
   var PHOTO_RE = /^https:\/\/[a-z0-9]+\.supabase\.co\/storage\/v1\/object\/public\//;
   // Shape-only check (no mod-97): the server (server/shop/doc.ts) already checksums an IBAN before
@@ -79,6 +79,10 @@
       powered: "صُنع بواسطة اوردرات",
       poweredCta: "سوّي رابط متجرك",
       report: "إبلاغ عن هذا المتجر",
+      legalPre: "بإرسال طلبك فإنك توافق على",
+      terms: "شروط الخدمة",
+      privacy: "سياسة الخصوصية",
+      legalAnd: "و",
       share: "مشاركة",
       copied: "تم نسخ الرابط",
       other: "English",
@@ -155,6 +159,10 @@
       powered: "Made with Orderat",
       poweredCta: "Make your shop link",
       report: "Report this shop",
+      legalPre: "By sending your order you agree to the",
+      terms: "Terms of Service",
+      privacy: "Privacy Policy",
+      legalAnd: "and",
       share: "Share",
       copied: "Link copied",
       other: "العربية",
@@ -764,6 +772,13 @@
         ? h("a", { class: "btn wa", href: whatsappLink(buildWhatsappText(values)), target: "_blank", rel: "noopener", icon: "whatsapp" }, [t("orderOnWa")])
         : null,
       webOrders ? null : h("p", { class: "note", text: t("waNote") }),
+      h("p", { class: "note" }, [
+        t("legalPre") + " ",
+        h("a", { href: state.lang === "en" ? "/en/terms/" : "/terms/", target: "_blank", rel: "noopener", text: t("terms") }),
+        " " + t("legalAnd") + " ",
+        h("a", { href: state.lang === "en" ? "/en/privacy/" : "/privacy/", target: "_blank", rel: "noopener", text: t("privacy") }),
+        ".",
+      ]),
     ]);
 
     sheet.replaceChildren(

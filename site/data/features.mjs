@@ -426,6 +426,7 @@ export const FEATURES = [
       lead: "لو تشتغل أنت وموظف أو شريك، أو تبي تشتغل من جوالك وجوال آخر، فعّل النسخ الاحتياطي والمزامنة السحابية — اختياري بالكامل.",
       highlights: [
         "تسجيل الدخول بحساب Apple أو Google",
+        "استخدم متجرك من الكمبيوتر على orderatweb.com/app، وهو جزء من الاشتراك: سجّل دخولك بـ Google أو Apple، أو اربطه بجوالك بمسح رمز QR",
         "بياناتك تبقى على جهازك أصلاً؛ المزامنة اختيار لا إلزام",
         "دعوة موظف برمز من 6 أرقام صالح لمدة 48 ساعة",
         "صلاحيات محددة: الطلبات، التحضير فقط، الأموال، المنتجات",
@@ -457,6 +458,7 @@ export const FEATURES = [
       lead: "Whether you work with staff or a partner, or just want to use your shop from two phones, turn on cloud backup and sync — entirely optional.",
       highlights: [
         "Sign in with an Apple or Google account",
+        "Use your shop from a computer at orderatweb.com/app, included in the subscription: sign in with Google or Apple, or pair it with your phone by scanning a QR code",
         "Your data stays on your device by default; sync is opt-in",
         "Invite staff with a 6-digit code, valid for 48 hours",
         "Specific permissions: orders, prep only, money, products",

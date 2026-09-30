@@ -142,4 +142,14 @@ export const FAQS = [
       a: "Yes, your subscription is managed through the App Store or Google Play, and you can cancel it from your store account at any time.",
     },
   },
+  {
+    ar: {
+      q: "هل أقدر أستخدم اوردرات من الكمبيوتر؟",
+      a: "نعم. تطبيق الويب على orderatweb.com/app يخليك تدير متجرك من المتصفح، وهو جزء من الاشتراك بدون تكلفة إضافية. سجّل دخولك بحساب Google أو Apple، أو اربطه بجوالك: يعرض الموقع رمز QR وتمسحه من تطبيق اوردرات على جوالك.",
+    },
+    en: {
+      q: "Can I use Orderat from a computer?",
+      a: "Yes. The web app at orderatweb.com/app lets you run your shop from a browser, and it is included in the subscription at no extra cost. Sign in with Google or Apple, or pair it with your phone: the website shows a QR code and you scan it from the Orderat app on your phone.",
+    },
+  },
 ];

@@ -45,7 +45,7 @@ function header(lang, activeSlug, langSwitchSlug) {
     <a class="login-link" href="${escAttr(lang === "en" ? "/app/?lang=en" : "/app/")}">${esc(t.logIn)}</a>
     <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" id="nav-toggle">
       <span></span><span></span><span></span>
-      <span class="sr-only">Menu</span>
+      <span class="sr-only">${lang === "ar" ? "القائمة" : "Menu"}</span>
     </button>
     <nav class="site-nav" id="site-nav" aria-label="${lang === "ar" ? "التنقل الرئيسي" : "Main navigation"}">
       ${navHtml}

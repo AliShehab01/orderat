@@ -60,7 +60,7 @@ export function faqTeaser(lang, faqs) {
   <div class="wrap">
     <h2>${esc(t.faqTeaserTitle)}</h2>
     ${faqAccordion(lang, faqs.slice(0, 4))}
-    <a class="link-more" href="${escAttr(path(lang, "faq"))}">${esc(t.faqTeaserCta)} ←</a>
+    <a class="link-more" href="${escAttr(path(lang, "faq"))}">${esc(t.faqTeaserCta)} ${lang === "ar" ? "←" : "→"}</a>
   </div>
 </section>`;
 }

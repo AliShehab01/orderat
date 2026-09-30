@@ -96,7 +96,7 @@ ${breadcrumbsHtml(lang, [
   <div class="blog-post__body">
     ${articleHtml}
   </div>
-  <p class="blog-post__back"><a href="${escAttr(path(lang, "blog"))}">← ${esc(t.backToBlog)}</a></p>
+  <p class="blog-post__back"><a href="${escAttr(path(lang, "blog"))}">${lang === "ar" ? "→" : "←"} ${esc(t.backToBlog)}</a></p>
 </article>
 
 ${
