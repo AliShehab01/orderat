@@ -3,6 +3,7 @@ import { UI } from "../../data/strings.mjs";
 import { FAQS } from "../../data/faq.mjs";
 import { BRAND, PRICING } from "../../config.mjs";
 import { esc, escAttr } from "../html.mjs";
+import { path } from "../urls.mjs";
 import { icon } from "../icons.mjs";
 import { breadcrumbsHtml, ctaSection, faqAccordion } from "../components.mjs";
 import { breadcrumbLd, softwareApplicationLd } from "../seo.mjs";
@@ -53,10 +54,19 @@ const COPY = {
     lead: `الطلبات والعملاء والمصاريف والتقارير والفواتير مجانية بدون اشتراك. والاشتراك، مع ${PRICING.trialAr} تجربة مجانية، يضيف رابط متجرك والمزامنة والموظفين والمزيد من الذكاء الاصطناعي. تقدر تلغي في أي وقت.`,
     monthlyLabel: "شهري",
     yearlyLabel: "سنوي",
-    yearlySave: "وفّر تقريباً 33% مع الاشتراك السنوي",
+    yearlySave: "وفّر مع الاشتراك السنوي",
     freeTitle: "مجاني لمتجرك",
     includedTitle: "الاشتراك يضيف لك",
     trialBadge: `تجربة مجانية ${PRICING.trialAr}`,
+    disclosure: [
+      "التجربة المجانية (7 أيام) للمشتركين الجدد، وبعدها يتجدد الاشتراك تلقائياً بسعر الباقة إلى أن تلغيه.",
+      "للإلغاء، افعل ذلك قبل نهاية الفترة الحالية بـ 24 ساعة على الأقل من إعدادات App Store أو اشتراكات Google Play.",
+      "قد يختلف السعر في المتجر حسب بلدك.",
+    ],
+    legalLead: "اطلع على",
+    termsLabel: "شروط الخدمة",
+    privacyLabel: "سياسة الخصوصية",
+    and: "و",
     faqTitle: "أسئلة عن السعر",
   },
   en: {
@@ -66,10 +76,19 @@ const COPY = {
     lead: `Orders, customers, expenses, reports and receipts are free, with no subscription. The subscription, with a ${PRICING.trialDays}-day free trial, adds your shop link, cloud sync, staff and more AI. Cancel anytime.`,
     monthlyLabel: "Monthly",
     yearlyLabel: "Yearly",
-    yearlySave: "Save about 33% with the yearly plan",
+    yearlySave: "Save with the yearly plan",
     freeTitle: "Free for your shop",
     includedTitle: "The subscription adds",
     trialBadge: `${PRICING.trialDays}-day free trial`,
+    disclosure: [
+      "The 7-day free trial is for new subscribers. After it ends, the subscription renews automatically at the plan price until you cancel.",
+      "To cancel, do it at least 24 hours before the current period ends, from your App Store or Google Play subscription settings.",
+      "Prices in the store may vary by country.",
+    ],
+    legalLead: "Read our",
+    termsLabel: "Terms of Service",
+    privacyLabel: "Privacy Policy",
+    and: "and",
     faqTitle: "Pricing questions",
   },
 };
@@ -98,6 +117,10 @@ ${breadcrumbsHtml(lang, [{ name: t.breadcrumbHome, slug: "" }, { name: t.pricing
   </div>
 </div>
 <p class="pricing-note">${esc(PRICING.note[lang])}</p>
+<div class="pricing-disclosure">
+  ${c.disclosure.map((line) => `<p class="pricing-note">${esc(line)}</p>`).join("")}
+  <p class="pricing-note">${esc(c.legalLead)} <a href="${escAttr(path(lang, "terms"))}">${esc(c.termsLabel)}</a> ${esc(c.and)} <a href="${escAttr(path(lang, "privacy"))}">${esc(c.privacyLabel)}</a>.</p>
+</div>
 
 <section class="section">
   <h2>${esc(c.freeTitle)}</h2>
