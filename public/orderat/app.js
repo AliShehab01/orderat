@@ -587,7 +587,7 @@ function viewOrder(id) {
     : `<p class="muted small">${esc(t('orders.noPhone'))}</p>`;
   const history = o.changes.slice().reverse().map(ch => { const at = new Date(ch.at); return line(historyLabel(ch), `${fmtShort(at)} ${fmtTime(at)}`, 'small'); }).join('');
   const body = `<div class="stack">
-    <section class="card od-head">
+    <section class="card od-head${canEditOrder(o) ? ' tappable" data-act="edit-order" data-id="' + esc(o.id) + '" role="button" tabindex="0' : ''}">
       <div class="split"><h2>${esc(fmtDay(d))} · ${esc(fmtTime(d))}</h2>${statusBadge(o.status)}</div>
       <p class="od-meta">${sourceTag(o.source)}<b>${esc(cName(c))}</b>${c?.phone ? `<a dir="ltr" href="tel:${esc(normPhone(c.phone))}">${esc(c.phone)}</a>` : ''}</p>
       <p class="od-meta muted">${icon(o.fulfillment === 'delivery' ? 'truck' : 'bag')}<span>${esc(t('fulfillment.' + o.fulfillment))}${o.area ? ' · ' + esc(t('area.' + o.area)) : ''} · ${esc(t('orders.via', t('source.' + o.source)))}</span></p>
@@ -602,10 +602,25 @@ function viewOrder(id) {
     <section class="card"><h3 class="card-title">${esc(t('changeHistory'))}</h3>${history}</section>
     ${canDeleteOrder(o) ? `<button class="btn danger-soft block" data-act="delete-order" data-id="${esc(o.id)}">${icon('trash')} ${esc(t('orders.delete'))}</button>` : ''}
   </div>`;
-  const actions = o.status === 'cancelled' || !can('orders') ? '' : `<button class="icon-btn" data-act="edit-items" data-id="${esc(o.id)}" aria-label="${esc(t('orders.editItems'))}">${icon('edit')}</button>`;
+  const actions = canEditOrder(o) ? `<button class="icon-btn" data-act="edit-order" data-id="${esc(o.id)}" aria-label="${esc(t('order.edit'))}" title="${esc(t('order.edit'))}">${icon('edit')}</button>` : '';
   return { title: t('tab.orders'), back, actions, body };
 }
 
+const canEditOrder = o => o.status !== 'cancelled' && can('orders');
+// The order's time, pickup or delivery, area, fee, address and notes (the items have their own editor).
+function openEditOrder(o) {
+  const delivery = o.fulfillment === 'delivery';
+  openModal(t('order.edit'), `<form data-form="edit-order" data-id="${esc(o.id)}" class="stack">
+    ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" value="${esc(inputDateTime(new Date(o.dueAt)))}" required>`)}
+    <div class="field"><span>${esc(t('neworder.fulfillment'))}</span>${seg('fulfillment', ['pickup', 'delivery'], o.fulfillment, k => t('fulfillment.' + k), 'edit-order-fulfillment')}</div>
+    <div class="stack-sm" id="eo-delivery"${delivery ? '' : ' hidden'}>
+      <div class="grid2">${field(t('shop.area'), `<select name="area"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, o.area, a => t('area.' + a))}</select>`)}${field(t('orders.deliveryFee'), `<input name="fee" type="number" step="any" min="0" inputmode="decimal" value="${esc(o.deliveryFee || 0)}">`)}</div>
+      ${field(t('order.address'), `<textarea name="address" rows="2" maxlength="200">${esc(o.address || '')}</textarea>`)}
+    </div>
+    ${field(t('neworder.notesTitle'), `<textarea name="notes" rows="2">${esc(o.notes || '')}</textarea>`)}
+    <div class="btn-row"><button type="button" class="btn ghost" data-act="edit-items" data-id="${esc(o.id)}">${icon('edit')} ${esc(t('orders.editItems'))}</button><button class="btn primary grow">${esc(t('common.save'))}</button></div>
+  </form>`);
+}
 // Only a mistaken order: still New (or cancelled), nothing paid on it.
 const canDeleteOrder = o => can('orders') && (o.status === 'new' || o.status === 'cancelled') && !(o.payments || []).length;
 // Stock follows the website's promise: auto-deduct on confirm, put back on cancel.
@@ -1573,6 +1588,7 @@ const ACTIONS = {
     save(); closeModal(); render(); toast(t('common.saved'));
   },
   'edit-items'(el) { const o = orderById(el.dataset.id); if (o) openEditItems(o); },
+  'edit-order'(el) { const o = orderById(el.dataset.id); if (o && canEditOrder(o)) openEditOrder(o); },
   'item-qty'(el) {
     const p = el.dataset.p, i = +el.dataset.i, it = itemList(p)[i];
     if (!it) return;
@@ -1666,6 +1682,7 @@ const ACTIONS = {
 };
 
 const LIVE = {
+  'edit-order-fulfillment'(el) { const box = $('#eo-delivery'); if (box) box.hidden = el.value !== 'delivery'; },
   'orders-q'(el) { ordersQuery = el.value; $('#orders-list').innerHTML = ordersListHtml(); },
   'customers-q'(el) { customersQuery = el.value; $('#customers-list').innerHTML = viewCustomers(true); },
   draft(el) {
@@ -1809,6 +1826,25 @@ const FORMS = {
       save(); render();
     });
   },
+  'edit-order'(f, fd) {
+    const o = orderById(f.dataset.id);
+    if (!o || !canEditOrder(o)) return;
+    const get = k => String(fd.get(k) || '').trim();
+    const due = new Date(get('due')), fulfillment = get('fulfillment') === 'delivery' ? 'delivery' : 'pickup', delivery = fulfillment === 'delivery';
+    const next = {
+      dueAt: isNaN(due) ? o.dueAt : due.toISOString(), fulfillment, area: delivery ? get('area') : '',
+      deliveryFee: delivery ? round(parseFloat(get('fee')) || 0) : 0, address: delivery ? get('address') : '', notes: get('notes'),
+    };
+    const moved = next.dueAt !== o.dueAt, feeChanged = next.deliveryFee !== (o.deliveryFee || 0) || next.fulfillment !== o.fulfillment;
+    if (!Object.keys(next).some(k => String(next[k] ?? '') !== String(o[k] ?? ''))) { closeModal(); return; }
+    Object.assign(o, next);
+    if (feeChanged && Live.on) Live.applyOrderVat(o);
+    o.changes.push({ kind: 'edited', at: new Date().toISOString() });
+    save(); closeModal(); render();
+    const c = customerOf(o);
+    if (moved && c?.phone) toast(t('common.saved'), { label: t('order.sendNewTime'), fn: () => window.open(waLink(c.phone, waMessage('pickupReminder', o)), '_blank', 'noopener') });
+    else toast(t('common.saved'));
+  },
   'edit-items'() {
     const o = orderById(E.id);
     if (!o) return;
@@ -1901,6 +1937,9 @@ document.addEventListener('input', onLive);
 document.addEventListener('change', onLive);
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
+  // A plain link inside a tappable card (a phone number, Open in Maps) is followed, not the card's action.
+  const link = e.target.closest('a');
+  if (el && link && link !== el && el.contains(link)) return;
   if (el) {
     if (el.tagName === 'BUTTON') e.preventDefault();
     ACTIONS[el.dataset.act]?.(el, e);
@@ -1924,6 +1963,7 @@ document.addEventListener('submit', e => {
 // report the Save button as the submitter, so this does not look at e.submitter).
 document.addEventListener('keydown', e => {
   const el = e.target;
+  if ((e.key === 'Enter' || e.key === ' ') && el.getAttribute?.('role') === 'button' && el.dataset.act) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el, e); return; }
   if (e.key !== 'Enter' || e.isComposing || el.tagName !== 'INPUT') return;
   const f = el.closest("form[data-form='new-order']");
   if (!f) return;

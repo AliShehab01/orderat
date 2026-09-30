@@ -449,6 +449,8 @@ body.has-banner .main { padding-top: calc(1.75rem + 2.4rem); }
 .camp-hero { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; border-top: 5px solid var(--camp); }
 .camp-hero .btn-row { margin-top: 0.4rem; }
 .od-head h2 { font-size: 1.15rem; }
+.od-head.tappable { cursor: pointer; }
+@media (hover: hover) { .od-head.tappable:hover { border-color: var(--accent); } }
 .od-meta { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.45rem; }
 .od-meta .ic { width: 18px; height: 18px; }
 .od-address { margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; }
