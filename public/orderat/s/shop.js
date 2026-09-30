@@ -775,12 +775,19 @@
 
   // ---------- checkout ----------
 
+  // What the buyer typed, kept when the sheet closes by a stray tap so reopening it restores it.
+  var typed = {};
+  function keepTyped() {
+    if (sheet.querySelector("form")) typed = readForm();
+  }
+
   function openCheckout() {
-    renderCheckout({});
+    renderCheckout(typed);
     if (typeof sheet.showModal === "function") sheet.showModal(); else sheet.setAttribute("open", "");
   }
 
   function closeSheet() {
+    keepTyped();
     if (typeof sheet.close === "function") sheet.close(); else sheet.removeAttribute("open");
     renderShop();
   }
@@ -788,7 +795,7 @@
   sheet.addEventListener("click", function (e) {
     if (e.target === sheet) closeSheet(); // backdrop click
   });
-  sheet.addEventListener("close", function () { renderShop(); });
+  sheet.addEventListener("close", function () { keepTyped(); renderShop(); });
 
   function field(id, label, input, hint, error) {
     return h("div", { class: "field" }, [
@@ -991,6 +998,7 @@
     // The total the shop info card and checkout sheet already show (money()'s formatting) — captured
     // before the cart is cleared just below.
     var totalText = money(cartTotal());
+    typed = {};
     state.cart = {};
     saveCart();
     sheet.replaceChildren(

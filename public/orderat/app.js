@@ -286,8 +286,11 @@ function toast(msg, action) {
 }
 const undoToast = (msg, fn) => toast(msg, { label: t('common.undo'), fn });
 const modalEl = () => $('#modal');
+// Something was typed in the open dialog: a stray tap outside (or Esc) asks before throwing it away.
+let modalDirty = false;
 function openModal(title, body, cls = '') {
   const m = modalEl();
+  if (!m.open) modalDirty = false;
   m.className = cls;
   m.innerHTML = `<div class="sheet"><header class="sheet-head"><h2>${esc(title)}</h2><button type="button" class="icon-btn" data-act="close-modal" aria-label="${esc(t('common.close'))}">${icon('x')}</button></header><div class="sheet-body">${body}</div></div>`;
   if (!m.open) m.showModal();
@@ -743,7 +746,8 @@ function viewNew() {
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.notesTitle'))}</h3><textarea name="notes" rows="2" data-live="draft" aria-label="${esc(t('neworder.notesTitle'))}">${esc(D.notes)}</textarea></section>
     <div class="save-bar"><span>${esc(t('orders.total'))} <b id="d-total">${esc(money(draftTotal()))}</b></span><button class="btn primary big" id="d-save"${draftEmpty() ? ' disabled' : ''}>${esc(t('neworder.save'))}</button></div>
   </form></div>`;
-  return { title: t('tab.new'), back: 'today', body };
+  const actions = `<button class="btn ghost small" data-act="clear-draft">${esc(t('neworder.clear'))}</button>`;
+  return { title: t('tab.new'), back: 'today', actions, body };
 }
 
 // A small on-device reader standing in for the apps' AI order entry (orderat-parse): matches menu
@@ -1528,6 +1532,10 @@ const ACTIONS = {
     it.qty = q;
     rerenderItems(p);
   },
+  'clear-draft'() {
+    const typed = D && (D.text.trim() || D.name.trim() || D.phone.trim() || D.items.length || D.notes.trim());
+    if (!typed || confirm(t('neworder.clearConfirm'))) { D = null; render(); }
+  },
   'item-pick'(el) { openItemPicker(el.dataset.p); },
   'item-pick-back'() { if (E) { E.picking = false; renderEditItems(); } },
   'item-add'(el) {
@@ -1844,8 +1852,14 @@ document.addEventListener('click', e => {
     ACTIONS[el.dataset.act]?.(el, e);
     return;
   }
-  if (e.target === modalEl()) closeModal();
+  if (e.target === modalEl() && (!modalDirty || confirm(t('common.discard')))) closeModal();
 });
+document.addEventListener('input', e => {
+  const el = e.target;
+  if (el.closest?.('#modal') && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'file'].includes(el.type)))) modalDirty = true;
+  if (el.getAttribute?.('aria-invalid') === 'true' && el.closest?.('#modal')) { el.removeAttribute('aria-invalid'); el.closest('.field')?.querySelector('.field-error')?.remove(); }
+});
+modalEl().addEventListener('cancel', e => { if (modalDirty && !confirm(t('common.discard'))) e.preventDefault(); });
 document.addEventListener('submit', e => {
   const f = e.target.closest('form[data-form]');
   if (!f) return;
