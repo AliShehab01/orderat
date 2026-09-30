@@ -145,6 +145,7 @@ const I18N = {
   'neworder.removeItem': ['Remove item', 'حذف الصنف'],
   'neworder.addFirstItem': ['Add first item', 'أضف أول صنف', 'أضيفي أول صنف'],
   'items.inactive': ['(inactive)', '(غير مفعّل)'],
+  'items.nameCustom': ['Name the custom item', 'سمِّ الصنف', 'سمّي الصنف'],
   'neworder.itemName': ['Item name', 'اسم الصنف'],
   'neworder.price': ['Price', 'السعر'],
   'neworder.quantity': ['Quantity', 'الكمية'],

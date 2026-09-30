@@ -232,6 +232,18 @@ const toggle = (name, label, on, live = '') => `<label class="switch-row"><span>
 function seg(name, options, value, label, live = '') {
   return `<div class="seg">${options.map(o => `<label><input type="radio" name="${name}" value="${esc(o)}"${o === value ? ' checked' : ''}${live ? ` data-live="${live}"` : ''}><span>${esc(label(o))}</span></label>`).join('')}</div>`;
 }
+// A field with its error message under it (New order).
+const errField = (label, control, error) => `<label class="field"><span>${esc(label)}</span>${control}${error ? `<span class="field-error" role="alert">${esc(error)}</span>` : ''}</label>`;
+// New order's errors next to their fields, the first one scrolled to and focused.
+function showDraftErrors(errors) {
+  D.errors = errors;
+  render();
+  const first = errors.name ? $('form[data-form="new-order"] input[name="name"]') : $('#d-items');
+  if (!first) return;
+  first.scrollIntoView({ block: 'center' });
+  const focusable = first.matches('input') ? first : first.querySelector('input[data-f="name"]:placeholder-shown, button[data-act="item-pick"]');
+  focusable?.focus({ preventScroll: true });
+}
 // Marks a dialog field invalid, with its message under it, and focuses it.
 function fieldError(form, name, msg) {
   const el = form.querySelector(`[name="${name}"]`);
@@ -239,8 +251,9 @@ function fieldError(form, name, msg) {
   el.setAttribute('aria-invalid', 'true');
   const box = el.closest('.field') || el.parentElement;
   box.querySelector('.field-error')?.remove();
-  const p = document.createElement('p');
+  const p = document.createElement('span');
   p.className = 'field-error';
+  p.setAttribute('role', 'alert');
   p.textContent = msg;
   box.append(p);
   el.focus();
@@ -696,7 +709,7 @@ function viewNew() {
     <h3 class="card-title">${icon('whatsapp')} ${esc(t('neworder.pasteTitle'))}</h3>
     <textarea name="text" rows="4" data-live="draft" placeholder="${esc(t('neworder.pasteHint'))}" aria-label="${esc(t('neworder.pasteTitle'))}">${esc(D.text)}</textarea>
     <div class="btn-row">
-      <button class="btn primary" data-act="parse"${D.reading ? ' disabled' : ''}>${icon('sparkle')} ${esc(D.reading ? t('neworder.reading') : t('neworder.parse'))}</button>
+      <button class="btn primary" data-act="parse"${D.reading || !D.text.trim() ? ' disabled' : ''}>${icon('sparkle')} ${esc(D.reading ? t('neworder.reading') : t('neworder.parse'))}</button>
       <label class="btn ghost">${icon('image')} ${esc(t('neworder.fromScreenshot'))}<input type="file" accept="image/*" data-live="shot" hidden></label>
     </div>
     ${ex.length ? `<div class="examples"><span class="muted small">${esc(t('neworder.tryExample'))}</span>${ex.map((e, i) => `<button class="chip small" data-act="example" data-i="${i}">${icon('whatsapp')} ${esc(e.label)}</button>`).join('')}</div>` : ''}
@@ -705,13 +718,13 @@ function viewNew() {
   <form data-form="new-order" class="stack" novalidate>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.customerTitle'))}</h3>
       <div class="grid2">
-        ${field(t('neworder.customerName'), `<input name="name" data-live="draft" enterkeyhint="next" value="${esc(D.name)}" list="customer-names" autocomplete="off">`)}
+        ${errField(t('neworder.customerName'), `<input name="name" data-live="draft" enterkeyhint="next" value="${esc(D.name)}" list="customer-names" autocomplete="off"${D.errors?.name ? ' aria-invalid="true"' : ''}>`, D.errors?.name)}
         ${field(t('neworder.customerPhone'), `<input name="phone" data-live="draft" enterkeyhint="next" value="${esc(D.phone)}" dir="ltr" inputmode="tel" autocomplete="off">`)}
       </div>
       <datalist id="customer-names">${S.customers.map(c => `<option value="${esc(cName(c))}">`).join('')}</datalist>
       <div class="field"><span>${esc(t('neworder.source'))}</span>${seg('source', ['whatsapp', 'instagram', 'manual'], D.source, k => t('source.' + k), 'draft')}</div>
     </section>
-    <section class="card stack-sm" id="d-items"><h3 class="card-title">${esc(t('neworder.itemsTitle'))}</h3>
+    <section class="card stack-sm" id="d-items"><h3 class="card-title">${esc(t('neworder.itemsTitle'))}</h3>${D.errors?.items ? `<p class="field-error" role="alert">${esc(D.errors.items)}</p>` : ''}
       ${D.items.length
         ? `${itemsEditor(D.items, 'd')}<button type="button" class="btn ghost small" data-act="item-pick" data-p="d">${icon('plus')} ${esc(t('neworder.addItem'))}</button>`
         : `<div class="items-empty"><p class="muted small">${esc(t('neworder.needItem'))}</p><button type="button" class="btn primary" data-act="item-pick" data-p="d">${icon('plus')} ${esc(t('neworder.addFirstItem'))}</button></div>`}
@@ -1597,7 +1610,12 @@ const ACTIONS = {
 
 const LIVE = {
   'orders-q'(el) { ordersQuery = el.value; $('#orders-list').innerHTML = ordersListHtml(); },
-  draft(el) { D[el.name] = el.value; if (el.name === 'fulfillment') render(); else updateTotal('d'); },
+  draft(el) {
+    D[el.name] = el.value;
+    if (D.errors && D.errors[el.name]) { delete D.errors[el.name]; el.removeAttribute('aria-invalid'); el.closest('.field')?.querySelector('.field-error')?.remove(); }
+    if (el.name === 'text') { const b = $('[data-act="parse"]'); if (b) b.disabled = D.reading || !D.text.trim(); }
+    if (el.name === 'fulfillment') render(); else updateTotal('d');
+  },
   item(el) {
     const it = itemList(el.dataset.p)[+el.dataset.i];
     if (!it) return;
@@ -1678,9 +1696,13 @@ const LIVE = {
 const FORMS = {
   'new-order'() {
     const items = cleanItems(D.items);
-    if (!items.length) { toast(t('neworder.needItem')); return; }
     const name = D.name.trim();
-    if (!name) { toast(t('neworder.needName')); return; }
+    const errors = {};
+    if (D.items.some(it => it.pid === 'custom' && qtyNum(it.qty) > 0 && !String(it.name || '').trim())) errors.items = t('items.nameCustom');
+    else if (!items.length) errors.items = t('neworder.needItem');
+    if (!name) errors.name = t('err.name');
+    if (Object.keys(errors).length) { showDraftErrors(errors); return; }
+    D.errors = null;
     const localLen = OrderatLiveCore.localDigits(S.shop.currency);
     const tail = digits(D.phone).slice(-localLen);
     let c = S.customers.find(x => (tail.length === localLen && digits(x.phone).endsWith(tail)) || x.name === name || x.nameEn === name);
@@ -1728,6 +1750,7 @@ const FORMS = {
   'edit-items'() {
     const o = orderById(E.id);
     if (!o) return;
+    if (E.items.some(it => it.pid === 'custom' && qtyNum(it.qty) > 0 && !String(it.name || '').trim())) { toast(t('items.nameCustom')); return; }
     const items = cleanItems(E.items);
     if (!items.length) { toast(t('neworder.needItem')); return; }
     if (Live.on) {
@@ -1757,7 +1780,7 @@ const FORMS = {
   },
   product(f, fd) {
     const get = k => String(fd.get(k) || '').trim();
-    if (!get('nameAr') && !get('nameEn')) return;
+    if (!get('nameAr') && !get('nameEn')) { fieldError(f, 'nameAr', t('err.productName')); return; }
     const data = { nameAr: get('nameAr') || get('nameEn'), nameEn: get('nameEn') || get('nameAr'), price: +get('price') || 0, cost: +get('cost') || 0, cap: get('cap') ? +get('cap') : null, active: fd.has('active') };
     if (S.stockEnabled) Object.assign(data, { track: fd.has('track'), qty: +get('qty') || 0, low: +get('low') || 0 });
     const p = productOf(f.dataset.id);
