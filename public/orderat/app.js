@@ -232,6 +232,19 @@ const toggle = (name, label, on, live = '') => `<label class="switch-row"><span>
 function seg(name, options, value, label, live = '') {
   return `<div class="seg">${options.map(o => `<label><input type="radio" name="${name}" value="${esc(o)}"${o === value ? ' checked' : ''}${live ? ` data-live="${live}"` : ''}><span>${esc(label(o))}</span></label>`).join('')}</div>`;
 }
+// Marks a dialog field invalid, with its message under it, and focuses it.
+function fieldError(form, name, msg) {
+  const el = form.querySelector(`[name="${name}"]`);
+  if (!el) { toast(msg); return; }
+  el.setAttribute('aria-invalid', 'true');
+  const box = el.closest('.field') || el.parentElement;
+  box.querySelector('.field-error')?.remove();
+  const p = document.createElement('p');
+  p.className = 'field-error';
+  p.textContent = msg;
+  box.append(p);
+  el.focus();
+}
 const field = (label, control) => `<label class="field"><span>${esc(label)}</span>${control}</label>`;
 const options = (list, value, label) => list.map(o => `<option value="${esc(o)}"${o === value ? ' selected' : ''}>${esc(label(o))}</option>`).join('');
 
@@ -508,7 +521,8 @@ function viewOrder(id) {
     orderVatRate(o) ? line(t('orders.subtotal'), money(T.subtotal), 'muted') + line(t('orders.vatPercent', orderVatRate(o) + '%'), money(T.vat), 'muted') : '',
     line(t('orders.total'), money(T.total), 'total'),
     `<div class="line pay"><span>${esc(t('orders.paid'))} ${esc(money(T.paid))}</span>${o.status === 'cancelled' ? '' : payBadge(payStatus(o))}</div>`,
-    T.due > 0 && o.status !== 'cancelled' && can('orders') ? `<button class="link-btn" data-act="pay" data-id="${esc(o.id)}">${esc(t('recordPayment'))} · ${esc(t('orders.remaining'))} ${esc(money(T.due))}</button>` : '',
+    (o.payments || []).map(p => `<div class="line small pay-row"><span>${esc(money(p.amount))} · ${esc(t('payment.method.' + p.method))}${p.at ? ` · ${esc(fmtShort(new Date(p.at)))}` : ''}${p.note ? ` · ${esc(p.note)}` : ''}</span>${can('orders') ? `<button class="icon-btn" data-act="delete-payment" data-id="${esc(o.id)}" data-pay="${esc(p.id || '')}" data-at="${esc(p.at || '')}" aria-label="${esc(t('pay.delete'))}" title="${esc(t('pay.delete'))}">${icon('trash')}</button>` : ''}</div>`).join(''),
+    T.due > 0 && o.status !== 'cancelled' && can('orders') ? `<div class="line"><span class="muted">${esc(t('orders.remaining'))} ${esc(money(T.due))}</span></div><div class="btn-row"><button class="btn ghost" data-act="pay" data-id="${esc(o.id)}">${esc(t('recordPayment'))}</button><button class="btn primary" data-act="pay-full" data-id="${esc(o.id)}">${esc(t('pay.paidInFull'))}</button></div>` : '',
   ].join('');
   const wa = c?.phone
     ? `<div class="chips wrap">${WA_TEMPLATES.map(k => `<a class="chip" href="${esc(waLink(c.phone, waMessage(k, o)))}" target="_blank" rel="noopener">${icon('whatsapp')} ${esc(t('whatsapp.template.' + k))}</a>`).join('')}</div>`
@@ -549,10 +563,10 @@ function setStatus(o, status) {
   save();
 }
 
-function openPayment(o) {
-  const dec = currency()[0];
+function openPayment(o, full) {
+  const dec = currency()[0], due = totals(o).due.toFixed(dec);
   openModal(t('recordPayment'), `<form data-form="payment" data-id="${esc(o.id)}" class="stack">
-    ${field(t('payment.amount'), `<input name="amount" type="number" inputmode="decimal" step="any" min="0" value="${totals(o).due.toFixed(dec)}" required>`)}
+    ${field(t('payment.amount'), `<input name="amount" type="number" inputmode="decimal" step="any" min="0.001" value="${full ? due : ''}" placeholder="${due}" required>`)}
     <div class="field"><span>${esc(t('payment.method'))}</span>${seg('method', METHODS, 'benefit', k => t('payment.method.' + k))}</div>
     ${field(t('payment.note'), '<input name="note">')}
     <button class="btn primary block">${esc(t('common.save'))}</button></form>`);
@@ -874,20 +888,20 @@ function viewMoney() {
     </div>
     <section class="card"><h3 class="card-title">${esc(t('money.whoOwesMe'))}</h3>${owes.length ? owes.map(d => `<div class="line"><span>${esc(cName(d.c))} · <b>${esc(money(d.amount))}</b></span>${d.c.phone ? `<a class="chip small" href="${esc(waLink(d.c.phone, t('whatsapp.message.paymentReminder', firstName(d.c), shopName(), money(d.amount))))}" target="_blank" rel="noopener">${icon('whatsapp')} ${esc(t('money.remind'))}</a>` : ''}</div>`).join('') : empty(t('money.nobodyOwes'))}</section>
     <section class="card"><div class="split"><h3 class="card-title">${esc(t('money.expenses'))} · ${esc(money(cur.expenses))}</h3><button class="btn ghost small" data-act="add-expense">${icon('plus')} ${esc(t('money.addExpense'))}</button></div>
-      ${expenses.length ? expenses.map(x => `<div class="line"><span><b>${esc(t('expense.category.' + x.category))}</b> <span class="muted small">${esc(text(x.note))} · ${esc(fmtShort(new Date(x.date)))}</span></span><span>${esc(money(x.amount))}</span></div>`).join('') : empty(t('money.noExpenses'))}
+      ${expenses.length ? `<div class="list">${expenses.map(x => `<button class="row" data-act="edit-expense" data-id="${esc(x.id)}"${can('money') ? '' : ' disabled'}><span class="row-main"><b>${esc(t('expense.category.' + x.category))}</b><small>${esc([text(x.note), fmtShort(new Date(x.date))].filter(Boolean).join(' · '))}</small></span><span>${esc(money(x.amount))}</span>${icon('chev', 'chev')}</button>`).join('')}</div>` : empty(t('money.noExpenses'))}
     </section>
   </div>`;
   const actions = S.askEnabled ? `<button class="icon-btn accent" data-act="ask" aria-label="${esc(t('ask.title'))}">${icon('sparkle')}</button>` : '';
   return { title: t('tab.money'), actions, body };
 }
 
-function openExpense() {
-  openModal(t('money.addExpense'), `<form data-form="expense" class="stack">
-    ${field(t('payment.amount'), '<input name="amount" type="number" step="any" min="0" inputmode="decimal" required>')}
-    ${field(t('expense.category'), `<select name="category">${options(EXPENSE_CATS, 'ingredients', c => t('expense.category.' + c))}</select>`)}
-    ${field(t('expense.date'), `<input name="date" type="date" value="${dayKey(new Date())}" required>`)}
-    ${field(t('payment.note'), '<input name="note">')}
-    <button class="btn primary block">${esc(t('common.save'))}</button></form>`);
+function openExpense(x) {
+  openModal(x ? t('common.edit') : t('money.addExpense'), `<form data-form="expense" data-id="${x ? esc(x.id) : ''}" class="stack">
+    ${field(t('payment.amount'), `<input name="amount" type="number" step="any" min="0.001" inputmode="decimal" value="${x ? esc(x.amount) : ''}" required>`)}
+    ${field(t('expense.category'), `<select name="category">${options(EXPENSE_CATS, x ? x.category : 'ingredients', c => t('expense.category.' + c))}</select>`)}
+    ${field(t('expense.date'), `<input name="date" type="date" value="${dayKey(x ? new Date(x.date) : new Date())}" required>`)}
+    ${field(t('payment.note'), `<input name="note" value="${x ? esc(text(x.note)) : ''}">`)}
+    <div class="btn-row">${x ? `<button type="button" class="btn danger-soft" data-act="delete-expense" data-id="${esc(x.id)}">${esc(t('expense.delete'))}</button>` : ''}<button class="btn primary grow">${esc(t('common.save'))}</button></div></form>`);
 }
 
 // ---------- Shop hub ----------
@@ -1474,7 +1488,23 @@ const ACTIONS = {
     S.customers = S.customers.filter(c => c.id !== id);
     save(); closeModal(); render(); toast(t('common.saved'));
   },
-  pay(el) { const o = orderById(el.dataset.id); if (o) openPayment(o); },
+  pay(el) { const o = orderById(el.dataset.id); if (o) { openPayment(o, false); $('#modal input[name="amount"]')?.focus(); } },
+  'pay-full'(el) { const o = orderById(el.dataset.id); if (o) openPayment(o, true); },
+  'delete-payment'(el) {
+    const o = orderById(el.dataset.id);
+    if (!o || !can('orders') || !confirm(t('pay.delete') + '?')) return;
+    const { pay, at } = el.dataset;
+    const i = o.payments.findIndex(p => (pay ? p.id === pay : p.at === at));
+    if (i < 0) return;
+    o.payments = o.payments.filter((_, k) => k !== i);
+    save(); render(); toast(t('common.saved'));
+  },
+  'edit-expense'(el) { const x = S.expenses.find(e => e.id === el.dataset.id); if (x && can('money')) openExpense(x); },
+  'delete-expense'(el) {
+    if (!can('money') || !confirm(t('expense.delete') + '?')) return;
+    S.expenses = S.expenses.filter(x => x.id !== el.dataset.id);
+    save(); closeModal(); render(); toast(t('common.saved'));
+  },
   'edit-items'(el) { const o = orderById(el.dataset.id); if (o) openEditItems(o); },
   'item-qty'(el) {
     const p = el.dataset.p, i = +el.dataset.i, it = itemList(p)[i];
@@ -1500,7 +1530,7 @@ const ACTIONS = {
   parse() { if (D.text.trim()) { if (Live.on) Live.parseText(D.text); else readDraft(D.text, t('neworder.demoRead')); } },
   example(el) { const ex = examples()[+el.dataset.i]; if (ex) { D.text = ex.text; readDraft(ex.text, t('neworder.demoRead')); } },
   'money-range'(el) { moneyRange = el.dataset.v; render(); },
-  'add-expense': openExpense,
+  'add-expense'() { openExpense(null); },
   'edit-shop': openShop,
   'add-product'() { openProduct(null); },
   'edit-product'(el) { openProduct(productOf(el.dataset.id)); },
@@ -1678,12 +1708,21 @@ const FORMS = {
     go('orders/' + order.id);
   },
   payment(f, fd) {
-    const o = orderById(f.dataset.id), amount = parseFloat(fd.get('amount'));
-    if (!o || !(amount > 0)) return;
-    const at = new Date().toISOString();
-    o.payments.push({ amount: round(amount), method: fd.get('method') || 'cash', note: String(fd.get('note') || ''), at });
-    o.changes.push({ kind: 'payment', value: round(amount), at });
-    save(); closeModal(); render(); toast(t('common.saved'));
+    const id = f.dataset.id, o = orderById(id), amount = parseFloat(fd.get('amount'));
+    if (!o) return;
+    if (!(amount > 0)) { fieldError(f, 'amount', t('err.amount')); return; }
+    const due = totals(o).due;
+    if (amount > due + 1e-9 && !confirm(t('pay.overpay', money(due)))) return;
+    const at = new Date().toISOString(), value = round(amount);
+    o.payments.push({ amount: value, method: fd.get('method') || 'cash', note: String(fd.get('note') || ''), at });
+    o.changes.push({ kind: 'payment', value, at });
+    save(); closeModal(); render();
+    undoToast(t('common.saved'), () => {
+      const now = orderById(id);
+      if (!now) return;
+      now.payments = now.payments.filter(p => !(p.at === at && p.amount === value));
+      save(); render();
+    });
   },
   'edit-items'() {
     const o = orderById(E.id);
@@ -1704,8 +1743,10 @@ const FORMS = {
   },
   expense(f, fd) {
     const amount = parseFloat(fd.get('amount'));
-    if (!(amount > 0)) return;
-    S.expenses.push({ id: nid(), amount: round(amount), category: fd.get('category'), note: String(fd.get('note') || ''), date: new Date(`${fd.get('date')}T12:00`).toISOString() });
+    if (!(amount > 0)) { fieldError(f, 'amount', t('err.amount')); return; }
+    const data = { amount: round(amount), category: fd.get('category'), note: String(fd.get('note') || ''), date: new Date(`${fd.get('date')}T12:00`).toISOString() };
+    const x = f.dataset.id && S.expenses.find(e => e.id === f.dataset.id);
+    if (x) Object.assign(x, data); else S.expenses.push({ id: nid(), ...data });
     save(); closeModal(); render(); toast(t('common.saved'));
   },
   shop(f, fd) {

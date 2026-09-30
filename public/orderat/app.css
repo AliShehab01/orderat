@@ -390,6 +390,9 @@ textarea { resize: vertical; line-height: 1.6; }
 .or { display: flex; align-items: center; gap: 0.7rem; color: var(--muted); font-size: 0.85rem; margin-block: 0.3rem; }
 .or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
 .form-error { color: var(--bad); font-size: 0.9rem; }
+.field-error { color: var(--bad); font-size: 0.85rem; font-weight: 500; }
+[aria-invalid="true"] { border-color: var(--bad) !important; }
+.pay-row .icon-btn { width: 44px; height: 44px; color: var(--bad); box-shadow: none; }
 .steps { margin: 0.2rem 0; padding-inline-start: 1.3rem; display: grid; gap: 0.3rem; }
 .pair-box { display: flex; flex-direction: column; align-items: center; gap: 0.6rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
 .pair-qr .qr { width: min(220px, 60vw); height: auto; display: block; border-radius: 0.6rem; }

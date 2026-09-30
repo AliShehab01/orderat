@@ -786,10 +786,16 @@ const Live = (() => {
     'live-ask-expense'(el) {
       const amount = parseFloat(el.dataset.amount);
       if (!(amount > 0)) return;
-      S.expenses.push({ id: newId(), amount, category: EXPENSE_CATS.includes(el.dataset.cat) ? el.dataset.cat : 'other', note: el.dataset.note || '', date: new Date().toISOString() });
+      const id = newId();
+      S.expenses.push({ id, amount, category: EXPENSE_CATS.includes(el.dataset.cat) ? el.dataset.cat : 'other', note: el.dataset.note || '', date: new Date().toISOString() });
       save();
       el.disabled = true;
-      toast(t('common.saved'));
+      undoToast(t('common.saved'), () => {
+        S.expenses = S.expenses.filter(x => x.id !== id);
+        save();
+        el.disabled = false;
+        if (!modalEl().open) render();
+      });
     },
   };
   const liveHandlers = {
