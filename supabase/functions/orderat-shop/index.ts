@@ -23,6 +23,7 @@
 
 import { createShopHandler, type UploadPhoto } from "../../../server/shop/handler.ts";
 import { sha256HexOfString } from "../../../server/shared/crypto.ts";
+import { photoObjectPath } from "../../../server/shared/storage-path.ts";
 import { orderatEnv as env } from "../_shared/env.ts";
 import { getSqlClient } from "../_shared/db.ts";
 
@@ -34,7 +35,7 @@ const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const uploadPhoto: UploadPhoto = async ({ shopId, photoId, bytes, mimeType }) => {
   if (!supabaseUrl || !serviceRoleKey) return false;
   try {
-    const res = await fetch(`${supabaseUrl}/storage/v1/object/orderat-shop/${shopId}/${photoId}.jpg`, {
+    const res = await fetch(`${supabaseUrl}/storage/v1/object/${photoObjectPath("orderat-shop", shopId, photoId)}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${serviceRoleKey}`,

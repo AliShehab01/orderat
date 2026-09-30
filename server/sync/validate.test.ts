@@ -102,6 +102,22 @@ describe("validateSyncBody / members", () => {
   });
 });
 
+describe("validateSyncBody / record ids", () => {
+  const change = (id: unknown) => JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 0, changes: [{ entity: "order", id, data: {} }] });
+
+  it("accepts UUIDs and setting keys", () => {
+    for (const id of ["0f8c2a1e-3b4d-4c5e-8f90-123456789abc", "whatsappTemplates", "subscription", "a_b-C9", "x".repeat(128)]) {
+      expect(validateSyncBody(change(id)).ok).toBe(true);
+    }
+  });
+
+  it("rejects ids with path, dot, space or other characters, empty ids and ids over 128 characters", () => {
+    for (const id of ["", "..", "a/b", "a.b", "a b", "ö", "x".repeat(129), 12]) {
+      expect(validateSyncBody(change(id))).toEqual({ ok: false, error: "invalid_body" });
+    }
+  });
+});
+
 describe("validateSyncBody / photos", () => {
   it("accepts photo_upload and photo_url", () => {
     expect(validateSyncBody(JSON.stringify({ action: "photo_upload", shopId: SHOP_ID, mimeType: "image/jpeg", data: "abc" }))).toEqual({
@@ -112,6 +128,12 @@ describe("validateSyncBody / photos", () => {
       ok: true,
       body: { action: "photo_url", shopId: SHOP_ID, photoId: "a".repeat(64) },
     });
+  });
+
+  it("rejects a photo_url photoId that is not 64 lowercase hex characters", () => {
+    for (const photoId of ["A".repeat(64), "a".repeat(63), "a".repeat(65), `../${"a".repeat(61)}`, `${"a".repeat(60)}.jpg`, `x/${"a".repeat(62)}`, ""]) {
+      expect(validateSyncBody(JSON.stringify({ action: "photo_url", shopId: SHOP_ID, photoId }))).toEqual({ ok: false, error: "invalid_body" });
+    }
   });
 
   it("rejects an unsupported photo_upload mimeType", () => {

@@ -16,8 +16,14 @@ const MAX_RECORD_DATA_BYTES = 32 * 1024;
  * number of changes regardless of what a client sends. */
 const MAX_CHANGES_PER_REQUEST = 500;
 const MAX_SHOP_NAME_CHARS = 120;
-const MAX_RECORD_ID_CHARS = 128;
-const MAX_PHOTO_ID_CHARS = 64;
+/** Record ids are lowercase UUIDs (docs/sme-phase-2-cloud.md "IDs"), the shop's own id, or a setting's
+ * key ("whatsappTemplates", "subscription") — so a conservative URL- and path-safe alphabet covers all
+ * of them and rules out '/', '.', '..', spaces and control characters by construction. */
+const RECORD_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+/** A photo id is the SHA-256 of the JPEG as lowercase hex (server/sync/handler.ts's photo_upload,
+ * server/shared/crypto.ts's sha256Hex) — exactly what the iOS and Android apps hash too. It becomes part
+ * of a Storage object path signed with the service-role key, so nothing else may ever get through. */
+const PHOTO_ID_RE = /^[0-9a-f]{64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INVITE_CODE_RE = /^\d{6}$/;
 
@@ -99,7 +105,7 @@ function validateCreateShop(json: Record<string, unknown>): SyncValidationResult
 function isChangeInput(value: unknown): { ok: true; change: ChangeInput } | { ok: false; error: "invalid_body" | "too_large" } {
   if (!isPlainObject(value)) return { ok: false, error: "invalid_body" };
   if (!isEntity(value.entity)) return { ok: false, error: "invalid_body" };
-  if (!isNonEmptyString(value.id, MAX_RECORD_ID_CHARS)) return { ok: false, error: "invalid_body" };
+  if (typeof value.id !== "string" || !RECORD_ID_RE.test(value.id)) return { ok: false, error: "invalid_body" };
   if (!isPlainObject(value.data)) return { ok: false, error: "invalid_body" };
   if (value.deleted !== undefined && typeof value.deleted !== "boolean") return { ok: false, error: "invalid_body" };
   if (value.baseSeq !== undefined && !isNonNegativeInt(value.baseSeq)) return { ok: false, error: "invalid_body" };
@@ -159,7 +165,7 @@ function validatePhotoUpload(json: Record<string, unknown>): SyncValidationResul
 
 function validatePhotoUrl(json: Record<string, unknown>): SyncValidationResult {
   if (!isUuid(json.shopId)) return invalid();
-  if (!isNonEmptyString(json.photoId, MAX_PHOTO_ID_CHARS)) return invalid();
+  if (typeof json.photoId !== "string" || !PHOTO_ID_RE.test(json.photoId)) return invalid();
   return { ok: true, body: { action: "photo_url", shopId: json.shopId, photoId: json.photoId } };
 }
 

@@ -21,6 +21,7 @@
 // reached only as orderat_app, via server/sync/store.ts.
 
 import { withAppCors } from "../../../server/shared/cors.ts";
+import { photoObjectPath } from "../../../server/shared/storage-path.ts";
 import { createSyncHandler, type GetSignedPhotoUrl, type UploadPhoto } from "../../../server/sync/handler.ts";
 import { orderatEnv as env } from "../_shared/env.ts";
 import { getSqlClient } from "../_shared/db.ts";
@@ -35,7 +36,7 @@ const BUCKET = "orderat-photos";
 const uploadPhoto: UploadPhoto = async ({ shopId, photoId, bytes, mimeType }) => {
   if (!supabaseUrl || !serviceRoleKey) return false;
   try {
-    const res = await fetch(`${supabaseUrl}/storage/v1/object/${BUCKET}/${shopId}/${photoId}.jpg`, {
+    const res = await fetch(`${supabaseUrl}/storage/v1/object/${photoObjectPath(BUCKET, shopId, photoId)}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${serviceRoleKey}`,
@@ -54,7 +55,7 @@ const uploadPhoto: UploadPhoto = async ({ shopId, photoId, bytes, mimeType }) =>
 const getSignedPhotoUrl: GetSignedPhotoUrl = async ({ shopId, photoId, expiresInSeconds }) => {
   if (!supabaseUrl || !serviceRoleKey) return undefined;
   try {
-    const res = await fetch(`${supabaseUrl}/storage/v1/object/sign/${BUCKET}/${shopId}/${photoId}.jpg`, {
+    const res = await fetch(`${supabaseUrl}/storage/v1/object/sign/${photoObjectPath(BUCKET, shopId, photoId)}`, {
       method: "POST",
       headers: { authorization: `Bearer ${serviceRoleKey}`, apikey: serviceRoleKey, "content-type": "application/json" },
       body: JSON.stringify({ expiresIn: expiresInSeconds }),
