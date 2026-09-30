@@ -250,7 +250,7 @@ When it becomes a real constraint, that's the trigger for "Move to a dedicated p
      `gemini-3.1-flash-image` / `gemini-2.5-flash-image`; `GEMINI_API_KEY` above is reused for both
      the text and image models)
    - `SHOP_BASE_URL` (`orderat-shop`, optional — defaults to
-     `https://alishehab01.github.io/orderat/s/?`) and `SHOP_IP_SALT` (optional — falls back to a hash
+     `https://orderatweb.com/s/?`) and `SHOP_IP_SALT` (optional — falls back to a hash
      of the service role key when unset; see `supabase/functions/orderat-shop/index.ts`)
    - `APPLE_AUDIENCES` / `GOOGLE_AUDIENCES` (`orderat-auth`, docs/sme-phase-2-cloud.md — comma lists
      of accepted ID-token `aud` values; `APPLE_AUDIENCES` optional, defaults to `com.ams.orderat`,

@@ -1,9 +1,9 @@
-# Store listing: Orderat 1.0 (App Store) / 1.4.0 (Google Play)
+# Store listing: Orderat 1.0 (App Store) / 1.5.2 (Google Play)
 
 Arabic first, masculine address, for every small business (not only home sellers). Only features
-that ship in this version. No exact prices in the descriptions: the App Store yearly plan is priced
-from Bahrain (VAT-inclusive), so the US store shows $69.99 while Bahrain sees the $79.99-equivalent.
-Each store shows the local price.
+that ship in this version. The App Store descriptions name no exact prices (the store shows the
+local price); the Play descriptions state the USD list prices ($9.99/month, $79.99/year). The
+WhatsApp-share clause is Android-only, so it stays out of the App Store copy.
 
 ## Arabic
 
@@ -28,7 +28,7 @@ Each store shows the local price.
 • طاقة يومية لكل منتج أو لليوم كله، وطاقة خاصة للمناسبات
 
 إدخال الطلب بالذكاء الاصطناعي
-• الصق رسالة العميل أو اختر صورة الشاشة، أو شارك الرسالة من الواتساب إلى اوردرات
+• الصق رسالة العميل أو اختر صورة الشاشة
 • يطلع لك الطلب جاهز: المنتجات والكميات والموعد والملاحظات، وأنت تراجعه وتحفظه
 
 واتساب بلمسة
@@ -43,7 +43,8 @@ Each store shows the local price.
 اختياري، وعلى كيفك
 • الفاتورة الضريبية المبسطة: الرقم الضريبي والنسبة حسب بلدك (البحرين 10%، السعودية 15%، الإمارات وعُمان 5%) مع رمز QR للسعودية
 • المخزون: الكمية تنقص مع كل طلب، وتنبيه قبل ما تخلص
-• نسخة سحابية ومزامنة بين أكثر من جوال، وموظفين بصلاحيات بكود دعوة
+• نسخة سحابية ومزامنة بين أكثر من جوال، وموظفين بصلاحيات بكود دعوة (مع الاشتراك)
+• تطبيق ويب على orderatweb.com/app لتستخدم متجرك من الكمبيوتر (جزء من الاشتراك)
 
 تسويق مشروعك
 • رابط متجر باسمك: عملاؤك يشوفون منتجاتك ويطلبون منه مباشرة
@@ -52,7 +53,12 @@ Each store shows the local price.
 
 بياناتك على جوالك، إلا إذا فعّلت المزامنة السحابية بنفسك. اوردرات ما يدخل حسابات الواتساب أو الإنستقرام حقتك.
 
-متجرك الخاص مجاني: الطلبات والعملاء والمنتجات والمصاريف والتقارير والفواتير، بدون اشتراك. والاشتراك (شهري أو سنوي، مع 7 أيام مجاناً، بالسعر اللي يظهر لك في المتجر) يضيف لك: اسأل اوردرات بلا حدود، استوديو الصور، حملات المناسبات، رابط متجرك، والمزامنة السحابية والموظفين. تقدر تلغي أي وقت.
+متجرك الخاص مجاني: الطلبات والعملاء والمنتجات والمصاريف والتقارير والفواتير، بدون اشتراك. والاشتراك يضيف لك: أسئلة أكثر بكثير كل يوم في اسأل اوردرات (المجاني 3 أسئلة يومياً)، استوديو الصور، حملات المناسبات، رابط متجرك، والمزامنة السحابية وتطبيق الويب والموظفين.
+
+الاشتراك: اوردرات Basic، شهري أو سنوي. تجربة مجانية 7 أيام للمشتركين الجدد، وبعدها يتجدد الاشتراك تلقائياً بالسعر الظاهر لك في المتجر إلا إذا ألغيته قبل نهاية الفترة الحالية بـ 24 ساعة على الأقل. تدير اشتراكك وتلغيه من إعدادات Apple ID في App Store.
+شروط الخدمة: https://orderatweb.com/terms/
+سياسة الخصوصية: https://orderatweb.com/privacy/
+اتفاقية الترخيص القياسية من Apple: https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
 
 عربي وإنجليزي، فاتح وداكن، والعملات الخليجية.
 
@@ -82,7 +88,7 @@ Every order in its place
 • Daily capacity per product or per day, with special capacity for occasions
 
 AI order entry
-• Paste the customer's message, pick a screenshot, or share a message from WhatsApp to Orderat
+• Paste the customer's message or pick a screenshot
 • Get the order filled in: items, quantities, time and notes. You review it and save
 
 One-tap WhatsApp
@@ -97,7 +103,8 @@ Money, clearly
 Optional, your choice
 • Simplified tax invoices: your tax number and your country's rate (Bahrain 10%, Saudi Arabia 15%, UAE and Oman 5%), with the ZATCA QR code for Saudi Arabia
 • Stock: quantities go down with each order, with an alert before you run out
-• Cloud backup and sync across phones, and staff with permissions via an invite code
+• Cloud backup and sync across phones, and staff with permissions via an invite code (with the subscription)
+• A web app at orderatweb.com/app to use your shop from a computer (part of the subscription)
 
 Market your business
 • Your own shop link: customers see your products and order from it
@@ -106,19 +113,45 @@ Market your business
 
 Your data stays on your phone unless you turn on cloud sync yourself. Orderat never logs in to your WhatsApp or Instagram.
 
-Your own shop is free: orders, customers, products, expenses, reports and receipts, with no subscription. The subscription (monthly or yearly, with 7 days free, at the price shown in the store) adds unlimited Ask Orderat, the photo studio, occasion campaigns, your shop link, and cloud sync with staff. Cancel anytime.
+Your own shop is free: orders, customers, products, expenses, reports and receipts, with no subscription. The subscription adds far more Ask Orderat questions every day (free includes 3 a day), the photo studio, occasion campaigns, your shop link, and cloud sync, the web app and staff.
+
+Subscription: Orderat Basic, monthly or yearly. New subscribers get a 7-day free trial, after which the subscription renews automatically at the price shown in the store unless you cancel at least 24 hours before the end of the current period. Manage or cancel it in your Apple ID settings in the App Store.
+Terms of Service: https://orderatweb.com/en/terms/
+Privacy Policy: https://orderatweb.com/en/privacy/
+Apple's standard EULA: https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
 
 Arabic and English, light and dark, and Gulf currencies.
 
 **App Store keywords (100):**
 orders,whatsapp,invoice,vat,stock,small business,shop,sales,profit,expenses,customers,delivery,zatca
 
+## Google Play only
+
+Play adds one bullet under "إدخال الطلب بالذكاء الاصطناعي" / "AI order entry" (the iPhone app has no
+share extension, so it never goes in the App Store copy):
+• أو شارك الرسالة من الواتساب إلى اوردرات مباشرة
+• Or share a message from WhatsApp straight to Orderat
+
+Play replaces the App Store subscription paragraph and links with this one (no EULA link):
+
+Arabic:
+الاشتراك: اوردرات Basic، شهري (9.99 دولار) أو سنوي (79.99 دولار) بالأسعار المرجعية بالدولار الأمريكي، وقد يظهر لك السعر بعملتك المحلية. تجربة مجانية 7 أيام للمشتركين الجدد، وبعدها يتجدد الاشتراك تلقائياً إلا إذا ألغيته قبل نهاية الفترة الحالية بـ 24 ساعة على الأقل. تدير اشتراكك وتلغيه من الاشتراكات في حسابك على Google Play.
+شروط الخدمة: https://orderatweb.com/terms/
+سياسة الخصوصية: https://orderatweb.com/privacy/
+
+English:
+Subscription: Orderat Basic, monthly ($9.99) or yearly ($79.99) at USD list prices; the store may show your local price. New subscribers get a 7-day free trial, after which the subscription renews automatically unless you cancel at least 24 hours before the end of the current period. Manage or cancel it under Subscriptions in your Google Play account.
+Terms of Service: https://orderatweb.com/en/terms/
+Privacy Policy: https://orderatweb.com/en/privacy/
+
 ## Both stores
 
 - Category: Business (App Store secondary: Productivity)
 - Age rating: 4+ / Everyone
-- Support and marketing URL: the website (https://orderat-app.pages.dev until the domain is bought)
-- Privacy policy: https://alishehab01.github.io/orderat/privacy.html
+- Support and marketing URL: https://orderatweb.com (English: https://orderatweb.com/en/)
+- Privacy policy: https://orderatweb.com/privacy/ (English: https://orderatweb.com/en/privacy/)
+- Terms of Service: https://orderatweb.com/terms/ (English: https://orderatweb.com/en/terms/)
+- Apple standard EULA (App Store only): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
 - Contact email: orderat.world@gmail.com
 
 ## App Review notes (App Store)
@@ -126,12 +159,22 @@ orders,whatsapp,invoice,vat,stock,small business,shop,sales,profit,expenses,cust
 The app opens with a sample (demo) shop, so no account is needed to review it. "Start my shop —
 free" (on Today or in Settings) opens the reviewer's own empty shop with no purchase: orders,
 customers, products, expenses, reports and receipts are free. The subscription (Orderat Basic,
-monthly or yearly, 7-day free trial) adds Ask Orderat beyond 3 questions a day, the photo studio,
-campaign details, the shop link, and cloud sync & team; it is offered from Settings and from each of
-those screens. Sign in with Apple is
-only used for the optional "Cloud backup & sync" in Settings; everything else works without it.
-AI features (Ask Orderat, AI order entry, photo studio) call our own server, which uses Google
-Gemini; nothing is stored by them.
+monthly or yearly, 7-day free trial) adds far more Ask Orderat questions a day (free is 3 a day),
+the photo studio, campaign details, the shop link, and cloud sync, the web app & team; it is offered
+from Settings and from each of those screens. The paywall shows links to the Terms of Service and
+the Privacy Policy, and a Restore Purchases button. Sign in with Apple is only used for the optional
+"Cloud backup & sync" in Settings; everything else works without it.
+
+Camera: used only to scan the QR code shown on orderatweb.com/app, to pair the web app with the
+phone (Settings > Open on computer > Scan the code). The code can also be typed instead.
+
+AI: a consent sheet is shown before any text or screenshot is sent to Google Gemini (AI order
+entry, Ask Orderat, photo studio); nothing is sent until the user agrees, and nothing is stored.
+
+Account deletion: Settings > Cloud backup & sync > Delete account (deletes the cloud account and
+the shops it owns). The web app has Settings > Delete my account too.
+
+Language: to switch to English use Shop > Settings > Language > English.
 
 ## App Privacy (App Store) / Data safety (Play)
 
@@ -140,4 +183,5 @@ Gemini; nothing is stored by them.
   the shop's data (orders, customers, products, product photos) are stored to provide sync. Linked to
   the user, used for app functionality only, never for tracking or ads. The seller can delete the
   account and all its data in Settings.
-- AI requests (message text, screenshots, a numbers summary) are processed to answer and not stored.
+- AI requests (message text, screenshots, a numbers summary) are sent to Google Gemini only after
+  the user consents in the app, are processed to answer, and are not stored.
