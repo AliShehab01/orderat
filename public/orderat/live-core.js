@@ -189,6 +189,50 @@
     return changed;
   }
 
+  // Who may move stock for an order: the products permission, or staff who handle orders (orders or
+  // prepare) — the server accepts their product pushes that only add order stock moves
+  // (server/sync/record-access.ts isOrderStockUpdate).
+  const canMoveOrderStock = can => !!(can('products') || can('orders') || can('prepare'));
+
+  // ---------- Leaving a shop, member permissions ----------
+
+  // Before leaving a shop (switching, signing out): sends the last edits while the session is still
+  // valid, then answers whether to go on — yes when nothing is left unsent or the seller agrees to drop
+  // it; no when the seller keeps them, or when the shop was left meanwhile (a 401 signed out).
+  async function flushBeforeLeaving({ flush, stillHere, pending, confirm }) {
+    await flush();
+    if (!stillHere()) return false;
+    return pending() === 0 || !!confirm();
+  }
+
+  // Member permission toggles, serialized per member: each toggle changes a local copy at once, and one
+  // request at a time sends the copy as it is when that request starts, so a quick second toggle can
+  // never send a permission the first one just revoked. A failed request puts the failed key back to the
+  // last value the server accepted. send(userId, permissions) returns a promise.
+  function createPermissionEditor(send) {
+    const members = new Map();
+    function toggle(userId, current, key, value) {
+      let m = members.get(userId);
+      if (!m) { m = { want: Object.assign({}, current), acked: Object.assign({}, current), chain: Promise.resolve(), busy: 0 }; members.set(userId, m); }
+      m.want = Object.assign({}, m.want, { [key]: value });
+      m.busy++;
+      const run = () => {
+        const body = Object.assign({}, m.want);
+        return Promise.resolve().then(() => send(userId, body)).then(
+          () => { m.acked = body; return true; },
+          () => { if (m.want[key] === value) m.want = Object.assign({}, m.want, { [key]: m.acked[key] }); return false; });
+      };
+      const result = m.chain.then(run);
+      m.chain = result.then(() => {}, () => {});
+      return result.then(ok => {
+        const permissions = Object.assign({}, m.want);
+        if (--m.busy === 0) members.delete(userId);
+        return { ok, permissions };
+      });
+    }
+    return { toggle, current: userId => (members.has(userId) ? Object.assign({}, members.get(userId).want) : undefined) };
+  }
+
   // ---------- Order numbers, history, items ----------
 
   // Display numbers (1, 2, 3...) in creation order; never written to the cloud.
@@ -359,6 +403,6 @@
   return {
     subscriptionAllowed, subscriptionActive, aiDemo, callingCode, localDigits, access, formatInvoice, nextInvoice, invoiceLabel,
     vatMinor, defaultRateBps, applyVat, orderMinor, stockForStatus, stockForEdit, orderNumbers, historyLabel,
-    cleanItems, parseProducts, draftFields, buildAskSnapshot,
+    cleanItems, parseProducts, draftFields, buildAskSnapshot, canMoveOrderStock, flushBeforeLeaving, createPermissionEditor,
   };
 });

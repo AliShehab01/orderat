@@ -34,6 +34,7 @@ const Live = (() => {
   let saveTimer = 0, pullTimer = 0, offline = false, lastSynced = null, deferred = false, listening = false;
   let nos = new Map();
   let team = null; // { members, invite, error, loading }
+  let perms = null; // the open shop's member-permission editor (live-core createPermissionEditor)
   const photoUrls = new Map(), photoLoading = new Set();
   const askHistory = [];
 
@@ -328,6 +329,7 @@ const Live = (() => {
     on = false;
     shopId = null;
     team = null;
+    perms = null;
     nos = new Map();
     setOffline(false);
   }
@@ -357,16 +359,23 @@ const Live = (() => {
   }
   // The last edit goes out while the session is still valid; changes that still could not be sent
   // (offline, a server error) are only thrown away if the seller says so.
+  // Sends the open shop's last edits; true when it is fine to leave it (nothing unsent, or the seller
+  // agreed to drop it after the `pendingKey` question). Without an open shop there is nothing to send.
+  function flushShop(pendingKey) {
+    const s = sync;
+    if (!s || !on) return Promise.resolve(true);
+    clearTimeout(saveTimer);
+    saveTimer = 0;
+    return core().flushBeforeLeaving({
+      flush: commit,
+      stillHere: () => sync === s, // not signed out (401) or moved on meanwhile
+      pending: () => s.pending,
+      confirm: () => confirm(t(pendingKey)),
+    });
+  }
   async function signOut() {
     if (!confirm(t('live.signOutConfirm'))) return;
-    const s = sync;
-    if (s && on) {
-      clearTimeout(saveTimer);
-      saveTimer = 0;
-      await commit();
-      if (sync !== s) return; // signed out (401) or left the shop meanwhile
-      if (s.pending > 0 && !confirm(t('live.signOutPending'))) return;
-    }
+    if (!(await flushShop('live.signOutPending'))) return;
     const out = api().signout().catch(() => {});
     signedOut();
     return out;
@@ -484,11 +493,11 @@ const Live = (() => {
   }
   const deducted = s => ['confirmed', 'ready', 'collected'].includes(s);
   function stockForStatus(o, status) {
-    if (S.stockEnabled && can('products')) core().stockForStatus(S.products, o, o.status, status, new Date().toISOString(), newId);
+    if (S.stockEnabled && core().canMoveOrderStock(can)) core().stockForStatus(S.products, o, o.status, status, new Date().toISOString(), newId);
     o.stockApplied = deducted(status);
   }
   function stockForEdit(o, items) {
-    if (S.stockEnabled && deducted(o.status) && can('products')) core().stockForEdit(S.products, o.items, items, o.id, new Date().toISOString(), newId);
+    if (S.stockEnabled && deducted(o.status) && core().canMoveOrderStock(can)) core().stockForEdit(S.products, o.items, items, o.id, new Date().toISOString(), newId);
   }
   function stockCorrection(p, qty) {
     const delta = Math.round(qty) - Math.round(p.qty || 0);
@@ -739,7 +748,7 @@ const Live = (() => {
     const rows = team.loading ? empty(t('team.loading')) : team.error ? empty(t('team.error')) : team.members.map(m => {
       const who = m.email || m.name || m.userId;
       if (m.role === 'owner') return `<div class="split"><span class="row-main"><b><bdi dir="ltr">${esc(who)}</bdi></b></span>${badge('brand', t('cloud.team.owner'))}</div>`;
-      const p = m.permissions || {};
+      const p = (perms && perms.current(m.userId)) || m.permissions || {};
       return `<div class="member"><div class="split"><b><bdi dir="ltr">${esc(who)}</bdi></b><button class="link-btn danger small" data-act="live-remove-member" data-id="${esc(m.userId)}">${esc(t('cloud.team.remove'))}</button></div><div class="perm-grid">${perms.map(k => `<label class="check"><input type="checkbox" data-live="live-perm" data-id="${esc(m.userId)}" data-k="${k}"${p[k] ? ' checked' : ''}><span>${esc(t('cloud.permission.' + k))}</span></label>`).join('')}</div></div>`;
     }).join('');
     return { title: t('cloud.team'), back: 'shop/settings', body: `<div class="stack">${invite}<section class="card stack-sm"><h3 class="card-title">${esc(t('cloud.team.members'))}</h3>${rows}</section></div>` };
@@ -761,7 +770,7 @@ const Live = (() => {
     'live-back-start'() { info = {}; screen = 'start'; render(); },
     'live-account'() { openAccount(); },
     'live-open-shop'(el) { openShop(el.dataset.id); },
-    'live-switch'() { openAccount({ choose: true }); },
+    async 'live-switch'() { if (await flushShop('live.switchPending')) openAccount({ choose: true }); },
     'live-retry'() { if (typeof info.retry === 'function') info.retry(); else openAccount(); },
     'live-sign-out': signOut,
     'live-delete-account': deleteAccount,
@@ -787,8 +796,14 @@ const Live = (() => {
     'live-perm'(el) {
       const m = team && team.members.find(x => x.userId === el.dataset.id);
       if (!m) return;
-      const next = Object.assign({}, m.permissions, { [el.dataset.k]: el.checked });
-      api().membersUpdate(shopId, m.userId, next).then(() => { m.permissions = next; }, () => { el.checked = !el.checked; toast(t('live.serverError')); });
+      const forShop = shopId;
+      if (!perms) perms = core().createPermissionEditor((userId, next) => api().membersUpdate(forShop, userId, next));
+      perms.toggle(m.userId, m.permissions || {}, el.dataset.k, el.checked).then(({ ok, permissions }) => {
+        if (shopId !== forShop) return;
+        const now = team && team.members.find(x => x.userId === m.userId);
+        if (now) now.permissions = permissions;
+        if (!ok) { toast(t('live.serverError')); render(); }
+      });
     },
     'live-photo'(el) {
       const f = el.files && el.files[0];

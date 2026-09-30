@@ -520,6 +520,7 @@ const I18N = {
   'live.offline': ['Offline. Your changes stay here and sync when you reconnect.', 'غير متصل. تعديلاتك محفوظة هنا وبتتزامن أول ما يرجع الاتصال.'],
   'live.signOutConfirm': ['Sign out of Orderat on this browser?', 'تسجيل الخروج من اوردرات على هذا المتصفح؟'],
   'live.signOutPending': ["Some changes haven't reached the cloud yet (you may be offline). Sign out anyway and lose them?", 'في تعديلات ما وصلت للسحابة للحين (يمكن الاتصال مقطوع). تبي تسجل خروج وتضيع هالتعديلات؟', 'في تعديلات ما وصلت للسحابة للحين (يمكن الاتصال مقطوع). تبين تسجلين خروج وتضيع هالتعديلات؟'],
+  'live.switchPending': ["Some changes haven't reached the cloud yet (you may be offline). Switch shops anyway and lose them?", 'في تعديلات ما وصلت للسحابة للحين (يمكن الاتصال مقطوع). تبي تبدّل المتجر وتضيع هالتعديلات؟', 'في تعديلات ما وصلت للسحابة للحين (يمكن الاتصال مقطوع). تبين تبدّلين المتجر وتضيع هالتعديلات؟'],
   'live.subscribeInApp': ['Subscribe in the Orderat app', 'اشترك من تطبيق اوردرات', 'اشتركي من تطبيق اوردرات'],
   'live.subscribeBody': ['The subscription is managed in the Orderat app on your phone, through the App Store or Google Play.', 'الاشتراك يُدار من تطبيق اوردرات على جوالك، عن طريق App Store أو Google Play.'],
   'live.deleteAccount': ['Delete my account', 'حذف حسابي', 'حذف حسابي'],

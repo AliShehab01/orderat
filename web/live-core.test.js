@@ -2,7 +2,7 @@
 // invoice numbers, VAT and stock like the phones, the Ask Orderat snapshot, order numbers, history
 // labels, item ids, the AI order-entry draft).
 import { createRequire } from 'node:module';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 process.env.TZ = 'Asia/Bahrain';
 
@@ -337,5 +337,88 @@ describe('Ask Orderat snapshot', () => {
     const s = state();
     s.orders[1].status = 'new';
     expect(core.buildAskSnapshot(s, { now: NOW, lang: 'en' }).snapshot.upcoming[0].status).toBe('newOrder');
+  });
+});
+
+describe('leaving a shop', () => {
+  const guard = (over = {}) => core.flushBeforeLeaving(Object.assign({ flush: async () => true, stillHere: () => true, pending: () => 0, confirm: () => false }, over));
+
+  it('sends the last edits first, and goes on when nothing is left unsent', async () => {
+    const order = [];
+    await expect(guard({ flush: async () => { order.push('flush'); }, pending: () => { order.push('pending'); return 0; } })).resolves.toBe(true);
+    expect(order).toEqual(['flush', 'pending']);
+  });
+
+  it('asks before dropping unsent changes, and stays when the seller says no', async () => {
+    const confirm = vi.fn(() => false);
+    await expect(guard({ pending: () => 2, confirm })).resolves.toBe(false);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    await expect(guard({ pending: () => 2, confirm: () => true })).resolves.toBe(true);
+  });
+
+  it('does not go on when the shop was left meanwhile (signed out while sending)', async () => {
+    await expect(guard({ stillHere: () => false, confirm: () => true })).resolves.toBe(false);
+  });
+});
+
+describe('member permission editor', () => {
+  function deferredSend() {
+    const calls = [];
+    const send = vi.fn((userId, body) => new Promise((resolve, reject) => calls.push({ userId, body, resolve, reject })));
+    return { send, calls };
+  }
+  const start = { orders: true, prepare: false, money: true, products: false };
+
+  it('two quick toggles never send back a permission the first one revoked', async () => {
+    const { send, calls } = deferredSend();
+    const ed = core.createPermissionEditor(send);
+    const first = ed.toggle('u1', start, 'orders', false);
+    const second = ed.toggle('u1', start, 'money', false); // before the first answer
+    expect(ed.current('u1')).toEqual({ orders: false, prepare: false, money: false, products: false });
+    await Promise.resolve(); await Promise.resolve();
+    expect(calls).toHaveLength(1); // one request at a time per member
+    expect(calls[0].body).toMatchObject({ orders: false });
+    calls[0].resolve();
+    await first;
+    await Promise.resolve(); await Promise.resolve();
+    expect(calls).toHaveLength(2);
+    expect(calls[1].body).toEqual({ orders: false, prepare: false, money: false, products: false });
+    calls[1].resolve();
+    await expect(second).resolves.toEqual({ ok: true, permissions: { orders: false, prepare: false, money: false, products: false } });
+    expect(ed.current('u1')).toBeUndefined(); // idle again: the next toggle starts from the member's row
+  });
+
+  it('a failed request puts only its own key back, and the next request does not carry it', async () => {
+    const { send, calls } = deferredSend();
+    const ed = core.createPermissionEditor(send);
+    const first = ed.toggle('u1', start, 'orders', false);
+    const second = ed.toggle('u1', start, 'products', true);
+    await Promise.resolve(); await Promise.resolve();
+    calls[0].reject(new Error('offline'));
+    await expect(first).resolves.toMatchObject({ ok: false });
+    await Promise.resolve(); await Promise.resolve();
+    expect(calls[1].body).toEqual({ orders: true, prepare: false, money: true, products: true });
+    calls[1].resolve();
+    await expect(second).resolves.toEqual({ ok: true, permissions: { orders: true, prepare: false, money: true, products: true } });
+  });
+
+  it('keeps members apart', async () => {
+    const { send, calls } = deferredSend();
+    const ed = core.createPermissionEditor(send);
+    ed.toggle('u1', start, 'orders', false);
+    ed.toggle('u2', start, 'money', false);
+    await Promise.resolve(); await Promise.resolve();
+    expect(calls.map(c => [c.userId, c.body.orders, c.body.money])).toEqual([['u1', false, true], ['u2', true, false]]);
+  });
+});
+
+describe('who may move stock for an order', () => {
+  const can = granted => k => granted.includes(k);
+  it('products, or staff who handle orders (orders or prepare)', () => {
+    expect(core.canMoveOrderStock(can(['products']))).toBe(true);
+    expect(core.canMoveOrderStock(can(['orders']))).toBe(true);
+    expect(core.canMoveOrderStock(can(['prepare']))).toBe(true);
+    expect(core.canMoveOrderStock(can(['money']))).toBe(false);
+    expect(core.canMoveOrderStock(can([]))).toBe(false);
   });
 });
