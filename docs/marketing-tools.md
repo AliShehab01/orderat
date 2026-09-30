@@ -223,11 +223,15 @@ the base so it can move to a custom domain later).
       "description": "علبة 6 حبات",
       "priceMinor": 4500,
       "photoUrl": "https://.../orderat-shop/<shopId>/<photoId>.jpg",
-      "available": true
+      "available": true,
+      "soldOut": false
     }
   ]
 }
 ```
+`soldOut` (optional in a publish, default false, always a boolean in the public document): the
+seller tracks the product's stock and it is at 0 or below. The phones send only the flag, never the
+quantity, and re-publish when it flips. The page shows the product greyed with a "Sold out" badge.
 Limits: 60 items, name 60 chars, description 200, bio 300, each photo at most 400 KB (the apps
 resize to 1080 px, JPEG 0.8). `delivery`: `pickup` | `delivery` | `pickup_and_delivery`.
 
@@ -289,7 +293,8 @@ Publish rules:
 
 Order rules (from the page):
 - Prices come from the server's copy of the shop, never from the page. Unknown or unavailable
-  item ids → 400. Quantities 1-99, at most 30 lines.
+  item ids → 400. Lines for sold-out products → 409 `{ "error": "sold_out", "productIds": [...] }`
+  and nothing is stored. Quantities 1-99, at most 30 lines.
 - `customer.name` 1-60 chars; `customer.phone` 8-15 digits (a leading + is allowed);
   `pickupDate` today (Asia/Riyadh) + `leadTimeDays` or later, and within 60 days; notes at most
   300 chars; `address` at most 200 chars and only when `fulfillment` is `delivery`.

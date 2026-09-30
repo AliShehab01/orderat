@@ -30,7 +30,10 @@ export interface OrderDoc {
   paymentMethod?: string;
 }
 
-export type ResolveOrderResult = { ok: true; doc: OrderDoc } | { ok: false; error: "invalid_body" };
+export type ResolveOrderResult =
+  | { ok: true; doc: OrderDoc }
+  | { ok: false; error: "invalid_body" }
+  | { ok: false; error: "sold_out"; productIds: string[] };
 
 /**
  * Resolves each requested `{id, qty}` line against the shop's own stored items — an id that doesn't
@@ -43,13 +46,20 @@ export type ResolveOrderResult = { ok: true; doc: OrderDoc } | { ok: false; erro
 export function resolveOrderDoc(shopDoc: ShopDocPublic, body: OrderBody, paymentMethods: readonly PaymentMethod[] = []): ResolveOrderResult {
   const byId = new Map(shopDoc.items.map((item) => [item.id, item]));
   const lines: OrderLine[] = [];
+  const soldOut: string[] = [];
   let totalMinor = 0;
   for (const { id, qty } of body.items) {
     const item = byId.get(id);
     if (!item || !item.available) return { ok: false, error: "invalid_body" };
+    if (item.soldOut === true) {
+      if (!soldOut.includes(id)) soldOut.push(id);
+      continue;
+    }
     lines.push({ id, name: shopDoc.lang === "ar" ? item.name.ar : item.name.en, qty, priceMinor: item.priceMinor });
     totalMinor += item.priceMinor * qty;
   }
+  // Every sold-out line is named, so the page can take them all out of the cart at once.
+  if (soldOut.length) return { ok: false, error: "sold_out", productIds: soldOut };
   return {
     ok: true,
     doc: {

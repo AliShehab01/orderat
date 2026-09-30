@@ -102,7 +102,9 @@ export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Prom
     const { ibanName: _dropped, iban: storedIban, ...doc } = shop.doc;
     void _dropped;
     const iban = shop.paymentMethods.length ? legacyIbanOf(shop.paymentMethods) : storedIban;
-    return { ...doc, ...(iban ? { iban } : {}), paymentMethods: shop.paymentMethods, url: shopUrl(shop.slug) };
+    // A document stored before soldOut existed serves every item as not sold out.
+    const items = (doc.items ?? []).map((item) => ({ ...item, soldOut: item.soldOut === true }));
+    return { ...doc, items, ...(iban ? { iban } : {}), paymentMethods: shop.paymentMethods, url: shopUrl(shop.slug) };
   }
 
   async function handlePublicGet(url: URL): Promise<Response> {
@@ -234,6 +236,10 @@ export function createShopHandler(deps: ShopHandlerDeps): (req: Request) => Prom
     }
 
     const resolved = resolveOrderDoc(shop.doc, body, shop.paymentMethods);
+    if (!resolved.ok && resolved.error === "sold_out") {
+      log({ event: "shop_order", status: 409, reason: "sold_out" });
+      return jsonResponse({ error: "sold_out", productIds: resolved.productIds }, 409);
+    }
     if (!resolved.ok) {
       log({ event: "shop_order", status: 400, reason: "bad_items" });
       return invalidBodyResponse();

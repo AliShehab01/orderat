@@ -41,6 +41,9 @@ export interface ShopItemRequest {
   priceMinor: number;
   photoId?: string;
   available: boolean;
+  /** The seller tracks this product's stock and it is at 0 or below (the phones send it; never the
+   * quantity itself). Optional in a publish body, stored as a boolean (default false). */
+  soldOut?: boolean;
 }
 
 export interface ShopDocRequest {
@@ -75,6 +78,9 @@ export interface ShopItemPublic {
   priceMinor: number;
   photoUrl?: string;
   available: boolean;
+  /** Shown with a "Sold out" badge and cannot be ordered. Missing on documents stored before
+   * 1 Oct 2026, which the public GET serves as false; resolveShopDoc always sets it. */
+  soldOut?: boolean;
 }
 
 /** The exact shape docs/marketing-tools.md's "Public shop document" shows — what's stored in
@@ -170,9 +176,10 @@ function validateItem(raw: unknown): ShopItemRequest | undefined {
   if (!isNonNegativeInteger(o.priceMinor)) return undefined;
   if (o.photoId !== undefined && !isPhotoIdFormat(o.photoId)) return undefined;
   if (typeof o.available !== "boolean") return undefined;
+  if (o.soldOut !== undefined && typeof o.soldOut !== "boolean") return undefined;
   return {
     id: o.id, name: o.name, description: o.description as string | undefined, priceMinor: o.priceMinor,
-    photoId: o.photoId as string | undefined, available: o.available,
+    photoId: o.photoId as string | undefined, available: o.available, soldOut: o.soldOut === true,
   };
 }
 
@@ -264,6 +271,7 @@ export function resolveShopDoc(doc: ShopDocRequest, slug: string, photoUrls: Rea
       priceMinor: item.priceMinor,
       photoUrl: item.photoId ? photoUrls.get(item.photoId) : undefined,
       available: item.available,
+      soldOut: item.soldOut === true,
     })),
   };
 }

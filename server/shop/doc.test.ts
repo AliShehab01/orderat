@@ -176,6 +176,20 @@ describe("validateShopDoc", () => {
     expect(validateShopDoc(validDoc({ items }))).toBeUndefined();
   });
 
+  it("accepts soldOut per item, stores it as a boolean (false when left out), rejects a non-boolean", () => {
+    const items = [
+      { id: "p1", name: { ar: "ع", en: "N" }, priceMinor: 100, available: true, soldOut: true },
+      { id: "p2", name: { ar: "ع", en: "M" }, priceMinor: 100, available: true },
+      { id: "p3", name: { ar: "ع", en: "O" }, priceMinor: 100, available: true, soldOut: false },
+    ];
+    const result = validateShopDoc(validDoc({ items }));
+    expect(result?.items.map((it) => it.soldOut)).toEqual([true, false, false]);
+    expect(resolveShopDoc(result as ShopDocRequest, "sweetstudio", new Map()).items.map((it) => it.soldOut)).toEqual([true, false, false]);
+    for (const bad of ["true", 1, null]) {
+      expect(validateShopDoc(validDoc({ items: [{ id: "p1", name: { ar: "ع", en: "N" }, priceMinor: 100, available: true, soldOut: bad }] }))).toBeUndefined();
+    }
+  });
+
   it("accepts a valid photoId and logoId (64 hex chars)", () => {
     const items = [{ id: "p1", name: { ar: "ع", en: "N" }, priceMinor: 100, available: true, photoId: PHOTO_ID_A }];
     const result = validateShopDoc(validDoc({ items, logoId: PHOTO_ID_B }));

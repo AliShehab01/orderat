@@ -3,6 +3,7 @@ import type { SqlClient } from "../agent/postgres-store.ts";
 import { createMarketingTestSql } from "../marketing-pglite-test-support.ts";
 import { sha256Hex } from "../shared/crypto";
 import { createShopHandler, type ShopHandlerDeps, type UploadPhoto } from "./handler";
+import { createShop } from "./store";
 
 let sql: SqlClient;
 
@@ -424,6 +425,40 @@ describe("createShopHandler / order validation", () => {
     await publishedShop(handler, { items: [{ id: "p1", name: { ar: "ع", en: "Item" }, priceMinor: 100, available: false }] });
     const res = await handler(orderReq());
     expect(res.status).toBe(400);
+  });
+
+  it("refuses sold-out lines with 409 sold_out and the product ids, and stores nothing", async () => {
+    const { handler } = makeHandler();
+    const { json } = await publishedShop(handler, {
+      items: [
+        { id: "p1", name: { ar: "ع", en: "Item" }, priceMinor: 100, available: true },
+        { id: "p2", name: { ar: "ك", en: "Cookies" }, priceMinor: 300, available: true, soldOut: true },
+      ],
+    });
+    const res = await handler(orderReq({ items: [{ id: "p1", qty: 1 }, { id: "p2", qty: 2 }] }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "sold_out", productIds: ["p2"] });
+    const inbox = await (await handler(req({ action: "inbox", token: json.token }))).json() as { orders: unknown[] };
+    expect(inbox.orders).toHaveLength(0);
+    expect((await handler(orderReq({ items: [{ id: "p1", qty: 1 }] }))).status).toBe(200);
+  });
+
+  it("serves soldOut on every item of the public shop (false when the seller never sent it)", async () => {
+    const { handler } = makeHandler();
+    await publishedShop(handler, {
+      items: [
+        { id: "p1", name: { ar: "ع", en: "Item" }, priceMinor: 100, available: true },
+        { id: "p2", name: { ar: "ك", en: "Cookies" }, priceMinor: 300, available: true, soldOut: true },
+      ],
+    });
+    const shop = await (await handler(getReq("?slug=sweetstudio"))).json() as { items: { id: string; soldOut: boolean }[] };
+    expect(shop.items.map((it) => [it.id, it.soldOut])).toEqual([["p1", false], ["p2", true]]);
+
+    // A document stored before soldOut existed: every item reads as not sold out.
+    const old = { slug: "oldshop", ...shopDoc(), whatsapp: "97333334444" };
+    await createShop(sql, { id: "22222222-2222-2222-2222-222222222222", slug: "oldshop", tokenHash: "h", installId: "i", doc: old as never, day: "2026-09-20" });
+    const oldShop = await (await handler(getReq("?slug=oldshop"))).json() as { items: { soldOut: boolean }[] };
+    expect(oldShop.items.map((it) => it.soldOut)).toEqual([false]);
   });
 
   it("rejects a pickupDate earlier than today + leadTimeDays", async () => {

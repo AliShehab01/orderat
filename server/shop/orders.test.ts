@@ -77,6 +77,24 @@ describe("resolveOrderDoc", () => {
     expect(resolveOrderDoc(SHOP_DOC, orderBody({ items: [{ id: "p2", qty: 1 }] }))).toEqual({ ok: false, error: "invalid_body" });
   });
 
+  it("refuses sold-out products with sold_out, naming each one once", () => {
+    const doc: ShopDocPublic = {
+      ...SHOP_DOC,
+      items: [
+        ...SHOP_DOC.items,
+        { id: "p3", name: { ar: "كوكيز", en: "Cookies" }, priceMinor: 3000, available: true, soldOut: true },
+        { id: "p4", name: { ar: "براونيز", en: "Brownies" }, priceMinor: 2500, available: true, soldOut: true },
+      ],
+    };
+    expect(resolveOrderDoc(doc, orderBody({ items: [{ id: "p1", qty: 1 }, { id: "p3", qty: 2 }, { id: "p4", qty: 1 }, { id: "p3", qty: 1 }] })))
+      .toEqual({ ok: false, error: "sold_out", productIds: ["p3", "p4"] });
+    // An unknown or unavailable line is still a plain invalid_body, whatever else is sold out.
+    expect(resolveOrderDoc(doc, orderBody({ items: [{ id: "p3", qty: 1 }, { id: "p2", qty: 1 }] }))).toEqual({ ok: false, error: "invalid_body" });
+    // soldOut false (or missing, on a document stored before it existed) orders normally.
+    const open = { ...doc, items: doc.items.map((it) => ({ ...it, soldOut: false })) };
+    expect(resolveOrderDoc(open, orderBody({ items: [{ id: "p3", qty: 2 }] })).ok).toBe(true);
+  });
+
   it("sums multiple lines correctly", () => {
     const result = resolveOrderDoc(SHOP_DOC, orderBody({ items: [{ id: "p1", qty: 3 }] }));
     expect(result.ok && result.doc.totalMinor).toBe(13500);
