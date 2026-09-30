@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STAFF_PERMISSIONS, type Member } from "./permissions.ts";
-import { canPull, decidePush } from "./record-access.ts";
+import { canPull, decidePush, isOrderStockUpdate } from "./record-access.ts";
 
 const owner: Member = { role: "owner", permissions: DEFAULT_STAFF_PERMISSIONS }; // Deliberately empty permissions: role alone should be enough.
 const noPerms: Member = { role: "staff", permissions: DEFAULT_STAFF_PERMISSIONS };
@@ -35,6 +35,58 @@ describe("decidePush / product (products)", () => {
 
   it("allows an owner regardless of their own permissions object", () => {
     expect(decidePush(owner, "product", "r1", { name: "Cake" }, false, undefined).allowed).toBe(true);
+  });
+});
+
+// Staff who confirm or cancel orders without the products permission still move stock (review finding
+// 3): a product push that only adds order-driven stock moves and moves the quantity by their sum.
+describe("decidePush / product stock from staff handling orders", () => {
+  const oldMove = { id: "m0", delta: 5, reason: "received", orderId: null, note: null, at: "2026-09-29T10:00:00.000Z" };
+  const stored = { nameAr: "كيك", nameEn: null, priceMinor: 5000, trackStock: true, stockQuantity: 10, lowStockThreshold: 3, stockMoves: [oldMove], createdAt: "2026-09-01T00:00:00.000Z" };
+  const confirm = (orderId = "o1") => ({ id: "m1", delta: -2, reason: "orderConfirmed", orderId, note: null, at: "2026-09-30T10:00:00.000Z" });
+  const pushed = (overrides: Record<string, unknown> = {}) => ({ ...stored, stockQuantity: 8, stockMoves: [confirm(), oldMove], ...overrides });
+
+  it("lets staff with orders or prepare push an order's stock change to an existing product", () => {
+    for (const member of [withOrders, withPrepare]) {
+      expect(decidePush(member, "product", "p1", pushed(), false, stored)).toEqual({ allowed: true, data: pushed() });
+    }
+  });
+
+  it("accepts a cancellation that puts stock back, and clients that spell nulls or dates differently", () => {
+    const back = { id: "m2", delta: 2, reason: "orderCancelled", orderId: "o1", note: null, at: "2026-09-30T11:00:00.000Z" };
+    const { nameEn: _omit, ...withoutNameEn } = stored;
+    void _omit;
+    const incoming = { ...withoutNameEn, createdAt: "2026-09-01T00:00:00Z", stockQuantity: 12, stockMoves: [back, oldMove], updatedAt: "2026-09-30T11:00:00.000Z" };
+    expect(isOrderStockUpdate(stored, incoming)).toBe(true);
+  });
+
+  it("still rejects staff without orders or prepare, a new product and a deletion", () => {
+    expect(decidePush(noPerms, "product", "p1", pushed(), false, stored)).toEqual({ allowed: false, reason: "forbidden" });
+    expect(decidePush(withMoney, "product", "p1", pushed(), false, stored)).toEqual({ allowed: false, reason: "forbidden" });
+    expect(decidePush(withOrders, "product", "p1", pushed(), false, undefined)).toEqual({ allowed: false, reason: "forbidden" });
+    expect(decidePush(withOrders, "product", "p1", pushed(), true, stored)).toEqual({ allowed: false, reason: "forbidden" });
+  });
+
+  it("rejects any change beyond stock: price, name, tracking", () => {
+    for (const change of [{ priceMinor: 1 }, { nameAr: "x" }, { trackStock: false }, { lowStockThreshold: 0 }]) {
+      expect(decidePush(withOrders, "product", "p1", pushed(change), false, stored)).toEqual({ allowed: false, reason: "forbidden" });
+    }
+  });
+
+  it("rejects a quantity that does not match the new moves, and manual reasons", () => {
+    expect(isOrderStockUpdate(stored, pushed({ stockQuantity: 100 }))).toBe(false);
+    expect(isOrderStockUpdate(stored, { ...stored, stockQuantity: 100 })).toBe(false);
+    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [{ ...confirm(), reason: "correction" }, oldMove] }))).toBe(false);
+    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [{ ...confirm(), orderId: null }, oldMove] }))).toBe(false);
+    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [{ ...confirm(), delta: -2.5 }, oldMove], stockQuantity: 7.5 }))).toBe(false);
+  });
+
+  it("rejects rewriting or dropping stored moves (unless the list is full)", () => {
+    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [confirm(), { ...oldMove, delta: 50 }] }))).toBe(false);
+    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [confirm()] }))).toBe(false);
+    const full = Array.from({ length: 50 }, (_, i) => ({ ...oldMove, id: `h${i}`, delta: 1 }));
+    const fullStored = { ...stored, stockMoves: full };
+    expect(isOrderStockUpdate(fullStored, { ...fullStored, stockQuantity: 8, stockMoves: [confirm(), ...full.slice(0, 49)] })).toBe(true);
   });
 });
 

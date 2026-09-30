@@ -74,7 +74,7 @@ Cloud sync stays **optional**: a seller can keep using the app offline-only, as 
 
 **Permissions.**
 - Staff without `money` never receive `expense` records, and their pushes of them are rejected.
-- Staff without `products` cannot push `product` changes.
+- Staff without `products` cannot push `product` changes. One exception keeps stock right when staff handle orders: staff with `orders` or `prepare` may push an existing product when, next to the stored copy, only `stockQuantity` (or `qty`), `stockMoves` and `updatedAt` changed, the stored moves are kept unchanged (dropped only off the end of a full 50-move list), every new move has an order-driven reason (`orderConfirmed`, `orderCancelled`, `orderEdited`) and an `orderId`, and the quantity moved by exactly the new moves' deltas (server/sync/record-access.ts `isOrderStockUpdate`).
 - `prepare`-only staff can change only an order's `status`. The server copies the rest of the order from the stored record.
 
 **First sign-in on a phone with existing local data.**
