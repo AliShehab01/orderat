@@ -229,6 +229,8 @@ const payBadge = s => badge(PAY_TONE[s], t('payment.status.' + s));
 const sourceTag = s => `<span class="src src-${esc(s)}" title="${esc(t('source.' + s))}">${icon(s)}</span>`;
 const empty = msg => `<p class="empty">${esc(msg)}</p>`;
 const kpi = (v, label, tone = '', delta = null) => `<div class="kpi${tone ? ' ' + tone : ''}"><b class="kpi-v">${esc(v)}</b><span class="kpi-l">${esc(label)}</span>${delta === null ? '' : `<span class="delta ${delta >= 0 ? 'up' : 'down'}" dir="ltr">${delta >= 0 ? '+' : ''}${delta}%</span>`}</div>`;
+// A KPI that opens the list behind it.
+const kpiLink = (act, v, label, tone = '') => `<button class="kpi kpi-link${tone ? ' ' + tone : ''}" data-act="${act}"><b class="kpi-v">${esc(v)}</b><span class="kpi-l">${esc(label)}</span></button>`;
 const addBtn = (act, label) => `<button class="icon-btn" data-act="${act}" aria-label="${esc(label)}">${icon('plus')}</button>`;
 const navRow = (href, ic, label, meta = '') => `<a class="row" href="#/${href}"><span class="row-ic">${icon(ic)}</span><span class="row-main"><b>${esc(label)}</b></span>${meta ? `<span class="muted small">${esc(meta)}</span>` : ''}${icon('chev', 'chev')}</a>`;
 const toggle = (name, label, on, live = '') => `<label class="switch-row"><span>${esc(label)}</span><input type="checkbox" role="switch" name="${name}"${on ? ' checked' : ''}${live ? ` data-live="${live}"` : ''}><i class="switch" aria-hidden="true"></i></label>`;
@@ -416,7 +418,7 @@ function viewToday() {
     camp ? campaignCard(camp) : '',
     webOrdersCard(),
     S.isDemo ? `<div class="card demo-banner"><p>${esc(t('today.demoHint', TRIAL_DAYS))}</p><button class="btn primary small" data-act="paywall">${esc(t('today.demoCta'))}</button></div>` : '',
-    `<div class="kpis ${can('money') ? 'three' : 'two'}">${kpi(todays.length, t('today.orders'))}${kpi(toPrepare, t('today.toPrepare'))}${can('money') ? kpi(money(unpaid), t('today.unpaid'), unpaid > 0 ? 'bad' : '') : ''}</div>`,
+    `<div class="kpis ${can('money') ? 'three' : 'two'}">${kpi(todays.length, t('today.orders'))}${kpi(toPrepare, t('today.toPrepare'))}${can('money') ? kpiLink('show-unpaid', money(unpaid), t('today.unpaid'), unpaid > 0 ? 'bad' : '') : ''}</div>`,
     S.shop.dailyCapacity ? capacityCard(sum(todays, qtyOf), S.shop.dailyCapacity) : '',
     low.length ? `<section class="card"><h3 class="card-title warn-text">${icon('alert')} ${esc(t('today.lowStock'))}</h3>${low.map(p => `<a class="row" href="#/shop/menu"><span class="row-main"><b>${esc(pName(p))}</b></span>${badge(p.qty <= 0 ? 'bad' : 'warn', t('stock.qtyBadge', p.qty))}</a>`).join('')}</section>` : '',
     overdue.length ? `<section class="card overdue-card"><h3 class="card-title bad-text">${icon('alert')} ${esc(t('orders.overdue'))}</h3><div class="list">${overdue.map(o => orderRow(o, true)).join('')}</div></section>` : '',
@@ -493,12 +495,13 @@ function viewOrders(rest) {
   if (rest[0]) return viewOrder(rest[0]);
   const chip = (v, label) => `<button class="chip${ordersFilter === v ? ' on' : ''}" data-act="orders-filter" data-v="${esc(v)}"${ordersFilter === v ? ' aria-pressed="true"' : ''}>${esc(label)}</button>`;
   const more = ordersMore || STATUSES.includes(ordersFilter);
+  const who = ordersCustomer && S.customers.find(c => c.id === ordersCustomer);
   const chips = ORDER_FILTERS.map(f => chip(f, t('orders.f' + f[0].toUpperCase() + f.slice(1)))).join('')
     + (more ? STATUSES.map(st => chip(st, t('order.status.' + st))).join('') : `<button class="chip" data-act="orders-more">${esc(t('orders.more'))}</button>`);
   return {
     title: t('tab.orders'),
     actions: can('orders') ? `<a class="icon-btn" href="#/new" aria-label="${esc(t('tab.new'))}">${icon('plus')}</a>` : '',
-    body: `<label class="search">${icon('search')}<input type="search" data-live="orders-q" value="${esc(ordersQuery)}" placeholder="${esc(t('common.search'))}" aria-label="${esc(t('common.search'))}"></label><div class="chips">${chips}</div><div id="orders-list">${ordersListHtml()}</div>`,
+    body: `<label class="search">${icon('search')}<input type="search" data-live="orders-q" value="${esc(ordersQuery)}" placeholder="${esc(t('common.search'))}" aria-label="${esc(t('common.search'))}"></label><div class="chips">${chips}</div>${who ? `<div class="chips"><button class="chip on" data-act="orders-customer-clear" aria-label="${esc(t('common.close'))}">${esc(cName(who))} ${icon('x')}</button></div>` : ''}<div id="orders-list">${ordersListHtml()}</div>`,
   };
 }
 function ordersListHtml() {
@@ -909,7 +912,7 @@ function viewMoney() {
   const counts = new Map();
   cur.os.forEach(o => counts.set(o.customerId, (counts.get(o.customerId) || 0) + 1));
   const repeat = [...counts].filter(([, k]) => k > 1).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const owes = debtors().slice(0, 6);
+  const owes = debtors();
   const expenses = S.expenses.filter(x => inRange(x.date, start, end)).sort((a, b) => b.date.localeCompare(a.date));
   const body = `<div class="stack">
     <div class="chips">${chips}</div>
@@ -920,7 +923,7 @@ function viewMoney() {
       <section class="card"><h3 class="card-title">${esc(t('money.topProducts'))}</h3>${top.length ? top.map(x => `<div class="line"><span>${esc(x.name)}</span><b dir="ltr">×${x.qty}</b></div>`).join('') : empty(t('money.noSales'))}</section>
       <section class="card"><h3 class="card-title">${esc(t('money.repeatCustomers'))}</h3>${repeat.length ? repeat.map(([id, k]) => `<div class="line"><span>${esc(cName(S.customers.find(c => c.id === id)))}</span><span class="muted">${esc(t('shop.orderCount', k))}</span></div>`).join('') : empty(t('money.noRepeat'))}</section>
     </div>
-    <section class="card"><h3 class="card-title">${esc(t('money.whoOwesMe'))}</h3>${owes.length ? owes.map(d => `<div class="line"><span>${esc(cName(d.c))} · <b>${esc(money(d.amount))}</b></span>${d.c.phone ? `<a class="chip small" href="${esc(waLink(d.c.phone, t('whatsapp.message.paymentReminder', firstName(d.c), shopName(), money(d.amount))))}" target="_blank" rel="noopener">${icon('whatsapp')} ${esc(t('money.remind'))}</a>` : ''}</div>`).join('') : empty(t('money.nobodyOwes'))}</section>
+    <section class="card"><h3 class="card-title">${esc(t('money.whoOwesMe'))}</h3>${owes.length ? owes.map(d => `<div class="line"><button class="link-btn owes" data-act="show-unpaid" data-id="${esc(d.c.id)}">${esc(cName(d.c))} · <b>${esc(money(d.amount))}</b></button>${d.c.phone ? `<a class="chip small" href="${esc(waLink(d.c.phone, t('whatsapp.message.paymentReminder', firstName(d.c), shopName(), money(d.amount))))}" target="_blank" rel="noopener">${icon('whatsapp')} ${esc(t('money.remind'))}</a>` : ''}</div>`).join('') : empty(t('money.nobodyOwes'))}</section>
     <section class="card"><div class="split"><h3 class="card-title">${esc(t('money.expenses'))} · ${esc(money(cur.expenses))}</h3><button class="btn ghost small" data-act="add-expense">${icon('plus')} ${esc(t('money.addExpense'))}</button></div>
       ${expenses.length ? `<div class="list">${expenses.map(x => `<button class="row" data-act="edit-expense" data-id="${esc(x.id)}"${can('money') ? '' : ' disabled'}><span class="row-main"><b>${esc(t('expense.category.' + x.category))}</b><small>${esc([text(x.note), fmtShort(new Date(x.date))].filter(Boolean).join(' · '))}</small></span><span>${esc(money(x.amount))}</span>${icon('chev', 'chev')}</button>`).join('')}</div>` : empty(t('money.noExpenses'))}
     </section>
@@ -1493,7 +1496,9 @@ const ACTIONS = {
     save(); render(); toast(t('today.webOrderAdded'));
   },
   'web-dismiss'(el) { S.webOrders = S.webOrders.filter(x => x.id !== el.dataset.id); save(); render(); },
-  'orders-filter'(el) { ordersFilter = el.dataset.v; render(); },
+  'orders-filter'(el) { ordersFilter = el.dataset.v; ordersCustomer = ''; render(); },
+  'show-unpaid'(el) { ordersFilter = 'unpaid'; ordersCustomer = el.dataset.id || ''; ordersQuery = ''; go('orders'); },
+  'orders-customer-clear'() { ordersCustomer = ''; render(); },
   'orders-more'() { ordersMore = true; render(); },
   advance(el) {
     const id = el.dataset.id, o = orderById(id);
