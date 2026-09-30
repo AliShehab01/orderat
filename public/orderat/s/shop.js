@@ -14,6 +14,27 @@
   // Shape-only check (no mod-97): the server (server/shop/doc.ts) already checksums an IBAN before
   // storing it, so this is just defense against a malformed API response.
   var IBAN_RE = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/;
+  // Payment methods (the payment-methods contract; server/shop/payment-methods.ts validates them).
+  // Unknown types from a newer app are not shown.
+  var PHONE_PAY_RE = /^\+\d{8,15}$/;
+  var PAYPAL_RE = /^[A-Za-z0-9]{1,20}$/;
+  var PHONE_PAY_TYPES = ["benefitpay", "stcpay", "urpay", "aani", "wamd", "fawran", "mobile_transfer"];
+  var PAY_NAMES = {
+    bank_transfer: { en: "Bank transfer (IBAN)", ar: "تحويل بنكي (آيبان)" },
+    benefitpay: { en: "BenefitPay", ar: "بنفت باي" },
+    stcpay: { en: "STC Pay", ar: "STC Pay" },
+    urpay: { en: "urpay", ar: "urpay" },
+    aani: { en: "Aani", ar: "آني" },
+    wamd: { en: "WAMD", ar: "ومض" },
+    fawran: { en: "Fawran", ar: "فوران" },
+    mobile_transfer: { en: "Transfer to mobile number", ar: "تحويل لرقم الجوال" },
+    paypal: { en: "PayPal", ar: "PayPal" },
+    payment_link: { en: "Payment link", ar: "رابط دفع" },
+    cash: { en: "Cash on delivery or pickup", ar: "كاش عند التوصيل أو الاستلام" },
+  };
+  // Calling codes the shop page knows how to space ("+973 3333 4444"); any other number keeps its
+  // first three digits together.
+  var CALLING_CODES = ["973", "966", "971", "965", "974", "968"];
   var DECIMALS = { BHD: 3, KWD: 3, OMR: 3, JOD: 3, SAR: 2, AED: 2, QAR: 2, USD: 2 };
   var CURRENCY_AR = { BHD: "د.ب", KWD: "د.ك", OMR: "ر.ع", SAR: "ر.س", AED: "د.إ", QAR: "ر.ق", USD: "$" };
   var MAX_QTY = 99;
@@ -95,10 +116,14 @@
       waDelivery: "توصيل إلى",
       waPickup: "استلام",
       waNotes: "ملاحظات",
-      ibanTitle: "الدفع بالتحويل البنكي",
-      ibanTransferHint: "حوّل {total} على هذا الآيبان وأرسل الإيصال للمتجر على الواتساب.",
-      copyIban: "نسخ الآيبان",
-      ibanCopied: "تم نسخ الآيبان",
+      payTitle: "طريقة الدفع",
+      payPick: "اختر طريقة الدفع",
+      copy: "نسخ",
+      copied: "تم النسخ",
+      openLink: "فتح",
+      payHint: "ادفع {total} عن طريق {method} وأرسل الإيصال للمتجر على الواتساب.",
+      payCashHint: "ادفع {total} كاش عند التوصيل أو الاستلام.",
+      waPayment: "الدفع",
     },
     en: {
       title: "Order online",
@@ -175,10 +200,14 @@
       waDelivery: "Deliver to",
       waPickup: "Pickup",
       waNotes: "Notes",
-      ibanTitle: "Pay by bank transfer",
-      ibanTransferHint: "Transfer {total} to this IBAN and send the receipt to the shop on WhatsApp.",
-      copyIban: "Copy IBAN",
-      ibanCopied: "IBAN copied",
+      payTitle: "How to pay",
+      payPick: "Choose how you'll pay",
+      copy: "Copy",
+      copied: "Copied",
+      openLink: "Open",
+      payHint: "Pay {total} with {method} and send the receipt to the shop on WhatsApp.",
+      payCashHint: "Pay {total} in cash on delivery or pickup.",
+      waPayment: "Payment",
     },
   };
 
@@ -317,24 +346,77 @@
     legacyCopyText(text, onDone);
   }
 
-  function copyIban(iban) {
-    copyPlainText(String(iban || "").replace(/\s+/g, ""), function () { toast(t("ibanCopied")); });
+  // ---------- Payment methods ----------
+
+  function payName(m) {
+    var names = PAY_NAMES[m.type];
+    if (m.type === "payment_link" && m.name) return m.name;
+    var base = names ? names[state.lang] || names.en : m.type;
+    return m.type === "mobile_transfer" && m.name ? base + " · " + m.name : base;
   }
 
-  function ibanCopyButton(iban) {
-    return h("button", { class: "icon-btn", type: "button", "aria-label": t("copyIban"), icon: "copy", onclick: function () { copyIban(iban); } });
+  function groupPhone(phone) {
+    var digits = String(phone || "").replace(/\D/g, "");
+    var cc = CALLING_CODES.filter(function (c) { return digits.indexOf(c) === 0; })[0] || digits.slice(0, 3);
+    var rest = digits.slice(cc.length);
+    return "+" + cc + " " + ((rest.match(/.{1,4}/g) || []).join(" "));
   }
 
-  /** The IBAN (grouped in fours) plus the holder name (when given) and a copy button — shared by the
-   * shop info card and the order-sent screen so both render it exactly the same way. */
-  function ibanBlock(iban, holderName) {
-    return h("div", { class: "iban-row" }, [
-      h("div", null, [
-        h("div", { class: "iban-num num", text: groupIban(iban) }),
-        holderName ? h("div", { class: "iban-holder", text: holderName }) : null,
-      ]),
-      ibanCopyButton(iban),
+  /** https only, and the host must have a dot; undefined for anything else. */
+  function safeLink(raw) {
+    try {
+      var u = new URL(String(raw || ""));
+      return u.protocol === "https:" && u.hostname.indexOf(".") > 0 && !u.username && !u.password ? u : undefined;
+    } catch (e) {
+      return undefined;
+    }
+  }
+
+  function linkOf(m) {
+    return m.type === "paypal" ? safeLink("https://paypal.me/" + m.value) : m.type === "payment_link" ? safeLink(m.value) : undefined;
+  }
+
+  /** The shop's payment methods the page understands, each checked again (defense against a malformed
+   * API response); a shop from before payment methods shows its legacy IBAN as a bank transfer. */
+  function sanitizePaymentMethods(raw, legacyIban) {
+    var list = Array.isArray(raw) ? raw : [];
+    var out = list.filter(function (m) { return m && typeof m.type === "string"; }).map(function (m) {
+      var name = typeof m.name === "string" && m.name.trim() ? m.name.trim().slice(0, 40) : null;
+      if (m.type === "bank_transfer") { var iban = sanitizeIban(m.value); return iban ? { type: m.type, value: iban } : null; }
+      if (PHONE_PAY_TYPES.indexOf(m.type) >= 0) return PHONE_PAY_RE.test(m.value || "") ? { type: m.type, value: m.value, name: m.type === "mobile_transfer" ? name : null } : null;
+      if (m.type === "paypal") return PAYPAL_RE.test(m.value || "") ? { type: m.type, value: m.value } : null;
+      if (m.type === "payment_link") return name && safeLink(m.value) ? { type: m.type, value: m.value, name: name } : null;
+      if (m.type === "cash") return { type: "cash" };
+      return null; // a type this page does not know
+    }).filter(Boolean).slice(0, 8);
+    if (!list.length && legacyIban) out = [{ type: "bank_transfer", value: legacyIban }];
+    return out;
+  }
+
+  /** One method: its name, its value (IBAN in fours, phone spaced, a link's domain) and a Copy or Open
+   * button. Used on the shop info card, in checkout and on the order-sent screen. */
+  function payValue(m) {
+    var link = linkOf(m);
+    if (m.type === "cash") return null;
+    if (link) {
+      return h("div", { class: "pay-value" }, [
+        h("bdi", { class: "pay-num", dir: "ltr", text: link.hostname }),
+        h("a", { class: "btn small", href: link.href, target: "_blank", rel: "noopener noreferrer", text: t("openLink") }),
+      ]);
+    }
+    var shown = m.type === "bank_transfer" ? groupIban(m.value) : groupPhone(m.value);
+    var plain = String(m.value || "").replace(/\s+/g, "");
+    return h("div", { class: "pay-value" }, [
+      h("bdi", { class: "pay-num num", dir: "ltr", text: shown }),
+      h("button", { class: "icon-btn", type: "button", "aria-label": t("copy") + " " + payName(m), icon: "copy", onclick: function (e) {
+        e.preventDefault();
+        copyPlainText(plain, function () { toast(t("copied")); });
+      } }),
     ]);
+  }
+
+  function payRow(m) {
+    return h("div", { class: "pay-row" }, [h("div", { class: "pay-name", text: payName(m) }), payValue(m)]);
   }
 
   function inkFor(hex) {
@@ -419,6 +501,8 @@
       if (form.fulfillment === "delivery") lines.push(t("waDelivery") + ": " + (form.address || ""));
       else if (form.fulfillment === "pickup") lines.push(t("waPickup"));
       if (form.notes) lines.push(t("waNotes") + ": " + form.notes);
+      var pay = chosenMethod(form);
+      if (pay) lines.push(t("waPayment") + ": " + payName(pay));
     }
     return lines.join("\n");
   }
@@ -443,7 +527,11 @@
       accent: "#B5476B",
       logoUrl: null,
       iban: "BH67BMAG00001299123456",
-      ibanName: "Sweets Studio",
+      paymentMethods: [
+        { type: "benefitpay", value: "+97337776616" },
+        { type: "bank_transfer", value: "BH67BMAG00001299123456" },
+        { type: "cash" },
+      ],
       items: [
         { id: "p1", name: { ar: "كب تشيز كيك", en: "Cheesecake cups" }, description: state.lang === "ar" ? "علبة 6 حبات، نكهات مشكلة" : "Box of 6, mixed flavors", priceMinor: 4500, photoUrl: null, available: true },
         { id: "p2", name: { ar: "كيكة شوكولاتة", en: "Chocolate cake" }, description: state.lang === "ar" ? "تكفي 8 أشخاص" : "Serves 8", priceMinor: 12000, photoUrl: null, available: true },
@@ -466,7 +554,7 @@
     shop.logoUrl = PHOTO_RE.test(shop.logoUrl || "") ? shop.logoUrl : null;
     shop.instagram = /^[A-Za-z0-9._]{1,30}$/.test(shop.instagram || "") ? shop.instagram : null;
     shop.iban = sanitizeIban(shop.iban);
-    shop.ibanName = shop.iban && typeof shop.ibanName === "string" && shop.ibanName.trim() ? shop.ibanName.trim().slice(0, 70) : null;
+    shop.paymentMethods = sanitizePaymentMethods(shop.paymentMethods, shop.iban);
     shop.whatsapp = String(shop.whatsapp || "").replace(/\D/g, "");
     shop.leadTimeDays = Math.max(0, Math.min(60, Number(shop.leadTimeDays) || 0));
     shop.delivery = ["pickup", "delivery", "pickup_and_delivery"].indexOf(shop.delivery) >= 0 ? shop.delivery : "pickup";
@@ -620,10 +708,9 @@
         h("div", null, [h("h1", { text: name }), shop.bio ? h("p", { class: "bio", text: shop.bio }) : null]),
       ]),
       h("ul", { class: "chips" }, chips),
-      shop.iban ? h("section", { class: "iban-card" }, [
-        h("h2", { text: t("ibanTitle") }),
-        ibanBlock(shop.iban, shop.ibanName),
-      ]) : null,
+      shop.paymentMethods.length ? h("section", { class: "iban-card" }, [
+        h("h2", { text: t("payTitle") }),
+      ].concat(shop.paymentMethods.map(payRow))) : null,
       h("h2", { class: "section-title", text: t("menu") }),
       grid,
       footer(),
@@ -764,6 +851,7 @@
       // <bdi> keeps a Latin "4:00 PM - 8:00 PM" in order inside the Arabic sentence.
       shop.pickupHours && mode === "pickup" ? h("p", { class: "note" }, [t("hoursHint") + " ", h("bdi", { text: shop.pickupHours })]) : null,
       field("notes", t("notes"), input("notes", { tag: "textarea", maxlength: "300", placeholder: t("notesPh") }), null, null),
+      payChoice(shop.paymentMethods, values.payIndex),
       formError ? h("p", { class: "error", role: "alert", text: formError }) : null,
       webOrders
         ? h("button", { class: "btn primary", type: "submit", id: "submit", text: t("send") })
@@ -792,6 +880,25 @@
     sheet.dataset.mode = mode;
   }
 
+  // "How to pay": one row per method; a radio to pick one when the shop has more than one.
+  function payChoice(methods, payIndex) {
+    if (!methods.length) return null;
+    if (methods.length === 1) return h("section", { class: "iban-card" }, [h("h3", { class: "pay-title", text: t("payTitle") }), payRow(methods[0])]);
+    return h("fieldset", { class: "iban-card pay-choice" }, [h("legend", { class: "pay-title", text: t("payPick") })].concat(methods.map(function (m, i) {
+      return h("label", { class: "pay-option" }, [
+        h("input", { type: "radio", name: "payIndex", value: String(i), checked: String(payIndex) === String(i) }),
+        payRow(m),
+      ]);
+    })));
+  }
+
+  function chosenMethod(values) {
+    var methods = state.shop.paymentMethods || [];
+    if (methods.length === 1) return methods[0];
+    var i = Number(values && values.payIndex);
+    return values && values.payIndex !== "" && values.payIndex !== undefined && methods[i] ? methods[i] : null;
+  }
+
   function readForm() {
     function val(id) { var el = sheet.querySelector("#" + id); return el ? el.value.trim() : ""; }
     var checked = sheet.querySelector('input[name="fulfillment"]:checked');
@@ -803,6 +910,7 @@
       time: val("time"),
       notes: val("notes"),
       fulfillment: checked ? checked.value : sheet.dataset.mode,
+      payIndex: (function () { var p = sheet.querySelector('input[name="payIndex"]:checked'); return p ? p.value : ""; })(),
     };
   }
 
@@ -859,6 +967,7 @@
       fulfillment: values.fulfillment,
       address: values.fulfillment === "delivery" ? values.address : undefined,
       notes: values.notes || undefined,
+      paymentMethod: chosenMethod(values) ? chosenMethod(values).type : undefined,
     };
 
     var request = state.demo
@@ -897,10 +1006,12 @@
           h("div", { class: "ref num", text: data.orderRef }),
           h("p", { class: "note", text: t("doneBody") }),
         ]),
-        state.shop.iban ? h("div", { class: "iban-card" }, [
-          h("p", { class: "note", text: t("ibanTransferHint", { total: totalText }) }),
-          ibanBlock(state.shop.iban, null),
-        ]) : null,
+        (function () {
+          var pay = chosenMethod(values);
+          if (!pay) return null;
+          var hint = pay.type === "cash" ? t("payCashHint", { total: totalText }) : t("payHint", { total: totalText, method: payName(pay) });
+          return h("div", { class: "iban-card" }, [h("p", { class: "note", text: hint }), payRow(pay)]);
+        })(),
         state.shop.whatsapp ? h("a", { class: "btn wa", href: whatsappLink(text), target: "_blank", rel: "noopener", icon: "whatsapp" }, [t("sendWa")]) : null,
         h("button", { class: "btn", type: "button", onclick: closeSheet, text: t("backToMenu") }),
       ])
