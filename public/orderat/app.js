@@ -100,7 +100,7 @@ let S = loadState();
 let D = null; // the New order draft
 let E = null; // the order-items editor's working copy
 let lastPath = '', prevPath = '';
-let ordersFilter = 'all', ordersQuery = '', moneyRange = 'week';
+let ordersFilter = 'open', ordersMore = false, ordersCustomer = '', ordersQuery = '', moneyRange = 'week';
 let CAMPAIGNS = readCachedCampaigns(), campaignsFetched = false;
 const ST = { photo: null, style: 'white', shape: 'square', result: null, busy: false, left: 3, campaign: null };
 const SLUG = { value: '', status: 'idle' };
@@ -172,6 +172,9 @@ const productOf = id => S.products.find(p => p.id === id);
 const orderById = id => S.orders.find(o => o.id === id);
 const customerOf = o => S.customers.find(c => c.id === o.customerId);
 const live = () => S.orders.filter(o => o.status !== 'cancelled');
+const ORDER_FILTERS = ['open', 'today', 'unpaid', 'all'];
+const isOpenOrder = o => o.status === 'new' || o.status === 'confirmed' || o.status === 'ready';
+const isUnpaid = o => o.status !== 'cancelled' && totals(o).due > 0;
 const byDue = (a, b) => a.dueAt.localeCompare(b.dueAt);
 const qtyOf = o => sum(o.items, it => it.qty);
 const costOf = o => sum(o.items, it => it.qty * (it.cost || 0));
@@ -404,6 +407,7 @@ function viewToday() {
   const toPrepare = sum(todays.filter(o => o.status === 'new' || o.status === 'confirmed'), qtyOf);
   const unpaid = sum(live(), o => totals(o).due);
   const upcoming = S.orders.filter(o => !['collected', 'cancelled'].includes(o.status) && new Date(o.dueAt) >= today).sort(byDue).slice(0, 6);
+  const overdue = S.orders.filter(o => isOpenOrder(o) && new Date(o.dueAt) < today).sort(byDue);
   const low = S.stockEnabled ? S.products.filter(p => p.track && p.qty <= p.low) : [];
   const occ = S.occasions.filter(x => x.end >= dayKey(now)).sort((a, b) => a.start.localeCompare(b.start)).slice(0, 3);
   const camp = todayCampaign();
@@ -415,6 +419,7 @@ function viewToday() {
     `<div class="kpis ${can('money') ? 'three' : 'two'}">${kpi(todays.length, t('today.orders'))}${kpi(toPrepare, t('today.toPrepare'))}${can('money') ? kpi(money(unpaid), t('today.unpaid'), unpaid > 0 ? 'bad' : '') : ''}</div>`,
     S.shop.dailyCapacity ? capacityCard(sum(todays, qtyOf), S.shop.dailyCapacity) : '',
     low.length ? `<section class="card"><h3 class="card-title warn-text">${icon('alert')} ${esc(t('today.lowStock'))}</h3>${low.map(p => `<a class="row" href="#/shop/menu"><span class="row-main"><b>${esc(pName(p))}</b></span>${badge(p.qty <= 0 ? 'bad' : 'warn', t('stock.qtyBadge', p.qty))}</a>`).join('')}</section>` : '',
+    overdue.length ? `<section class="card overdue-card"><h3 class="card-title bad-text">${icon('alert')} ${esc(t('orders.overdue'))}</h3><div class="list">${overdue.map(o => orderRow(o, true)).join('')}</div></section>` : '',
     `<section class="card"><h3 class="card-title">${esc(t('today.nextPickups'))}</h3>${upcoming.length ? `<div class="list">${upcoming.map(o => orderRow(o, true)).join('')}</div><a class="link-btn see-all" href="#/orders">${esc(t('today.seeAll'))}</a>` : empty(t('today.allCaughtUp'))}</section>`,
     occ.length ? `<section class="card"><h3 class="card-title">${esc(t('today.occasions'))}</h3>${occ.map(x => occasionRow(x)).join('')}</section>` : '',
   ];
@@ -486,7 +491,10 @@ function campaignCard(c) {
 
 function viewOrders(rest) {
   if (rest[0]) return viewOrder(rest[0]);
-  const chips = ['all', ...STATUSES].map(s => `<button class="chip${ordersFilter === s ? ' on' : ''}" data-act="orders-filter" data-v="${esc(s)}">${esc(s === 'all' ? t('orders.filterAll') : t('order.status.' + s))}</button>`).join('');
+  const chip = (v, label) => `<button class="chip${ordersFilter === v ? ' on' : ''}" data-act="orders-filter" data-v="${esc(v)}"${ordersFilter === v ? ' aria-pressed="true"' : ''}>${esc(label)}</button>`;
+  const more = ordersMore || STATUSES.includes(ordersFilter);
+  const chips = ORDER_FILTERS.map(f => chip(f, t('orders.f' + f[0].toUpperCase() + f.slice(1)))).join('')
+    + (more ? STATUSES.map(st => chip(st, t('order.status.' + st))).join('') : `<button class="chip" data-act="orders-more">${esc(t('orders.more'))}</button>`);
   return {
     title: t('tab.orders'),
     actions: can('orders') ? `<a class="icon-btn" href="#/new" aria-label="${esc(t('tab.new'))}">${icon('plus')}</a>` : '',
@@ -499,14 +507,21 @@ function ordersListHtml() {
     const c = customerOf(o);
     return [c?.name, c?.nameEn, c?.phone, ...o.items.flatMap(it => [it.nameAr, it.nameEn])].some(v => String(v || '').toLowerCase().includes(q));
   };
-  const list = S.orders.filter(o => (ordersFilter === 'all' || o.status === ordersFilter) && (!q || matches(o))).sort((a, b) => byDue(b, a));
+  const now = new Date(), today = startOfDay(now), tk = dayKey(today), tomorrow = dayKey(addDays(today, 1));
+  const keep = {
+    open: isOpenOrder, today: o => inRange(o.dueAt, today, addDays(today, 1)), unpaid: isUnpaid, all: () => true,
+  }[ordersFilter] || (o => o.status === ordersFilter);
+  // What is still to do comes soonest first; history (all, collected, cancelled) newest first.
+  const ascending = !['all', 'collected', 'cancelled'].includes(ordersFilter);
+  const list = S.orders.filter(o => keep(o) && (!ordersCustomer || o.customerId === ordersCustomer) && (!q || matches(o))).sort((a, b) => (ascending ? byDue(a, b) : byDue(b, a)));
   if (!list.length) return empty(t(S.orders.length ? 'orders.noMatch' : 'orders.empty'));
   const groups = [];
   list.forEach(o => {
-    const k = dayKey(new Date(o.dueAt)), g = groups[groups.length - 1];
+    const d = dayKey(new Date(o.dueAt)), k = ascending && d < tk && isOpenOrder(o) ? 'overdue' : d, g = groups[groups.length - 1];
     if (g && g.k === k) g.list.push(o); else groups.push({ k, list: [o] });
   });
-  return groups.map(g => `<h3 class="group-title">${esc(fmtDay(parseDay(g.k)))}</h3><div class="card list">${g.list.map(o => orderRow(o)).join('')}</div>`).join('');
+  const title = k => (k === 'overdue' ? t('orders.overdue') : k === tk ? t('orders.fToday') : k === tomorrow ? t('orders.tomorrow') : fmtDay(parseDay(k)));
+  return groups.map(g => `<h3 class="group-title${g.k === 'overdue' ? ' bad-text' : ''}">${esc(title(g.k))}</h3><div class="card list">${g.list.map(o => orderRow(o, g.k === 'overdue')).join('')}</div>`).join('');
 }
 
 // The demo's entries and the phones' (read from the cloud: a payment-status change has no amount).
@@ -1479,6 +1494,7 @@ const ACTIONS = {
   },
   'web-dismiss'(el) { S.webOrders = S.webOrders.filter(x => x.id !== el.dataset.id); save(); render(); },
   'orders-filter'(el) { ordersFilter = el.dataset.v; render(); },
+  'orders-more'() { ordersMore = true; render(); },
   advance(el) {
     const id = el.dataset.id, o = orderById(id);
     if (!o || !NEXT[o.status]) return;
