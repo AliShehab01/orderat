@@ -736,10 +736,27 @@ function updateTotal(p) {
 
 // ---------- New order ----------
 
+// Sells on the spot (a food truck, a shop): a new order is for now, picked up and paid in full.
+const sellsNow = () => ['foodTruck', 'shop'].includes(S.shop.businessType);
+const LAST_SOURCE_KEY = 'orderat.web.lastSource';
+const QUICK_TIMES = ['10:00', '13:00', '16:00', '18:00', '20:00'];
 function newDraft() {
-  const due = addDays(startOfDay(new Date()), 1);
+  const now = sellsNow(), due = addDays(startOfDay(new Date()), 1);
   due.setHours(17);
-  return { text: '', name: '', phone: '', source: 'whatsapp', items: [], due: inputDateTime(due), fulfillment: 'pickup', area: '', address: '', fee: '1', deposit: '', method: 'benefit', notes: '', note: '', reading: false };
+  let source = null;
+  try { source = localStorage.getItem(LAST_SOURCE_KEY); } catch { source = null; }
+  if (!['whatsapp', 'instagram', 'manual'].includes(source)) source = now ? 'manual' : 'whatsapp';
+  return {
+    text: '', name: '', phone: '', source, items: [], due: inputDateTime(now ? new Date() : due), when: now ? 'now' : '', fulfillment: 'pickup', area: '', address: '', fee: '1',
+    deposit: '', paidFull: now, method: now ? 'cash' : 'benefit', notes: '', note: '', reading: false,
+  };
+}
+// The one shared "Walk-in" customer of paid-in-full orders without a name, found by name, made once.
+function walkIn() {
+  const names = I18N['customers.walkIn'];
+  let c = S.customers.find(x => names.includes(x.name) || names.includes(x.nameEn));
+  if (!c) { c = { id: nid(), name: names[1], nameEn: names[0], phone: '', area: '', notes: '' }; S.customers.push(c); }
+  return c;
 }
 const draftEmpty = () => !D.items.some(it => qtyNum(it.qty) > 0);
 const draftTotal = () => totals({ items: D.items.map(it => ({ qty: qtyNum(it.qty), price: parseFloat(it.price) || 0 })), deliveryFee: D.fulfillment === 'delivery' ? parseFloat(D.fee) || 0 : 0 }).total;
@@ -777,7 +794,7 @@ function viewNew() {
   <form data-form="new-order" class="stack" novalidate>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.customerTitle'))}</h3>
       <div class="grid2">
-        ${errField(t('neworder.customerName'), `<input name="name" data-live="draft" enterkeyhint="next" value="${esc(D.name)}" list="customer-names" autocomplete="off"${D.errors?.name ? ' aria-invalid="true"' : ''}>`, D.errors?.name)}
+        ${errField(t('neworder.customerName'), `<input name="name" data-live="draft" enterkeyhint="next" value="${esc(D.name)}" list="customer-names" autocomplete="off"${D.paidFull ? ` placeholder="${esc(t('customers.walkIn'))}"` : ''}${D.errors?.name ? ' aria-invalid="true"' : ''}>`, D.errors?.name)}
         ${field(t('neworder.customerPhone'), `<input name="phone" data-live="draft" enterkeyhint="next" value="${esc(D.phone)}" dir="ltr" inputmode="tel" autocomplete="off">`)}
       </div>
       <datalist id="customer-names">${S.customers.map(c => `<option value="${esc(cName(c))}">`).join('')}</datalist>
@@ -789,13 +806,16 @@ function viewNew() {
         : `<div class="items-empty"><p class="muted small">${esc(t('neworder.needItem'))}</p><button type="button" class="btn primary" data-act="item-pick" data-p="d">${icon('plus')} ${esc(t('neworder.addFirstItem'))}</button></div>`}
     </section>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.scheduleTitle'))}</h3>
+      <div class="chips wrap">${['now', 'today', 'tomorrow'].map(k => `<button type="button" class="chip${D.when === k ? ' on' : ''}" data-act="due-quick" data-v="${k}">${esc(t('neworder.' + k))}</button>`).join('')}</div>
+      ${D.when === 'today' || D.when === 'tomorrow' ? `<div class="chips wrap">${QUICK_TIMES.map(h => `<button type="button" class="chip small${D.due.slice(11) === h ? ' on' : ''}" data-act="due-time" data-v="${h}" dir="ltr">${esc(fmtTime(new Date(`2000-01-01T${h}`)))}</button>`).join('')}</div>` : ''}
       ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" enterkeyhint="next" data-live="draft" value="${esc(D.due)}">`)}
       <div class="field"><span>${esc(t('neworder.fulfillment'))}</span>${seg('fulfillment', ['pickup', 'delivery'], D.fulfillment, k => t('fulfillment.' + k), 'draft')}</div>
       ${D.fulfillment === 'delivery' ? `<div class="grid2">${field(t('shop.area'), `<select name="area" data-live="draft"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, D.area, a => t('area.' + a))}</select>`)}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.fee)}">`)}</div>${field(t('order.address'), `<textarea name="address" rows="2" maxlength="200" data-live="draft" autocomplete="street-address">${esc(D.address || '')}</textarea>`)}` : ''}
     </section>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.paymentTitle'))}</h3>
+      ${toggle('paidFull', t('neworder.paidInFull'), D.paidFull, 'draft-paid')}
       <div class="grid2">
-        ${field(t('neworder.depositOptional'), `<input name="deposit" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.deposit)}">`)}
+        ${D.paidFull ? '' : field(t('neworder.depositOptional'), `<input name="deposit" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.deposit)}">`)}
         ${field(t('payment.method'), `<select name="method" data-live="draft">${options(METHODS, D.method, m => t('payment.method.' + m))}</select>`)}
       </div>
     </section>
@@ -1597,6 +1617,13 @@ const ACTIONS = {
     it.qty = q;
     rerenderItems(p);
   },
+  'due-quick'(el) {
+    const k = el.dataset.v, time = D.due.slice(11) || '17:00';
+    D.when = k;
+    D.due = k === 'now' ? inputDateTime(new Date()) : `${dayKey(addDays(startOfDay(new Date()), k === 'tomorrow' ? 1 : 0))}T${time}`;
+    render();
+  },
+  'due-time'(el) { D.due = `${D.due.slice(0, 10)}T${el.dataset.v}`; render(); },
   'clear-draft'() {
     const typed = D && (D.text.trim() || D.name.trim() || D.phone.trim() || D.items.length || D.notes.trim());
     if (!typed || confirm(t('neworder.clearConfirm'))) { D = null; render(); }
@@ -1682,6 +1709,7 @@ const ACTIONS = {
 };
 
 const LIVE = {
+  'draft-paid'(el) { D.paidFull = el.checked; if (D.errors?.name && D.paidFull) delete D.errors.name; render(); },
   'edit-order-fulfillment'(el) { const box = $('#eo-delivery'); if (box) box.hidden = el.value !== 'delivery'; },
   'orders-q'(el) { ordersQuery = el.value; $('#orders-list').innerHTML = ordersListHtml(); },
   'customers-q'(el) { customersQuery = el.value; $('#customers-list').innerHTML = viewCustomers(true); },
@@ -1781,11 +1809,13 @@ const FORMS = {
     const errors = {};
     if (D.items.some(it => it.pid === 'custom' && qtyNum(it.qty) > 0 && !String(it.name || '').trim())) errors.items = t('items.nameCustom');
     else if (!items.length) errors.items = t('neworder.needItem');
-    if (!name) errors.name = t('err.name');
+    // Unpaid orders need a real name, so Who owes me never lumps strangers together.
+    if (!name && !D.paidFull) errors.name = t('err.name');
     if (Object.keys(errors).length) { showDraftErrors(errors); return; }
     D.errors = null;
-    const c = draftCustomer(name);
+    const c = name ? draftCustomer(name) : walkIn();
     if (!c) return;
+    try { localStorage.setItem(LAST_SOURCE_KEY, D.source); } catch { /* only a default for next time */ }
     const now = new Date().toISOString(), delivery = D.fulfillment === 'delivery';
     const due = new Date(D.due);
     const order = {
@@ -1793,15 +1823,16 @@ const FORMS = {
       fulfillment: D.fulfillment, area: delivery ? D.area || c.area || '' : '', address: delivery ? String(D.address || '').trim() : '', deliveryFee: delivery ? parseFloat(D.fee) || 0 : 0,
       source: D.source, payments: [], notes: D.notes.trim(), changes: [{ kind: 'created', at: now }], status: 'new', stockApplied: false,
     };
-    const deposit = parseFloat(D.deposit);
-    if (deposit > 0) {
-      order.payments.push({ amount: round(deposit), method: D.method, note: '', at: now });
-      order.changes.push({ kind: 'payment', value: round(deposit), at: now });
-    }
     if (Live.on) {
       delete order.no; // display numbers come from creation order
       order.createdAt = now;
       Live.applyOrderVat(order); // the VAT snapshot and invoice number, like the phones
+    }
+    // Paid in full: the total with its VAT, known only once the snapshot above is taken.
+    const deposit = D.paidFull ? totals(order).total : parseFloat(D.deposit);
+    if (deposit > 0) {
+      order.payments.push({ amount: round(deposit), method: D.method, note: '', at: now });
+      order.changes.push({ kind: 'payment', value: round(deposit), at: now });
     }
     S.orders.push(order);
     save();
