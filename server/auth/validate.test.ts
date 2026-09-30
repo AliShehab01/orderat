@@ -12,6 +12,14 @@ describe("validateAuthBody", () => {
     expect(result).toEqual({ ok: true, body: { action: "signin", provider: "google", idToken: "abc.def.ghi", nonce: "n-1", deviceName: "Pixel 9" } });
   });
 
+  it("accepts an optional Apple authorizationCode and rejects a malformed one", () => {
+    const ok = validateAuthBody(JSON.stringify({ action: "signin", provider: "apple", idToken: "abc.def.ghi", authorizationCode: "c1.0.abc" }));
+    expect(ok.ok && ok.body.action === "signin" && ok.body.authorizationCode).toBe("c1.0.abc");
+    for (const authorizationCode of ["", 42, "x".repeat(1025)]) {
+      expect(validateAuthBody(JSON.stringify({ action: "signin", provider: "apple", idToken: "abc.def.ghi", authorizationCode }))).toEqual({ ok: false, error: "invalid_body" });
+    }
+  });
+
   it.each(["web", "app"] as const)("accepts a signin body from client %s", (client) => {
     const result = validateAuthBody(JSON.stringify({ action: "signin", provider: "apple", idToken: "abc.def.ghi", client }));
     expect(result).toEqual({ ok: true, body: { action: "signin", provider: "apple", idToken: "abc.def.ghi", client } });

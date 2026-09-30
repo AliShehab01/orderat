@@ -11,6 +11,9 @@ import type { Provider } from "./providers.ts";
 
 export interface VerifiedIdToken {
   sub: string;
+  /** The token audience that matched one of VerifyOptions.audiences — for Apple, the client id the
+   * token was issued to (the iPhone app's bundle id or the website's Services ID). */
+  aud: string;
   email?: string;
   name?: string;
 }
@@ -109,7 +112,8 @@ export async function verifyIdToken(idToken: string, opts: VerifyOptions): Promi
   if (typeof payload.iss !== "string" || !opts.issuers.includes(payload.iss)) return { ok: false, error: "bad_iss" };
 
   const auds = audienceList(payload.aud);
-  if (auds.length === 0 || !auds.some((aud) => opts.audiences.includes(aud))) return { ok: false, error: "bad_aud" };
+  const matchedAud = auds.find((aud) => opts.audiences.includes(aud));
+  if (matchedAud === undefined) return { ok: false, error: "bad_aud" };
 
   if (typeof payload.exp !== "number" || payload.exp * 1000 <= opts.now.getTime()) return { ok: false, error: "expired" };
 
@@ -121,6 +125,7 @@ export async function verifyIdToken(idToken: string, opts: VerifyOptions): Promi
     ok: true,
     token: {
       sub: payload.sub,
+      aud: matchedAud,
       email: typeof payload.email === "string" ? payload.email : undefined,
       name: typeof payload.name === "string" ? payload.name : undefined,
     },

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { createCloudTestSql } from "../cloud-pglite-test-support.ts";
 import { sha256HexOfString } from "../shared/crypto.ts";
+import { APPLE_REVOKE_URL, APPLE_TOKEN_URL, createAppleTokenClient, type AppleKeyConfig } from "./apple-tokens.ts";
 import { createAuthHandler, type AuthHandlerDeps } from "./handler.ts";
 import { createJwksCache } from "./jwks.ts";
 import { fakeJwksFetch, generateTestKeyPair, signTestToken, type TestKeyPair } from "./jwt-test-support.ts";
@@ -177,6 +178,106 @@ describe("createAuthHandler / session-authenticated actions", () => {
 
     const meRes = await handler(post({ action: "me" }, { "x-orderat-session": session }));
     expect(meRes.status).toBe(401);
+  });
+});
+
+// Sign in with Apple revocation (App Store Review Guideline 5.1.1(v)): an Apple signin's
+// authorizationCode is exchanged for a refresh token, which delete_account revokes. Apple's endpoints
+// are a fake fetch here.
+describe("createAuthHandler / Sign in with Apple token revocation", () => {
+  let appleKey: AppleKeyConfig;
+  let calls: { url: string; fields: URLSearchParams }[];
+  let revokeStatus: number;
+
+  beforeEach(async () => {
+    const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const b64 = Buffer.from(await crypto.subtle.exportKey("pkcs8", pair.privateKey)).toString("base64");
+    appleKey = { teamId: "TEAM123456", keyId: "KEY1234567", privateKeyPem: `-----BEGIN PRIVATE KEY-----
+${b64}
+-----END PRIVATE KEY-----` };
+    calls = [];
+    revokeStatus = 200;
+  });
+
+  const appleFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const fields = new URLSearchParams(String(init?.body ?? ""));
+    calls.push({ url, fields });
+    if (url === APPLE_TOKEN_URL) {
+      return fields.get("code") === "good-code" ? Response.json({ refresh_token: `refresh-for-${fields.get("client_id")}` }) : Response.json({ error: "invalid_grant" }, { status: 400 });
+    }
+    if (url === APPLE_REVOKE_URL) return new Response("", { status: revokeStatus });
+    throw new Error(`unexpected fetch ${url}`);
+  }) as unknown as typeof fetch;
+
+  function handlerWithApple(log: (entry: Record<string, unknown>) => void = () => {}) {
+    return makeHandler(() => NOW, {
+      appleAudiences: [APPLE_AUD, "com.ams.orderat.web"],
+      appleTokens: createAppleTokenClient(appleKey, { fetchImpl: appleFetch, now: () => NOW }),
+      log,
+    });
+  }
+
+  async function storedTokens() {
+    return sql.query<{ client_id: string; refresh_token: string }>(`select client_id, refresh_token from orderat.apple_tokens order by client_id`);
+  }
+
+  it("exchanges the code for the client id the ID token was issued to and keeps the refresh token", async () => {
+    const handler = handlerWithApple();
+    const res = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken({ aud: "com.ams.orderat.web" }), authorizationCode: "good-code", client: "web" }));
+    expect(res.status).toBe(200);
+    expect(calls.map((c) => [c.url, c.fields.get("client_id")])).toEqual([[APPLE_TOKEN_URL, "com.ams.orderat.web"]]);
+    expect(await storedTokens()).toEqual([{ client_id: "com.ams.orderat.web", refresh_token: "refresh-for-com.ams.orderat.web" }]);
+  });
+
+  it("still signs in when Apple refuses the code, and keeps nothing", async () => {
+    const handler = handlerWithApple();
+    const res = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken(), authorizationCode: "bad-code" }));
+    expect(res.status).toBe(200);
+    expect(await storedTokens()).toEqual([]);
+  });
+
+  it("revokes every kept token at Apple and removes it when the account is deleted", async () => {
+    const handler = handlerWithApple();
+    await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken(), authorizationCode: "good-code" }));
+    const web = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken({ aud: "com.ams.orderat.web" }), authorizationCode: "good-code", client: "web" }));
+    const session = (await web.json()).session as string;
+    calls = [];
+
+    const res = await handler(post({ action: "delete_account" }, { "x-orderat-session": session }));
+    expect(res.status).toBe(200);
+    expect(calls.map((c) => [c.url, c.fields.get("client_id"), c.fields.get("token")])).toEqual([
+      [APPLE_REVOKE_URL, "com.ams.orderat", "refresh-for-com.ams.orderat"],
+      [APPLE_REVOKE_URL, "com.ams.orderat.web", "refresh-for-com.ams.orderat.web"],
+    ]);
+    expect(await storedTokens()).toEqual([]);
+  });
+
+  it("still deletes the account (and its tokens) when Apple refuses the revoke", async () => {
+    const handler = handlerWithApple();
+    const signin = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken(), authorizationCode: "good-code" }));
+    const session = (await signin.json()).session as string;
+    revokeStatus = 500;
+    expect((await handler(post({ action: "delete_account" }, { "x-orderat-session": session }))).status).toBe(200);
+    expect((await handler(post({ action: "me" }, { "x-orderat-session": session }))).status).toBe(401);
+    expect(await storedTokens()).toEqual([]);
+  });
+
+  it("ignores an authorizationCode on a Google signin", async () => {
+    const handler = handlerWithApple();
+    const idToken = await signTestToken(googleKeyPair, { iss: "https://accounts.google.com", aud: GOOGLE_AUD, sub: "g-1", exp: Math.floor(NOW.getTime() / 1000) + 3600 });
+    expect((await handler(post({ action: "signin", provider: "google", idToken, authorizationCode: "good-code" }))).status).toBe(200);
+    expect(calls).toEqual([]);
+  });
+
+  it("without the Apple secrets, skips the exchange and logs that only once", async () => {
+    const entries: Record<string, unknown>[] = [];
+    const handler = makeHandler(() => NOW, { log: (e) => entries.push(e) });
+    for (let i = 0; i < 2; i++) {
+      expect((await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken(), authorizationCode: "good-code" }))).status).toBe(200);
+    }
+    expect(entries.filter((e) => e.event === "auth_apple_token")).toEqual([{ event: "auth_apple_token", status: "skipped", reason: "not_configured" }]);
+    expect(await storedTokens()).toEqual([]);
   });
 });
 

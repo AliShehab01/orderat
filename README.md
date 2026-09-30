@@ -255,6 +255,10 @@ When it becomes a real constraint, that's the trigger for "Move to a dedicated p
    - `APPLE_AUDIENCES` / `GOOGLE_AUDIENCES` (`orderat-auth`, docs/sme-phase-2-cloud.md — comma lists
      of accepted ID-token `aud` values; `APPLE_AUDIENCES` optional, defaults to `com.ams.orderat`,
      `GOOGLE_AUDIENCES` has no default, so Google sign-in stays refused until it's set)
+   - `APPLE_TEAM_ID` / `APPLE_KEY_ID` / `APPLE_PRIVATE_KEY` (`orderat-auth`, optional — Sign in with
+     Apple token revocation on account deletion, App Store Review Guideline 5.1.1(v): the Apple
+     Developer Team ID, the Key ID of a Sign in with Apple key, and its `.p8` PEM on one line with `\n`
+     for line breaks; off, and logged once, until all three are set)
    - `PARSE_DAILY_CAP` (`orderat-parse`'s AI order entry, optional — defaults to 5000)
    ```
    npm run hosting:secrets

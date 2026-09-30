@@ -48,6 +48,11 @@ export const ALLOWLIST = [
   "PARSE_DAILY_CAP",
   // orderat-auth's pair_start rate limit (optional; derived from the database URL when unset).
   "AUTH_IP_SALT",
+  // orderat-auth's Sign in with Apple token revocation on account deletion (optional; off until all
+  // three are set). APPLE_PRIVATE_KEY is the .p8 key's PEM on one line, newlines written as \n.
+  "APPLE_TEAM_ID",
+  "APPLE_KEY_ID",
+  "APPLE_PRIVATE_KEY",
 ];
 
 // Local-only convenience flags (server/dev.ts, server/whatsapp/webhook.ts, server/instagram/config.ts)

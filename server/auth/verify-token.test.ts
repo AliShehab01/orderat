@@ -28,7 +28,7 @@ describe("verifyIdToken", () => {
     const keyPair = await generateTestKeyPair();
     const token = await signTestToken(keyPair, await basePayload({ email: "seller@example.com", name: "Sara" }));
     const result = await verifyIdToken(token, { issuers: [ISS], audiences: [AUD], jwks: await cacheFor([keyPair]), now: NOW });
-    expect(result).toEqual({ ok: true, token: { sub: "user-sub-123", email: "seller@example.com", name: "Sara" } });
+    expect(result).toEqual({ ok: true, token: { sub: "user-sub-123", aud: AUD, email: "seller@example.com", name: "Sara" } });
   });
 
   it("rejects a malformed token (not three segments)", async () => {

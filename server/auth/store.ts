@@ -71,6 +71,32 @@ export async function deleteAccount(sql: SqlClient, userId: string): Promise<voi
   await sql.query(`delete from orderat.users where id = $1`, [userId]);
 }
 
+// --- Sign in with Apple refresh tokens: db/migrations/0007_apple_tokens.sql's apple_tokens ---
+
+/** Keeps (or replaces) the account's Apple refresh token for one client id (server/auth/apple-tokens.ts). */
+export async function saveAppleToken(sql: SqlClient, input: { userId: string; clientId: string; refreshToken: string }): Promise<void> {
+  await sql.query(
+    `insert into orderat.apple_tokens (user_id, client_id, refresh_token) values ($1, $2, $3)
+     on conflict (user_id, client_id) do update set refresh_token = excluded.refresh_token, updated_at = now()`,
+    [input.userId, input.clientId, input.refreshToken],
+  );
+}
+
+/** Every Apple refresh token held for the account, one per client id it signed in from. */
+export async function listAppleTokens(sql: SqlClient, userId: string): Promise<{ clientId: string; refreshToken: string }[]> {
+  const rows = await sql.query<{ client_id: string; refresh_token: string }>(
+    `select client_id, refresh_token from orderat.apple_tokens where user_id = $1 order by client_id`,
+    [userId],
+  );
+  return rows.map((row) => ({ clientId: row.client_id, refreshToken: row.refresh_token }));
+}
+
+/** Removes one of the account's Apple refresh tokens once it has been revoked. (Deleting the account
+ * removes any that are left anyway, through the users foreign key's cascade.) */
+export async function deleteAppleToken(sql: SqlClient, userId: string, clientId: string): Promise<void> {
+  await sql.query(`delete from orderat.apple_tokens where user_id = $1 and client_id = $2`, [userId, clientId]);
+}
+
 export interface NewSessionToken {
   /** The secret value returned to the app exactly once — never stored, never logged. */
   token: string;

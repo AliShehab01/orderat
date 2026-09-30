@@ -13,6 +13,7 @@
 // supabase/functions/orderat-whatsapp/index.ts for notes on the import layout, --use-api and the
 // orderat- / ORDERAT_ prefixing this shares with the other functions.
 
+import { appleKeyConfigFromEnv, createAppleTokenClient } from "../../../server/auth/apple-tokens.ts";
 import { createAuthHandler } from "../../../server/auth/handler.ts";
 import { createJwksCache } from "../../../server/auth/jwks.ts";
 import { APPLE_JWKS_URL, GOOGLE_JWKS_URL, resolveAudiences } from "../../../server/auth/providers.ts";
@@ -46,6 +47,12 @@ const googleAudiences = resolveAudiences(env("GOOGLE_AUDIENCES"), ["799835600648
 // simply start over.
 const ipSalt = env("AUTH_IP_SALT") || (await sha256HexOfString(`orderat-auth-ip-salt:${databaseUrl}`));
 
-const handler = withAppCors(createAuthHandler({ sql, appleJwks, googleJwks, appleAudiences, googleAudiences, ipSalt }));
+// Sign in with Apple token revocation on account deletion (App Store Review Guideline 5.1.1(v)):
+// ORDERAT_APPLE_TEAM_ID, ORDERAT_APPLE_KEY_ID and ORDERAT_APPLE_PRIVATE_KEY (the Sign in with Apple
+// key's .p8 contents). Until all three are set the handler skips it and logs that once per isolate.
+const appleKeyConfig = appleKeyConfigFromEnv(env);
+const appleTokens = appleKeyConfig ? createAppleTokenClient(appleKeyConfig) : undefined;
+
+const handler = withAppCors(createAuthHandler({ sql, appleJwks, googleJwks, appleAudiences, googleAudiences, ipSalt, appleTokens }));
 
 Deno.serve((req) => handler(req));

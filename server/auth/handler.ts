@@ -19,9 +19,16 @@
 // exactly as a `client: "web"` signin would; the website's `pair_poll` then collects that session, once.
 // The pairing lives five minutes (db/migrations/0006_web_pairing.sql). pair_start is open to anyone,
 // so it is limited per client IP and refused while MAX_PENDING_PAIRINGS are pending.
+//
+// Sign in with Apple revocation (App Store Review Guideline 5.1.1(v)): an Apple signin may carry the
+// one-time `authorizationCode`. When the Apple key secrets are configured (deps.appleTokens), it is
+// exchanged for a refresh token that is kept per account and client id (orderat.apple_tokens), and
+// delete_account revokes every one of them at Apple before deleting the account. Without the secrets
+// the code is ignored; either way, a failure here never fails the signin or the deletion.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { hashClientIp } from "../shared/crypto.ts";
+import type { AppleTokenClient } from "./apple-tokens.ts";
 import type { JwksCache } from "./jwks.ts";
 import { appleConfig, googleConfig } from "./providers.ts";
 import { bumpPairApproveRateLimit, bumpPairStartRateLimit, MAX_PAIR_APPROVES_PER_MINUTE, MAX_PAIR_STARTS_PER_MINUTE } from "./rate-limit.ts";
@@ -30,14 +37,17 @@ import {
   countPendingPairings,
   createSession,
   deleteAccount,
+  deleteAppleToken,
   deleteExpiredPairings,
   findPendingPairingByCode,
   insertPairing,
+  listAppleTokens,
   newPollToken,
   newSessionToken,
   pollPairing,
   resolveSession,
   revokeSession,
+  saveAppleToken,
   upsertUser,
   WEB_SESSION_DAYS,
   type ResolvedSession,
@@ -55,6 +65,9 @@ export interface AuthHandlerDeps {
   /** Salt for hashing a client IP (pair_start's per-IP rate limit) before it is written to a row —
    * never the raw IP. */
   ipSalt: string;
+  /** Sign in with Apple's token endpoints (server/auth/apple-tokens.ts), present only when the Apple key
+   * secrets are set. Absent: an Apple signin's authorizationCode is ignored and nothing is revoked. */
+  appleTokens?: AppleTokenClient;
   now?: () => Date;
   /** Structured, content-free log line per request — never an ID token, a session token, an email or
    * a name (nor a pairing's code or poll token). */
@@ -103,6 +116,44 @@ function randomPairCode(): string {
 export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Promise<Response> {
   const log = deps.log ?? console.log;
   const now = deps.now ?? (() => new Date());
+  let loggedAppleTokensOff = false;
+
+  /** Exchanges an Apple signin's authorization code and keeps the refresh token, best effort. */
+  async function keepAppleRefreshToken(userId: string, clientId: string, code: string): Promise<void> {
+    if (!deps.appleTokens) {
+      if (!loggedAppleTokensOff) {
+        loggedAppleTokensOff = true;
+        log({ event: "auth_apple_token", status: "skipped", reason: "not_configured" });
+      }
+      return;
+    }
+    try {
+      const refreshToken = await deps.appleTokens.exchangeCode(code, clientId);
+      if (!refreshToken) {
+        log({ event: "auth_apple_token", status: "exchange_failed" });
+        return;
+      }
+      await saveAppleToken(deps.sql, { userId, clientId, refreshToken });
+      log({ event: "auth_apple_token", status: "saved" });
+    } catch (err) {
+      log({ event: "auth_apple_token", status: "error", detail: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /** Revokes every Apple refresh token held for the account, best effort; a revoked one is deleted
+   * right away, and any left over go with the account itself. */
+  async function revokeAppleTokens(userId: string): Promise<void> {
+    if (!deps.appleTokens) return;
+    try {
+      for (const { clientId, refreshToken } of await listAppleTokens(deps.sql, userId)) {
+        const revoked = await deps.appleTokens.revoke(refreshToken, clientId);
+        log({ event: "auth_apple_revoke", status: revoked ? "revoked" : "failed" });
+        if (revoked) await deleteAppleToken(deps.sql, userId, clientId);
+      }
+    } catch (err) {
+      log({ event: "auth_apple_revoke", status: "error", detail: err instanceof Error ? err.message : String(err) });
+    }
+  }
 
   /** Starts a session for `userId` and returns its raw token, of which only the SHA-256 hex is stored.
    * Only a browser's session ends, WEB_SESSION_DAYS from now: a `client: "web"` signin's and every
@@ -143,6 +194,7 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
     // signs in — store.ts's upsertUser keeps the original id on every signin after that.
     const user = await upsertUser(deps.sql, { id: crypto.randomUUID(), provider: body.provider, providerSub: verified.token.sub, email: verified.token.email, name: verified.token.name });
     const session = await startSession(user.id, body.deviceName, body.client);
+    if (body.provider === "apple" && body.authorizationCode) await keepAppleRefreshToken(user.id, verified.token.aud, body.authorizationCode);
 
     log({ event: "auth_signin", status: 200, provider: body.provider });
     return jsonResponse({ session, user: userJson(user) }, 200);
@@ -258,6 +310,7 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
       case "pair_approve":
         return handlePairApprove(body, resolved);
       case "delete_account":
+        await revokeAppleTokens(resolved.user.id);
         await deleteAccount(deps.sql, resolved.user.id);
         log({ event: "auth_delete_account", status: 200 });
         return jsonResponse({ ok: true }, 200);

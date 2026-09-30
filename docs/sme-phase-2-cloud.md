@@ -34,6 +34,15 @@ Cloud sync stays **optional**: a seller can keep using the app offline-only, as 
   `X-Orderat-Session: <session token>`.
 - "Delete my account" removes the user, their sessions, and every shop they own with its data.
   This is required by both stores.
+- **Sign in with Apple revocation** (App Store Review Guideline 5.1.1(v)): an Apple signin may also send
+  `authorizationCode` (Apple's one-time code from the same signin; iPhone and web). When the secrets
+  `ORDERAT_APPLE_TEAM_ID`, `ORDERAT_APPLE_KEY_ID` and `ORDERAT_APPLE_PRIVATE_KEY` (the Sign in with Apple
+  key's `.p8`) are set, `orderat-auth` exchanges it at `https://appleid.apple.com/auth/token` (`client_id` =
+  the token's audience: `com.ams.orderat` for iOS, `com.ams.orderat.web` for the web; `client_secret` = an
+  ES256 JWT) and keeps the refresh token in `orderat.apple_tokens (user_id, client_id, refresh_token)`
+  (db/migrations/0007_apple_tokens.sql). "Delete my account" first calls
+  `https://appleid.apple.com/auth/revoke` for each kept token, then deletes the account. Without the
+  secrets the code is ignored (logged once); a failed exchange or revoke never fails signin or deletion.
 
 ## Shops and members
 

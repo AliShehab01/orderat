@@ -9,6 +9,8 @@ const MAX_BODY_BYTES = 16 * 1024;
 const MAX_ID_TOKEN_CHARS = 8000;
 const MAX_NONCE_CHARS = 256;
 const MAX_DEVICE_NAME_CHARS = 100;
+/** Apple's authorization codes are short (well under 100 characters); this only bounds a hostile one. */
+const MAX_AUTHORIZATION_CODE_CHARS = 1024;
 /** A poll token is 43 characters (32 random bytes, base64url); anything far longer is not one. */
 const MAX_POLL_TOKEN_CHARS = 128;
 const PAIR_CODE_RE = /^\d{6}$/;
@@ -26,6 +28,10 @@ export interface SigninBody {
    * server/auth/store.ts); "app", or nothing at all (every phone build so far), for the phones, whose
    * sessions never expire. */
   client?: "web" | "app";
+  /** Sign in with Apple only, optional: Apple's one-time authorization code from the same signin, which
+   * server/auth/handler.ts exchanges for a refresh token so account deletion can revoke it
+   * (server/auth/apple-tokens.ts). Ignored for Google. */
+  authorizationCode?: string;
 }
 
 export interface SignoutBody { action: "signout"; }
@@ -61,6 +67,7 @@ function validateSignin(json: Record<string, unknown>): AuthValidationResult {
   if (json.nonce !== undefined && !isNonEmptyString(json.nonce, MAX_NONCE_CHARS)) return invalid();
   if (json.deviceName !== undefined && !isNonEmptyString(json.deviceName, MAX_DEVICE_NAME_CHARS)) return invalid();
   if (json.client !== undefined && json.client !== "web" && json.client !== "app") return invalid();
+  if (json.authorizationCode !== undefined && !isNonEmptyString(json.authorizationCode, MAX_AUTHORIZATION_CODE_CHARS)) return invalid();
 
   return {
     ok: true,
@@ -71,6 +78,7 @@ function validateSignin(json: Record<string, unknown>): AuthValidationResult {
       nonce: json.nonce as string | undefined,
       deviceName: json.deviceName as string | undefined,
       client: json.client as "web" | "app" | undefined,
+      ...(json.authorizationCode !== undefined ? { authorizationCode: json.authorizationCode as string } : {}),
     },
   };
 }
