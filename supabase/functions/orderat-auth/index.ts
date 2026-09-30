@@ -38,13 +38,15 @@ const appleAudiences = resolveAudiences(env("APPLE_AUDIENCES"), ["com.ams.ordera
 // Default: the Orderat project's Web OAuth client (Google Cloud project gen-lang-client-0326595565). The
 // Android app requests ID tokens with it as serverClientId, so it is the token audience. Client IDs
 // are public identifiers, not secrets.
-// Plus the iPhone app's own iOS OAuth client (Google Sign-In on iOS issues ID tokens for it), when
-// ORDERAT_GOOGLE_IOS_CLIENT_ID is set. Nonce: Google copies the `nonce` it was given into the token
+// Always plus the iPhone app's own iOS OAuth client (Google Sign-In on iOS issues ID tokens for it; a
+// public id, so built in, whether or not ORDERAT_GOOGLE_AUDIENCES is set), and ORDERAT_GOOGLE_IOS_CLIENT_ID
+// if a different iOS client is ever used. Nonce: Google copies the `nonce` it was given into the token
 // verbatim, and the server compares the signin body's `nonce` with it unchanged for Google
 // (verify-token.ts expectedNonceFor hashes only for Apple). So the body's `nonce` must be exactly the
 // value handed to Google: if the app gives Google SHA-256(rawNonce), it sends that hash, not rawNonce.
+const GOOGLE_IOS_CLIENT_ID = "799835600648-3anir15lsgs5dqig5vom9pthh85nvjvp.apps.googleusercontent.com";
 const googleAudiences = withExtraAudience(
-  resolveAudiences(env("GOOGLE_AUDIENCES"), ["799835600648-rj4qq9ia615jfob5eg6k4lgop3aq3i6l.apps.googleusercontent.com"]),
+  withExtraAudience(resolveAudiences(env("GOOGLE_AUDIENCES"), ["799835600648-rj4qq9ia615jfob5eg6k4lgop3aq3i6l.apps.googleusercontent.com"]), GOOGLE_IOS_CLIENT_ID),
   env("GOOGLE_IOS_CLIENT_ID"),
 );
 

@@ -255,8 +255,8 @@ When it becomes a real constraint, that's the trigger for "Move to a dedicated p
    - `APPLE_AUDIENCES` / `GOOGLE_AUDIENCES` (`orderat-auth`, docs/sme-phase-2-cloud.md — comma lists
      of accepted ID-token `aud` values; `APPLE_AUDIENCES` optional, defaults to `com.ams.orderat`,
      `GOOGLE_AUDIENCES` has no default, so Google sign-in stays refused until it's set)
-   - `GOOGLE_IOS_CLIENT_ID` (`orderat-auth`, optional — the iPhone app's Google iOS OAuth client id,
-     accepted as one more Google audience; the signin body's `nonce` must be the exact value the app
+   - `GOOGLE_IOS_CLIENT_ID` (`orderat-auth`, optional — the iPhone app's Google iOS OAuth client id is
+     built in and always accepted; this adds another one; the signin body's `nonce` must be the exact value the app
      gave Google, since Google copies it into the token verbatim)
    - `APPLE_TEAM_ID` / `APPLE_KEY_ID` / `APPLE_PRIVATE_KEY` (`orderat-auth`, optional — Sign in with
      Apple token revocation on account deletion, App Store Review Guideline 5.1.1(v): the Apple
