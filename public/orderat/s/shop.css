@@ -122,11 +122,11 @@ img { display: block; max-width: 100%; }
 .price { font-weight: 700; font-size: 15px; }
 .add {
   border: 0; border-radius: 999px; background: var(--accent); color: var(--accent-ink);
-  height: 34px; padding: 0 14px; font-weight: 700; font-size: 14px;
+  height: 44px; padding: 0 16px; font-weight: 700; font-size: 14px;
 }
 .add:disabled { background: var(--soft); color: var(--muted); cursor: not-allowed; }
-.stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; height: 34px; }
-.stepper button { width: 34px; height: 32px; border: 0; background: none; font-size: 18px; font-weight: 700; line-height: 1; }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; height: 44px; }
+.stepper button { width: 44px; height: 42px; border: 0; background: none; font-size: 20px; font-weight: 700; line-height: 1; }
 .stepper output { min-width: 22px; text-align: center; font-weight: 700; font-size: 14px; }
 
 /* Cart bar */
@@ -229,3 +229,8 @@ fieldset.field { border: 0; margin: 0; padding: 0; }
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* The order recap on the thank-you screen */
+.recap { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; }
+.recap-line { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.recap-line.total { font-weight: 700; border-top: 1px dashed var(--line); padding-top: 6px; margin-top: 2px; }

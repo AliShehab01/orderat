@@ -87,6 +87,9 @@
       doneRef: "رقم الطلب",
       doneBody: "بيأكد لك المتجر الطلب على واتساب.",
       sendWa: "أرسل الطلب على واتساب",
+      waOptional: "مراسلة المتجر (اختياري)",
+      feeNote: "رسوم التوصيل، إن وجدت، يؤكدها المتجر",
+      recapWhen: "الموعد",
       backToMenu: "رجوع للقائمة",
       close: "إغلاق",
       errInvalid: "تأكد من البيانات وحاول مرة ثانية.",
@@ -171,6 +174,9 @@
       doneRef: "Order number",
       doneBody: "The shop will confirm your order on WhatsApp.",
       sendWa: "Send the order on WhatsApp",
+      waOptional: "Message the shop (optional)",
+      feeNote: "Delivery fee, if any, is confirmed by the shop",
+      recapWhen: "When",
       backToMenu: "Back to the menu",
       close: "Close",
       errInvalid: "Check your details and try again.",
@@ -302,6 +308,13 @@
   function todayRiyadh() {
     // en-CA formats as YYYY-MM-DD. The shop's lead time counts from today in Gulf time.
     return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Riyadh", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  }
+
+  // A YYYY-MM-DD day in the page's language ("Thursday 2 October").
+  function fmtDay(iso) {
+    try {
+      return new Intl.DateTimeFormat(state.lang === "ar" ? "ar-BH-u-nu-latn" : "en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(new Date(iso + "T00:00:00Z"));
+    } catch (e) { return iso; }
   }
 
   function addDays(iso, n) {
@@ -814,6 +827,8 @@
     var maxDate = addDays(todayRiyadh(), 60);
     var modes = shop.delivery === "pickup_and_delivery" ? ["pickup", "delivery"] : [shop.delivery];
     var mode = values.fulfillment && modes.indexOf(values.fulfillment) >= 0 ? values.fulfillment : modes[0];
+    // The first day the shop takes, filled in so most buyers never open the date picker.
+    if (!values.date) values = Object.assign({}, values, { date: minDate });
 
     var lines = h("ul", { class: "lines" }, cartLines().map(function (l) {
       var name = localized(l.item.name);
@@ -850,7 +865,7 @@
       field("name", webOrders ? t("name") : t("nameOptional"), input("name", { type: "text", autocomplete: "name", maxlength: "60", required: webOrders }), null, errors.name),
       webOrders ? field("phone", t("phone"), input("phone", { type: "tel", inputmode: "tel", autocomplete: "tel", maxlength: "20", dir: "ltr", required: true }), t("phoneHint"), errors.phone) : null,
       seg,
-      mode === "delivery" ? field("address", t("address"), input("address", { tag: "textarea", maxlength: "200", autocomplete: "street-address", required: true }), null, errors.address) : null,
+      mode === "delivery" ? field("address", t("address"), input("address", { tag: "textarea", maxlength: "200", autocomplete: "street-address", required: true }), t("feeNote"), errors.address) : null,
       h("div", { class: "row" }, [
         field("date", t("date"), input("date", { type: "date", min: minDate, max: maxDate, required: webOrders }), null, errors.date),
         field("time", t("time"), input("time", { type: "time" }), null, null),
@@ -946,7 +961,7 @@
     }
     if (values.fulfillment === "delivery" && !values.address) errors.address = t("errRequired");
     if (webOrders && !values.date) errors.date = t("errRequired");
-    else if (values.date && values.date < minDate) errors.date = t("errDate", { d: minDate });
+    else if (values.date && values.date < minDate) errors.date = t("errDate", { d: fmtDay(minDate) });
     return errors;
   }
 
@@ -1002,6 +1017,13 @@
     // The total the shop info card and checkout sheet already show (money()'s formatting) — captured
     // before the cart is cleared just below.
     var totalText = money(cartTotal());
+    // What was ordered, for the buyer to check (taken before the cart is emptied).
+    var recap = h("div", { class: "recap" }, cartLines().map(function (l) {
+      return h("div", { class: "recap-line" }, [h("span", { text: localized(l.item.name) }), h("span", { class: "num", dir: "ltr", text: "× " + l.qty })]);
+    }).concat([
+      h("div", { class: "recap-line total" }, [h("span", { text: t("total") }), h("span", { class: "num", text: totalText })]),
+      values.date ? h("div", { class: "recap-line" }, [h("span", { text: t("recapWhen") }), h("span", { text: fmtDay(values.date) + (values.time ? " · " + values.time : "") })]) : null,
+    ]));
     typed = {};
     state.cart = {};
     saveCart();
@@ -1018,13 +1040,14 @@
           h("div", { class: "ref num", text: data.orderRef }),
           h("p", { class: "note", text: t("doneBody") }),
         ]),
+        recap,
         (function () {
           var pay = chosenMethod(values);
           if (!pay) return null;
           var hint = pay.type === "cash" ? t("payCashHint", { total: totalText }) : t("payHint", { total: totalText, method: payName(pay) });
           return h("div", { class: "iban-card" }, [h("p", { class: "note", text: hint }), payRow(pay)]);
         })(),
-        state.shop.whatsapp ? h("a", { class: "btn wa", href: whatsappLink(text), target: "_blank", rel: "noopener", icon: "whatsapp" }, [t("sendWa")]) : null,
+        state.shop.whatsapp ? h("a", { class: "btn wa", href: whatsappLink(text), target: "_blank", rel: "noopener", icon: "whatsapp" }, [t("waOptional")]) : null,
         h("button", { class: "btn", type: "button", onclick: closeSheet, text: t("backToMenu") }),
       ])
     );
