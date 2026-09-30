@@ -1,7 +1,9 @@
 // The app shell, network first with a cached fallback. Only this origin's GET requests are handled:
 // the Edge Functions (sync, sign-in, AI, photos) are on another origin and always go to the network,
 // and anything under a /functions/ path is never cached either.
-const CACHE='orderat-web-v2';
+// site/build.mjs replaces this name with 'orderat-web-<stamp>', a hash of the web app's files, so every
+// deploy that changes them gets a fresh cache; 'dev' only when served unbuilt (the Next dev path).
+const CACHE='orderat-web-dev';
 const FILES=['./','./index.html','./app.css','./config.js','./cloud-map.js','./cloud-api.js','./cloud-sync.js','./cloud-auth.js','./live-core.js','./vendor/qrcode.js','./i18n.js','./demo.js','./live.js','./app.js','./favicon.svg','./manifest.webmanifest','./icon-192.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting()))});
 // Also clears older orderat-* caches (the demo's orderat-web-v1, the old prototype's).

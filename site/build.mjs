@@ -5,6 +5,7 @@
 //
 // Usage: node site/build.mjs   (or: npm run site:build)
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -155,6 +156,84 @@ main{max-width:28rem;text-align:center}h1{font-size:1.5rem;margin:.2em 0}p{color
 `;
 }
 
+// The Edge Functions' origin (public/orderat/config.js apiBase): sign-in, sync, AI, the shop page's API,
+// and Storage (signed product photos, the shop page's public photos).
+const SUPABASE_ORIGIN = "https://ckjmbdbvlbxfofjgqiuj.supabase.co";
+
+/** sha256 CSP sources for every inline, executable <script> in the built HTML (today only the
+ * orderat-app.pages.dev forwarding snippet), so script-src needs no 'unsafe-inline'. JSON-LD blocks are
+ * data, never executed, so CSP does not apply to them. */
+function inlineScriptHashes() {
+  const hashes = new Set();
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".html")) {
+        const html = fs.readFileSync(full, "utf8");
+        for (const m of html.matchAll(/<script(\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
+          const attrs = m[1] || "";
+          if (/\bsrc=/.test(attrs) || /type="application\/ld\+json"/.test(attrs) || !m[2]) continue;
+          hashes.add(`'sha256-${crypto.createHash("sha256").update(m[2], "utf8").digest("base64")}'`);
+        }
+      }
+    }
+  };
+  walk(DIST);
+  return [...hashes].sort();
+}
+
+/** Cloudflare Pages' _headers: security headers for every page, and no-cache for the web app so a new
+ * deploy reaches sellers on their next load (the service worker still serves the shell offline).
+ * CSP sources: Google Identity Services (accounts.google.com/gsi) and Sign in with Apple JS
+ * (appleid.cdn-apple.com, appleid.apple.com) for the web app's sign-in, Google Fonts, the Supabase
+ * origin, the campaign feed on raw.githubusercontent.com, and Cloudflare Web Analytics if it is on. */
+function buildHeaders() {
+  const csp = [
+    "default-src 'self'",
+    `script-src 'self' ${inlineScriptHashes().join(" ")} https://accounts.google.com/gsi/client https://appleid.cdn-apple.com https://static.cloudflareinsights.com`,
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    `img-src 'self' data: blob: ${SUPABASE_ORIGIN} https://raw.githubusercontent.com https://*.googleusercontent.com`,
+    `connect-src 'self' ${SUPABASE_ORIGIN} https://raw.githubusercontent.com https://accounts.google.com/gsi/ https://appleid.apple.com https://cloudflareinsights.com`,
+    "frame-src https://accounts.google.com/gsi/ https://appleid.apple.com",
+    "worker-src 'self'",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self' https://appleid.apple.com",
+    "frame-ancestors 'none'",
+  ].join("; ");
+  return `/*
+  Content-Security-Policy: ${csp}
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), magnetometer=(), gyroscope=(), accelerometer=()
+
+/app/*
+  Cache-Control: no-cache
+
+/sw.js
+  Cache-Control: no-cache
+`;
+}
+
+/** A short stamp of the web app's own files, so the service worker's cache name changes exactly when
+ * anything it caches does (a new deploy of the same files keeps the cache). */
+function webAppStamp(appDir) {
+  const hash = crypto.createHash("sha256");
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name !== "sw.js") hash.update(path.relative(appDir, full)).update(fs.readFileSync(full));
+    }
+  };
+  walk(appDir);
+  return hash.digest("hex").slice(0, 12);
+}
+
 function main() {
   console.log("Building Orderat marketing site...");
   rmrf(DIST);
@@ -178,13 +257,19 @@ function main() {
   fs.mkdirSync(appDest, { recursive: true });
   for (const file of WEB_APP_FILES) fs.copyFileSync(path.join(PUBLIC_ORDERAT, file), path.join(appDest, file));
   copyDir(path.join(PUBLIC_ORDERAT, "vendor"), path.join(appDest, "vendor"));
+  const swFile = path.join(appDest, "sw.js");
+  const sw = fs.readFileSync(swFile, "utf8");
+  const stampedSw = sw.replace(/const CACHE='orderat-web-[^']*';/, `const CACHE='orderat-web-${webAppStamp(appDest)}';`);
+  if (stampedSw === sw) throw new Error("sw.js: could not find the CACHE name to stamp");
+  fs.writeFileSync(swFile, stampedSw, "utf8");
   console.log("  copied the web app to app/");
 
   fs.writeFileSync(path.join(DIST, "sitemap.xml"), buildSitemap(pages), "utf8");
   fs.writeFileSync(path.join(DIST, "robots.txt"), buildRobots(), "utf8");
   fs.writeFileSync(path.join(DIST, "site.webmanifest"), buildManifest(), "utf8");
   fs.writeFileSync(path.join(DIST, "404.html"), buildNotFound(), "utf8");
-  console.log("  wrote sitemap.xml, robots.txt, site.webmanifest, 404.html");
+  fs.writeFileSync(path.join(DIST, "_headers"), buildHeaders(), "utf8");
+  console.log("  wrote sitemap.xml, robots.txt, site.webmanifest, 404.html, _headers");
 
   console.log(`Done. Output: ${path.relative(process.cwd(), DIST) || DIST}`);
 }
