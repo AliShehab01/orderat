@@ -18,8 +18,7 @@ const PRICE = { monthly: 9.99, yearly: 79.99 };
 const CURRENCIES = { BHD: [3, 'BH'], SAR: [2, 'SA'], AED: [2, 'AE'], OMR: [3, 'OM'], KWD: [3, 'KW'], QAR: [2, 'QA'] };
 const VAT_RATES = { BH: 10, SA: 15, AE: 5, OM: 5, KW: 0, QA: 0 };
 const STATUSES = ['new', 'confirmed', 'ready', 'collected', 'cancelled'];
-const NEXT = { new: 'confirmed', confirmed: 'ready', ready: 'collected' };
-const NEXT_LABEL = { new: 'orders.confirm', confirmed: 'orders.markReady', ready: 'orders.markCollected' };
+const NEXT_LABEL = { confirmed: 'orders.confirm', ready: 'orders.markReady', out: 'orders.markOutForDelivery', collected: 'orders.markCollected' };
 const STATUS_TONE = { new: 'neutral', confirmed: 'brand', ready: 'warn', collected: 'ok', cancelled: 'bad' };
 const PAY_TONE = { unpaid: 'bad', deposit: 'warn', paid: 'ok' };
 const METHODS = ['benefit', 'cash', 'transfer', 'card'];
@@ -29,6 +28,8 @@ const OCCASION_KINDS = ['ramadan', 'eidAlFitr', 'eidAlAdha', 'bahrainNationalDay
 const BUSINESS_TYPES = ['home', 'shop', 'services', 'food', 'foodTruck', 'other'];
 const TYPE_ICONS = { home: 'home', shop: 'shop', services: 'scissors', food: 'cup', foodTruck: 'truck', other: 'dots' };
 const WA_TEMPLATES = ['confirmOrder', 'orderReady', 'pickupReminder', 'paymentReminder', 'thankYou'];
+// A delivery order's messages: "out for delivery" in place of the pickup ones.
+const WA_DELIVERY_TEMPLATES = ['confirmOrder', 'outForDelivery', 'paymentReminder', 'thankYou'];
 const RANGES = { week: 7, month: 30, threeMonths: 90, year: 365, all: 0 };
 const TABS = ['today', 'orders', 'new', 'money', 'shop'];
 const TAKEN_SLUGS = ['sweetstudio', 'demo', 'orderat', 'shop', 'test'];
@@ -233,9 +234,15 @@ function periodStats(a, b) {
 
 const badge = (tone, label) => `<span class="badge ${esc(tone || '')}">${esc(label)}</span>`;
 const statusBadge = s => badge(STATUS_TONE[s], t('order.status.' + s));
-// A delivery order ends as Delivered, not Collected (labels only: the status is shared with the phones).
-const orderBadge = o => (o.status === 'collected' && o.fulfillment === 'delivery' ? badge(STATUS_TONE.collected, t('status.delivered')) : statusBadge(o.status));
-const nextLabel = o => t(o.status === 'ready' && o.fulfillment === 'delivery' ? 'status.outForDelivery' : NEXT_LABEL[o.status]);
+// A delivery order goes Ready → Out for delivery → Delivered: out for delivery is a ready order with
+// outForDeliveryAt set (the status stays ready for the phones), and Delivered is collected (labels only).
+const isOut = o => OrderatLiveCore.isOutForDelivery(o);
+const orderBadge = o => (isOut(o) ? badge('out', t('status.outForDelivery'))
+  : o.status === 'collected' && o.fulfillment === 'delivery' ? badge(STATUS_TONE.collected, t('status.delivered')) : statusBadge(o.status));
+// Staff who may only change the status skip the out-for-delivery step: the server keeps nothing but the
+// status of their order pushes (server/sync/record-access.ts).
+const nextStep = o => OrderatLiveCore.nextStep(o, { out: can('orders') });
+const nextLabel = o => { const s = nextStep(o); return t(s === 'collected' && o.fulfillment === 'delivery' ? 'orders.markDelivered' : NEXT_LABEL[s]); };
 const payBadge = s => badge(PAY_TONE[s], t('payment.status.' + s));
 const sourceTag = s => `<span class="src src-${esc(s)}" title="${esc(t('source.' + s))}">${icon(s)}</span>`;
 const empty = msg => `<p class="empty">${esc(msg)}</p>`;
@@ -593,10 +600,11 @@ function ordersListHtml() {
   return groups.map(g => `<h3 class="group-title${g.k === 'overdue' ? ' bad-text' : ''}">${esc(title(g.k))}</h3><div class="card list">${g.list.map(o => orderRow(o, g.k === 'overdue')).join('')}</div>`).join('');
 }
 
-// The demo's entries and the phones' (read from the cloud: a payment-status change has no amount).
-function historyLabel(ch) {
+// The demo's entries and the phones' (read from the cloud: a payment-status change has no amount). A
+// delivery order's collected reads Delivered, as on its badge.
+function historyLabel(ch, o) {
   const h = OrderatLiveCore.historyLabel(ch);
-  if (h.status) return `${t('history.status')}: ${t('order.status.' + h.status)}`;
+  if (h.status) return `${t('history.status')}: ${h.status === 'collected' && o?.fulfillment === 'delivery' ? t('status.delivered') : t('order.status.' + h.status)}`;
   if (h.key === 'history.payment') return `${t('history.payment')}: ${money(h.amount)}`;
   if (h.payment) return t(h.key, t('payment.status.' + h.payment));
   return t(h.key);
@@ -606,6 +614,7 @@ function waMessage(kind, o) {
   if (kind === 'confirmOrder') return t('whatsapp.message.confirmOrder', name, shop, itemsLine(o), `${fmtDay(d)} ${fmtTime(d)}`);
   if (kind === 'orderReady') return t('whatsapp.message.orderReady', name, shop, itemsLine(o));
   if (kind === 'pickupReminder') return t('whatsapp.message.pickupReminder', name, shop, fmtTime(d));
+  if (kind === 'outForDelivery') return t('whatsapp.message.outForDelivery', name, shop);
   if (kind === 'paymentReminder') return t('whatsapp.message.paymentReminder', name, shop, money(totals(o).due));
   return t('whatsapp.message.thankYou', name, shop);
 }
@@ -626,10 +635,13 @@ function viewOrder(id) {
     (o.payments || []).map(p => `<div class="line small pay-row"><span>${esc(money(p.amount))} · ${esc(t('payment.method.' + p.method))}${p.at ? ` · ${esc(fmtShort(new Date(p.at)))}` : ''}${p.note ? ` · ${esc(p.note)}` : ''}</span>${can('orders') ? `<button class="icon-btn" data-act="delete-payment" data-id="${esc(o.id)}" data-pay="${esc(p.id || '')}" data-at="${esc(p.at || '')}" aria-label="${esc(t('pay.delete'))}" title="${esc(t('pay.delete'))}">${icon('trash')}</button>` : ''}</div>`).join(''),
     T.due > 0 && o.status !== 'cancelled' && can('orders') ? `<div class="line"><span class="muted">${esc(t('orders.remaining'))} ${esc(money(T.due))}</span></div><div class="btn-row"><button class="btn ghost" data-act="pay" data-id="${esc(o.id)}">${esc(t('recordPayment'))}</button><button class="btn primary" data-act="pay-full" data-id="${esc(o.id)}">${esc(t('pay.paidInFull'))}</button></div>` : '',
   ].join('');
+  // Out for delivery offers its message first.
+  const templates = o.fulfillment !== 'delivery' ? WA_TEMPLATES
+    : isOut(o) ? ['outForDelivery', ...WA_DELIVERY_TEMPLATES.filter(k => k !== 'outForDelivery')] : WA_DELIVERY_TEMPLATES;
   const wa = c?.phone
-    ? `<div class="chips wrap">${WA_TEMPLATES.map(k => `<a class="chip" href="${esc(waLink(c.phone, waMessage(k, o)))}" target="_blank" rel="noopener">${icon('whatsapp')} ${esc(t('whatsapp.template.' + k))}</a>`).join('')}</div>`
+    ? `<div class="chips wrap">${templates.map(k => `<a class="chip${k === 'outForDelivery' && isOut(o) ? ' on' : ''}" href="${esc(waLink(c.phone, waMessage(k, o)))}" target="_blank" rel="noopener">${icon('whatsapp')} ${esc(t('whatsapp.template.' + k))}</a>`).join('')}</div>`
     : `<p class="muted small">${esc(t('orders.noPhone'))}</p>`;
-  const history = o.changes.slice().reverse().map(ch => { const at = new Date(ch.at); return line(historyLabel(ch), `${fmtShort(at)} ${fmtTime(at)}`, 'small'); }).join('');
+  const history = o.changes.slice().reverse().map(ch => { const at = new Date(ch.at); return line(historyLabel(ch, o), `${fmtShort(at)} ${fmtTime(at)}`, 'small'); }).join('');
   const body = `<div class="stack">
     <section class="card od-head${canEditOrder(o) ? ' tappable" data-act="edit-order" data-id="' + esc(o.id) + '" role="button" tabindex="0' : ''}">
       <div class="split"><h2>${esc(fmtDay(d))} · ${esc(fmtTime(d))}</h2>${orderBadge(o)}</div>
@@ -639,7 +651,7 @@ function viewOrder(id) {
       ${o.notes ? `<p class="od-notes">${esc(o.notes)}</p>` : ''}
     </section>
     <section class="card lines">${lines}</section>
-    ${open && can('status') ? `<div class="btn-col">${NEXT[o.status] ? `<button class="btn primary block big" data-act="advance" data-id="${esc(o.id)}">${esc(nextLabel(o))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${esc(o.id)}">${esc(t('orders.cancel'))}</button></div>` : ''}
+    ${open && can('status') ? `<div class="btn-col">${nextStep(o) ? `<button class="btn primary block big" data-act="advance" data-id="${esc(o.id)}">${esc(nextLabel(o))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${esc(o.id)}">${esc(t('orders.cancel'))}</button></div>` : ''}
     ${o.status === 'cancelled' && can('status') ? `<button class="btn ghost block" data-act="reopen-order" data-id="${esc(o.id)}">${esc(t('orders.reopen'))}</button>` : ''}
     <section class="card"><h3 class="card-title">${icon('whatsapp')} ${esc(t('orders.sendWhatsApp'))}</h3>${wa}</section>
     <a class="card row" href="#/shop/receipts/${esc(o.id)}"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('shop.receipt'))}</b><small><bdi dir="ltr">${esc(invoiceNo(o))}</bdi></small></span>${icon('chev', 'chev')}</a>
@@ -678,7 +690,17 @@ function setStatus(o, status) {
   else if (S.stockEnabled && status === 'confirmed' && !o.stockApplied) { applyStock(o, -1); o.stockApplied = true; }
   if ((status === 'cancelled' || status === 'new') && o.stockApplied) { applyStock(o, 1); o.stockApplied = false; }
   o.status = status;
+  // Out for delivery belongs to Ready: delivered (collected), cancelled or any other status clears it.
+  if (status !== 'ready' && o.outForDeliveryAt) o.outForDeliveryAt = null;
   o.changes.push({ kind: 'status', value: status, at: new Date().toISOString() });
+  save();
+}
+// Out for delivery: the order stays ready (older apps simply see Ready) with outForDeliveryAt set, and
+// the step goes into its history (field outForDelivery); back to Ready clears it.
+function setOutForDelivery(o, on) {
+  const at = new Date().toISOString();
+  o.outForDeliveryAt = on ? at : null;
+  o.changes.push({ kind: 'outForDelivery', value: on ? at : null, at });
   save();
 }
 
@@ -1671,14 +1693,26 @@ const ACTIONS = {
   'orders-customer-clear'() { ordersCustomer = ''; render(); },
   'orders-more'() { ordersMore = true; render(); },
   advance(el) {
-    const id = el.dataset.id, o = orderById(id);
-    if (!o || !NEXT[o.status]) return;
-    const prev = o.status, next = NEXT[o.status];
+    const id = el.dataset.id, o = orderById(id), next = o && can('status') ? nextStep(o) : null;
+    if (!next) return;
+    if (next === 'out') {
+      setOutForDelivery(o, true);
+      render();
+      undoToast(t('orders.statusChanged', t('status.outForDelivery')), () => {
+        const now = orderById(id);
+        if (now && isOut(now)) { setOutForDelivery(now, false); render(); }
+      });
+      return;
+    }
+    const prev = o.status, prevOut = isOut(o) ? o.outForDeliveryAt : null;
     setStatus(o, next);
     render();
     undoToast(t('orders.statusChanged', next === 'collected' && o.fulfillment === 'delivery' ? t('status.delivered') : t('order.status.' + next)), () => {
       const now = orderById(id);
-      if (now && now.status === next) { setStatus(now, prev); render(); }
+      if (!now || now.status !== next) return;
+      setStatus(now, prev);
+      if (prevOut) { now.outForDeliveryAt = prevOut; save(); } // back to Out for delivery
+      render();
     });
   },
   'cancel-order'(el) { const o = orderById(el.dataset.id); if (o && confirm(t('orders.cancelConfirm'))) { setStatus(o, 'cancelled'); render(); } },
@@ -1957,7 +1991,7 @@ const FORMS = {
     const order = {
       id: nid(), no: Live.on ? undefined : S.nextOrderNo++, customerId: c.id, dueAt: (isNaN(due) ? new Date() : due).toISOString(), items,
       fulfillment: D.fulfillment, area: delivery ? D.area || c.area || '' : '', address: delivery ? String(D.address || '').trim() : '', deliveryFee: delivery ? parseFloat(D.fee) || 0 : 0,
-      source: D.source, payments: [], notes: D.notes.trim(), changes: [{ kind: 'created', at: now }], status: 'new', stockApplied: false,
+      source: D.source, payments: [], notes: D.notes.trim(), changes: [{ kind: 'created', at: now }], status: 'new', outForDeliveryAt: null, stockApplied: false,
     };
     if (Live.on) {
       delete order.no; // display numbers come from creation order
@@ -2006,7 +2040,13 @@ const FORMS = {
     };
     const moved = next.dueAt !== o.dueAt, feeChanged = next.deliveryFee !== (o.deliveryFee || 0) || next.fulfillment !== o.fulfillment;
     if (!Object.keys(next).some(k => String(next[k] ?? '') !== String(o[k] ?? ''))) { closeModal(); return; }
+    const wasOut = isOut(o);
     Object.assign(o, next);
+    // A pickup order is never out for delivery.
+    if (!delivery && o.outForDeliveryAt) {
+      o.outForDeliveryAt = null;
+      if (wasOut) o.changes.push({ kind: 'outForDelivery', value: null, at: new Date().toISOString() });
+    }
     if (feeChanged && Live.on) Live.applyOrderVat(o);
     o.changes.push({ kind: 'edited', at: new Date().toISOString() });
     save(); closeModal(); render();

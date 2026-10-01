@@ -275,19 +275,25 @@
   // address.notes: the web's free-text delivery address; a web order without one leaves the key out.
   const ADDRESS_NOTES = { read: text.read, write: v => (v === undefined ? undefined : optText.write(typeof v === 'string' ? v.trim() : v)) };
   const STOCK_TAKEN = ['confirmed', 'ready', 'collected']; // web statuses whose stock is already deducted
-  const HISTORY_KINDS = { order: 'created', status: 'status', items: 'items', paymentStatus: 'payment' };
+  const HISTORY_KINDS = { order: 'created', status: 'status', items: 'items', paymentStatus: 'payment', outForDelivery: 'outForDelivery' };
+  // When a ready delivery order went out for delivery, else null. The status stays "ready" on the wire
+  // (older apps know no other value and keep this key as an unknown one); a record without the key reads
+  // null and keeps it out until the web sets it.
+  const OUT_FOR_DELIVERY = { read: v => iso(v) || null, write: v => iso(v) || null };
   // The order's plain fields; the address area, items, payments and history are mapped below.
   const orderFields = (m, now) => [
     ['customerId', 'customerId', text], ['status', 'status', STATUS], ['fulfillment', 'fulfillmentType', FULFILLMENT],
     ['dueAt', 'dueAt', date(now)], ['deliveryFee', 'deliveryFeeMinor', m], ['notes', 'notes', optText], ['source', 'source', SOURCE],
     ['vatRateBps', 'vatRateBps', nullableInt], ['vatIncluded', 'vatIncluded', nullableFlag], ['vatMinor', 'vatMinor', nullableInt],
     ['invoiceNumber', 'invoiceNumber', anyValue], ['invoiceIdentifier', 'invoiceIdentifier', nullableText],
+    ['outForDeliveryAt', 'outForDeliveryAt', OUT_FOR_DELIVERY],
   ];
 
   // History for display in the web's shape, the cloud entry itself kept on `_c`.
   function historyToWeb(c) {
     const entry = { kind: own(HISTORY_KINDS, c.field) ? HISTORY_KINDS[c.field] : 'other' };
     if (entry.kind === 'status') entry.value = STATUS.read(c.newValue);
+    if (entry.kind === 'outForDelivery') entry.value = c.newValue === undefined ? null : clone(c.newValue);
     entry.at = anyDate.read(c.at);
     entry._c = clone(c);
     return entry;
@@ -355,6 +361,8 @@
     const at = iso(ch.at) || now;
     if (ch.kind === 'created') return { id: newId(), field: 'order', newValue: 'created', at };
     if (ch.kind === 'items') return { id: newId(), field: 'items', newValue: 'edited', at };
+    // Out for delivery: newValue is when it went out, null when it came back to Ready.
+    if (ch.kind === 'outForDelivery') return { id: newId(), field: 'outForDelivery', newValue: iso(ch.value) || null, at };
     if (ch.kind !== 'status') return undefined;
     const entry = { id: newId(), field: 'status' };
     if (status !== undefined) entry.oldValue = status;

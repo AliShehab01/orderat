@@ -17,6 +17,8 @@
 //   included (Bahrain's area to the area list, the rest as the one free-text address).
 // - default delivery fee: the shop's `setting/deliveryDefaults` { feeMinor }, filled into an order that
 //   turns into a delivery while its fee is still empty and untouched.
+// - out for delivery: a ready delivery order with outForDeliveryAt set (the status stays ready on the
+//   wire), the step between Ready and Delivered.
 // Web objects use major units (6.5 = 6.500 BHD); anything sent to the server is in minor units.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./cloud-map.js'));
@@ -255,6 +257,24 @@
     return { toggle, current: userId => (members.has(userId) ? Object.assign({}, members.get(userId).want) : undefined) };
   }
 
+  // ---------- Out for delivery ----------
+
+  // A delivery order between Ready and Delivered: still "ready" on the wire (older apps know no other
+  // status), with outForDeliveryAt set. An outForDelivery history entry's value is when it went out
+  // (another app may write true); null, '' or false is back to Ready.
+  const wentOut = v => v === true || (typeof v === 'string' && v !== '' && v !== 'false' && v !== 'null');
+  const isOutForDelivery = o => !!o && o.status === 'ready' && wentOut(o.outForDeliveryAt);
+  // The order's next step on its page: confirmed, ready, then for a delivery order 'out' (out for
+  // delivery) before collected (delivered); a pickup order goes from ready to collected. `out: false`
+  // skips the out step (staff whose order pushes the server keeps to the status only).
+  function nextStep(o, options) {
+    const out = !options || options.out !== false;
+    if (o.status === 'new') return 'confirmed';
+    if (o.status === 'confirmed') return 'ready';
+    if (o.status === 'ready') return out && o.fulfillment === 'delivery' && !isOutForDelivery(o) ? 'out' : 'collected';
+    return null;
+  }
+
   // ---------- Order numbers, history, items ----------
 
   // Display numbers (1, 2, 3...) in creation order; never written to the cloud.
@@ -269,6 +289,7 @@
   function historyLabel(ch) {
     if (ch.kind === 'created') return { key: 'history.created' };
     if (ch.kind === 'items') return { key: 'history.itemsEdited' };
+    if (ch.kind === 'outForDelivery') return { key: wentOut(ch.value) ? 'history.outForDelivery' : 'history.backToReady' };
     if (ch.kind === 'status' && STATUSES.indexOf(ch.value) >= 0) return { key: 'history.status', status: ch.value };
     if (ch.kind === 'payment') {
       if (typeof ch.value === 'number') return { key: 'history.payment', amount: ch.value };
@@ -495,6 +516,6 @@
     subscriptionAllowed, subscriptionActive, aiDemo, callingCode, localDigits, normalizePhone, access, formatInvoice, nextInvoice, invoiceLabel,
     vatMinor, defaultRateBps, applyVat, orderMinor, stockForStatus, stockForEdit, orderNumbers, historyLabel,
     cleanItems, parseProducts, answerDraft, draftFields, deliveryAddress, buildAskSnapshot, canMoveOrderStock, flushBeforeLeaving,
-    createPermissionEditor, deliveryFeeMinor, feeForFulfillment,
+    createPermissionEditor, deliveryFeeMinor, feeForFulfillment, isOutForDelivery, nextStep,
   };
 });

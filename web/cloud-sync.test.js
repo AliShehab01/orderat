@@ -792,6 +792,21 @@ describe('orders', () => {
     expect(server.pushed().filter(c => c.id === ORDER_ID)).toHaveLength(1);
     expect(app.S.orders[0].payments.map(p => p.amount)).toEqual([5, 8]);
   });
+
+  it('sends out for delivery as a ready order with outForDeliveryAt, and reads it back', async () => {
+    const server = seeded();
+    server.put('order', ORDER_ID, { ...ORDER(), status: 'ready', fulfillmentType: 'delivery' });
+    const app = await started(server);
+    const order = app.S.orders[0];
+    expect(order.outForDeliveryAt).toBeNull();
+    order.outForDeliveryAt = '2026-09-29T07:30:00.000Z';
+    order.changes.push({ kind: 'outForDelivery', value: '2026-09-29T07:30:00.000Z', at: '2026-09-29T07:30:00.000Z' });
+    await app.sync.commit(app.S);
+    const data = server.row('order', ORDER_ID).data;
+    expect([data.status, data.outForDeliveryAt, data.changes.at(-1).field, data.changes.at(-1).newValue]).toEqual(['ready', '2026-09-29T07:30:00.000Z', 'outForDelivery', '2026-09-29T07:30:00.000Z']);
+    expect(app.S.orders[0]).toMatchObject({ status: 'ready', outForDeliveryAt: '2026-09-29T07:30:00.000Z' });
+    expect(app.sync.pending).toBe(0);
+  });
 });
 
 // Review fixes (review-task-4.md I1-I3, M1-M3).

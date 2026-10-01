@@ -162,6 +162,11 @@ function makeDemoData(businessType, now = new Date()) {
     if (isPast) order.status = i % 9 === 0 ? 'cancelled' : 'collected';
     else if (isToday) order.status = ['ready', 'confirmed', 'new'][i % 3];
     else order.status = i % 2 === 0 ? 'confirmed' : 'new';
+    // Today's ready delivery order has gone out for delivery, the step between Ready and Delivered.
+    if (isToday && delivery && order.status === 'ready') {
+      order.outForDeliveryAt = new Date(now.getTime() - 10 * 60000).toISOString();
+      order.changes.push({ kind: 'outForDelivery', value: order.outForDeliveryAt, at: order.outForDeliveryAt });
+    }
 
     if (order.status !== 'cancelled') {
       const total = items.reduce((s, it) => s + it.qty * it.price, 0) + order.deliveryFee;

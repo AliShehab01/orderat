@@ -21,6 +21,8 @@
   --warn-soft: #fff1d6;
   --bad: #b42318;
   --bad-soft: #fdeceb;
+  --out: #6d28d9;
+  --out-soft: #efe9fe;
   --neutral-soft: #eef0f8;
   --radius-lg: 1.25rem;
   --radius-md: 0.9rem;
@@ -46,6 +48,8 @@
   --warn-soft: #3d3016;
   --bad: #ff8a80;
   --bad-soft: #43201f;
+  --out: #c4b5fd;
+  --out-soft: #2e2458;
   --neutral-soft: #242a52;
   --shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.6);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -67,6 +71,8 @@
     --warn-soft: #3d3016;
     --bad: #ff8a80;
     --bad-soft: #43201f;
+    --out: #c4b5fd;
+    --out-soft: #2e2458;
     --neutral-soft: #242a52;
     --shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.6);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -216,6 +222,8 @@ a.card.row { padding: 0.8rem 1.1rem; }
 .badge.ok { background: var(--ok-soft); color: var(--ok); }
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.bad { background: var(--bad-soft); color: var(--bad); }
+/* Out for delivery, between Ready (warn) and Delivered (ok). */
+.badge.out { background: var(--out-soft); color: var(--out); }
 .src { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; flex: none; }
 .src .ic { width: 14px; height: 14px; }
 .src-whatsapp { background: rgba(31, 157, 85, 0.14); color: #1f9d55; }

@@ -250,6 +250,32 @@ describe('order numbers and history', () => {
   });
 });
 
+describe('out for delivery', () => {
+  const OUT = '2026-09-29T07:30:00.000Z';
+
+  it('is a ready order with outForDeliveryAt set', () => {
+    expect(core.isOutForDelivery({ status: 'ready', outForDeliveryAt: OUT })).toBe(true);
+    expect(core.isOutForDelivery({ status: 'ready', outForDeliveryAt: null })).toBe(false);
+    expect(core.isOutForDelivery({ status: 'ready' })).toBe(false);
+    expect(core.isOutForDelivery({ status: 'collected', outForDeliveryAt: OUT })).toBe(false); // an older app delivered it
+    expect(core.isOutForDelivery(null)).toBe(false);
+  });
+
+  it('puts the step between Ready and Delivered for delivery orders only', () => {
+    const step = (status, fulfillment, outForDeliveryAt = null, options) => core.nextStep({ status, fulfillment, outForDeliveryAt }, options);
+    expect(['new', 'confirmed', 'ready', 'collected', 'cancelled', 'other'].map(s => step(s, 'delivery'))).toEqual(['confirmed', 'ready', 'out', null, null, null]);
+    expect(step('ready', 'delivery', OUT)).toBe('collected');
+    expect(step('ready', 'pickup')).toBe('collected');
+    expect(step('ready', 'delivery', null, { out: false })).toBe('collected');
+  });
+
+  it('labels the history step: out for delivery, or back to Ready', () => {
+    expect(core.historyLabel({ kind: 'outForDelivery', value: OUT })).toEqual({ key: 'history.outForDelivery' });
+    expect(core.historyLabel({ kind: 'outForDelivery', value: true })).toEqual({ key: 'history.outForDelivery' });
+    for (const value of [null, '', false, 'false', undefined]) expect(core.historyLabel({ kind: 'outForDelivery', value })).toEqual({ key: 'history.backToReady' });
+  });
+});
+
 describe('items editor', () => {
   const products = [{ id: 'p1', nameAr: 'كيك', nameEn: 'Cake', price: 6, cost: 2 }];
   it('keeps item ids, the line cost while the product is unchanged, and drops empty lines', () => {
