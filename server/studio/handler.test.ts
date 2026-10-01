@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SqlClient } from "../agent/postgres-store.ts";
+import { createSession, newSessionToken, upsertUser } from "../auth/store.ts";
 import { createMarketingTestSql } from "../marketing-pglite-test-support.ts";
 import type { Campaign, StudioStyle } from "../campaigns/content";
 import { createStudioHandler, type StudioHandlerDeps } from "./handler";
@@ -26,7 +27,7 @@ const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 1, 2, 3, 4, 5]);
 const JPEG_BASE64 = Buffer.from(JPEG_BYTES).toString("base64");
 
 function makeHandler(overrides: Partial<StudioHandlerDeps> = {}) {
-  return createStudioHandler({ sql, campaigns: [CAMPAIGN], styles: [STYLE], log: () => {}, now: () => new Date("2026-09-26T12:00:00Z"), ...overrides });
+  return createStudioHandler({ sql, ipSalt: "test-ip-salt", campaigns: [CAMPAIGN], styles: [STYLE], log: () => {}, now: () => new Date("2026-09-26T12:00:00Z"), ...overrides });
 }
 
 function req(body: unknown, init: RequestInit = {}): Request {
@@ -270,5 +271,53 @@ describe("createStudioHandler / shared", () => {
     const captionHandler = makeHandler({ text: { apiKey: "k" }, fetchImpl: fetchReturningCaption() });
     const res = await captionHandler(req(validCaptionBody({ installId: "shared" })));
     expect(res.status).toBe(200);
+  });
+});
+
+// Security review 1 Oct 2026, F02: a new installId used to start a fresh quota, and demo=false took the
+// paid one. Now: per client IP without a session (stricter for demo=false), per account with one.
+describe("createStudioHandler / limits a client cannot reset", () => {
+  const from = (ip: string, extra: Record<string, string> = {}): RequestInit => ({ headers: { "x-forwarded-for": ip, ...extra } });
+
+  async function signedIn(): Promise<string> {
+    const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1" });
+    const { token, tokenHash } = await newSessionToken();
+    await createSession(sql, { tokenHash, userId: user.id, now: new Date("2026-09-26T12:00:00Z") });
+    return token;
+  }
+
+  it("a new installId on every caption stops at the client IP's cap; another IP is unaffected", async () => {
+    const handler = makeHandler({ text: { apiKey: "k" }, captionLimits: { perIp: 3 }, fetchImpl: fetchReturningCaption() });
+    for (let i = 0; i < 3; i++) expect((await handler(req(validCaptionBody({ installId: `fresh-${i}`, demo: true }), from("203.0.113.7")))).status).toBe(200);
+    const blocked = await handler(req(validCaptionBody({ installId: "fresh-new", demo: true }), from("203.0.113.7")));
+    expect(blocked.status).toBe(429);
+    expect(await blocked.json()).toEqual({ error: "daily_limit" });
+    expect((await handler(req(validCaptionBody({ installId: "fresh-new", demo: true }), from("198.51.100.9")))).status).toBe(200);
+  });
+
+  it("claiming demo=false without a session: 20 photos a day per IP, whatever the installIds", async () => {
+    const handler = makeHandler({ image: { apiKey: "k" }, fetchImpl: fetchReturningPhoto() });
+    for (let i = 0; i < 20; i++) expect((await handler(req(validPhotoBody({ installId: `paid-${i}` }), from("203.0.113.7")))).status).toBe(200);
+    const blocked = await handler(req(validPhotoBody({ installId: "paid-new" }), from("203.0.113.7")));
+    expect(blocked.status).toBe(429);
+    expect(await blocked.json()).toEqual({ error: "daily_limit" });
+  });
+
+  it("with a valid X-Orderat-Session the quota is the account's: a new installId or another IP does not reset it", async () => {
+    const session = await signedIn();
+    const handler = makeHandler({ text: { apiKey: "k" }, captionLimits: { perInstall: 2 }, fetchImpl: fetchReturningCaption() });
+    const first = await handler(req(validCaptionBody({ installId: "phone" }), from("203.0.113.7", { "x-orderat-session": session })));
+    expect(first.status).toBe(200);
+    expect((await first.json()).remainingToday).toBe(1);
+    expect((await handler(req(validCaptionBody({ installId: "browser" }), from("198.51.100.9", { "x-orderat-session": session })))).status).toBe(200);
+    const blocked = await handler(req(validCaptionBody({ installId: "another" }), from("192.0.2.1", { "x-orderat-session": session })));
+    expect(blocked.status).toBe(429);
+    expect(await blocked.json()).toEqual({ error: "daily_limit" });
+  });
+
+  it("an unknown session is counted by IP like any call without one", async () => {
+    const handler = makeHandler({ text: { apiKey: "k" }, captionLimits: { perIp: 1 }, fetchImpl: fetchReturningCaption() });
+    expect((await handler(req(validCaptionBody({ installId: "a", demo: true }), from("203.0.113.7", { "x-orderat-session": "made-up" })))).status).toBe(200);
+    expect((await handler(req(validCaptionBody({ installId: "b", demo: true }), from("203.0.113.7", { "x-orderat-session": "made-up-too" })))).status).toBe(429);
   });
 });

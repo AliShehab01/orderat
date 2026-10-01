@@ -1,24 +1,37 @@
-// Per-entity push/pull permission rules for sync (docs/sme-phase-2-cloud.md's "Permissions"):
-//   - `orders` permission: full read/write of "order" and "customer" records ("create and edit
-//     orders and customers").
-//   - `prepare` permission, without `orders`: may push an *existing* "order" record's `status` field
-//     only — every other field is kept from the record already stored, never trusted from the
-//     incoming payload ("The server copies the rest of the order from the stored record"). Cannot
-//     create a brand-new order (there is nothing stored yet to copy the rest from) and cannot delete
-//     one (a tombstone isn't "changing status"), and cannot touch "customer" at all.
-//   - `money` permission: required to push *or* pull "expense" records; without it, expense records
-//     are simply left out of a pull, and a push of one is rejected outright.
-//   - `products` permission: required to push "product" records (and, by the same reasoning, a
-//     synced product photo — server/sync/handler.ts's photo_upload). One exception, so stock stays
-//     right when staff handle orders: staff with `orders` or `prepare` but not `products` may push an
-//     *existing* product when, next to the stored copy, only its stock changed — see isOrderStockUpdate.
-//   - every other entity ("shop", "occasion", "stock_move", "setting") has no permission of its own
-//     in the spec, so any shop member — owner or staff, whatever their permissions — may push or pull
-//     it; this file deliberately does not invent a stricter rule the spec never states.
-//   - one exception: the "setting" record with id "subscription" is the owner's own subscription
-//     report (docs/superpowers/specs/2026-09-29-orderat-web-design.md's "Paid check": the website opens
-//     the shop only while it says the subscription is current), so only the owner may push it. Staff may
-//     still pull it, and may push every other setting as before.
+// Per-entity pull (read) and push (write) rules for sync, per staff permission (docs/sme-phase-2-cloud.md's
+// "Permissions"; security review 1 Oct 2026, F01, docs/security-review-2026-10-01.md). Until that review
+// staff pulled every record but expenses whatever their flags, and could push the shop record and any
+// setting. The rules now follow what the phones' and the web's screens let each flag do (iOS Store
+// canManageOrders / canChangeOrderStatus / canSeeMoney / canEditProducts, Android CloudShopService, the
+// web's live-core access), and nothing more. The owner may read and write everything.
+//
+// Pull (canPull), for staff:
+//   - every member, whatever their flags: the `shop` record and the `subscription` setting — the shop's
+//     basics (name, currency, VAT, whether it is paid up), which every screen needs.
+//   - any flag at all: every other setting (shop-level config such as whatsappTemplates or
+//     deliveryDefaults), products and their stock moves, and occasions.
+//   - `orders`, `prepare` or `money`: orders and customers — taking orders, preparing them, and the
+//     money reports all need them (a phone also drops an order whose customer it does not have).
+//   - `money`: expenses.
+//   A record a member may not pull is simply left out of the page — never sent as a deletion, so
+//   tightening a member's flags never makes a phone delete anything it holds.
+//
+// Push (decidePush), for staff:
+//   - `shop` and every `setting`: never — the owner's alone (the `subscription` setting is the owner's
+//     own report, which the website's paid check reads). No setting synced today belongs to a single
+//     staff member: per-device preferences never sync.
+//   - `orders`: full write of orders, customers and occasions (create, edit, delete).
+//   - `prepare` (without `orders`): an *existing* order's status fields only — `status`,
+//     `outForDeliveryAt`, `updatedAt`, and new `changes` entries about them. Every other field is
+//     kept from the stored record, never trusted from the payload. No creating or deleting orders.
+//   - `money` (without `orders`): an existing order's money fields only — `payments`, `paymentStatus`,
+//     `updatedAt` and new payment history entries — and full write of expenses.
+//   - `products`: full write of products and stock moves (and photo uploads, server/sync/handler.ts).
+//     Staff with `orders` or `prepare` but not `products` may push an *existing* product when, next to
+//     the stored copy, only its stock changed (isOrderStockUpdate) — so stock stays right when staff
+//     confirm or cancel orders.
+//   Everything else is refused, and comes back to the phone as a `rejected` entry (server/sync/
+//   push-pull.ts), with the server's copy when the member may pull it.
 
 import { hasPermission, type Member } from "./permissions.ts";
 
@@ -32,48 +45,198 @@ export type PushDecision =
   | { allowed: true; data: Record<string, unknown> }
   | { allowed: false; reason: "forbidden" };
 
+/** A record as currently stored, handed to decidePush — undefined when the push would create it. */
+export interface StoredRecord {
+  data: Record<string, unknown>;
+  deleted: boolean;
+}
+
+const FORBIDDEN: PushDecision = { allowed: false, reason: "forbidden" };
+const allow = (data: Record<string, unknown>): PushDecision => ({ allowed: true, data });
+
+function hasAnyPermission(member: Member): boolean {
+  return hasPermission(member, "orders") || hasPermission(member, "prepare") || hasPermission(member, "money") || hasPermission(member, "products");
+}
+
+// ---------- Pull ----------
+
+/** Whether `member` may see record `id` of `entity` on a pull (and get its server copy back when a
+ * push of it is refused). */
+export function canPull(member: Member, entity: Entity, id: string): boolean {
+  if (member.role === "owner") return true;
+  switch (entity) {
+    case "shop":
+      return true;
+    case "setting":
+      return id === SUBSCRIPTION_SETTING_ID || hasAnyPermission(member);
+    case "product":
+    case "stock_move":
+    case "occasion":
+      return hasAnyPermission(member);
+    case "customer":
+    case "order":
+      return hasPermission(member, "orders") || hasPermission(member, "prepare") || hasPermission(member, "money");
+    case "expense":
+      return hasPermission(member, "money");
+    default:
+      return false;
+  }
+}
+
+/** The order records of a grant must reach a phone in: a phone drops an order whose customer it does
+ * not hold yet (Android), so customers and products always come before orders — the same order the
+ * phones push in. */
+const REDELIVERY_ORDER: readonly Entity[] = ["shop", "setting", "product", "stock_move", "customer", "occasion", "order", "expense"];
+
+/** A setting id other than the subscription, standing for "every other setting" below. */
+const ANY_OTHER_SETTING = "";
+
+/**
+ * The entities with records `after` may pull and `before` could not — what a permission grant makes
+ * visible, in REDELIVERY_ORDER. A phone keeps its pull cursor when its flags change, so records it was
+ * not sent before the grant would otherwise never reach it; server/sync/handler.ts's members_update
+ * gives these a fresh seq so every phone pulls them again.
+ */
+export function newlyVisibleEntities(before: Member, after: Member): Entity[] {
+  return REDELIVERY_ORDER.filter((entity) => {
+    const id = entity === "setting" ? ANY_OTHER_SETTING : "";
+    return canPull(after, entity, id) && !canPull(before, entity, id);
+  });
+}
+
+// ---------- Push ----------
+
 /**
  * Decides whether `member` may push `incomingData` to record `id` of `entity`, and, when allowed, the
- * actual `data` to store — identical to `incomingData` for every entity except a prepare-only push of
- * an "order", where only `status` is taken from `incomingData` and everything else comes from
- * `existingData` (the record as currently stored; undefined when this would be a brand-new record).
+ * data to store — `incomingData` itself, except for a `prepare`/`money` push of an order, where only the
+ * fields that permission covers are taken from `incomingData` and everything else comes from
+ * `existing` (the record as currently stored; undefined when this push would create it).
  */
 export function decidePush(
   member: Member,
   entity: Entity,
-  id: string,
+  _id: string,
   incomingData: Record<string, unknown>,
   deleted: boolean,
-  existingData: Record<string, unknown> | undefined,
+  existing: StoredRecord | undefined,
 ): PushDecision {
-  if (entity === "setting" && id === SUBSCRIPTION_SETTING_ID) {
-    return member.role === "owner" ? { allowed: true, data: incomingData } : { allowed: false, reason: "forbidden" };
+  if (member.role === "owner") return allow(incomingData);
+  switch (entity) {
+    case "shop":
+    case "setting":
+      return FORBIDDEN;
+    case "customer":
+    case "occasion":
+      return hasPermission(member, "orders") ? allow(incomingData) : FORBIDDEN;
+    case "expense":
+      return hasPermission(member, "money") ? allow(incomingData) : FORBIDDEN;
+    case "stock_move":
+      return hasPermission(member, "products") ? allow(incomingData) : FORBIDDEN;
+    case "product":
+      if (hasPermission(member, "products")) return allow(incomingData);
+      if ((hasPermission(member, "orders") || hasPermission(member, "prepare")) && !deleted && existing && !existing.deleted && isOrderStockUpdate(existing.data, incomingData)) {
+        return allow(incomingData);
+      }
+      return FORBIDDEN;
+    case "order":
+      if (hasPermission(member, "orders")) return allow(incomingData);
+      return mergeOrderFields(member, incomingData, deleted, existing);
+    default:
+      return FORBIDDEN;
   }
-  if (entity === "expense") {
-    return hasPermission(member, "money") ? { allowed: true, data: incomingData } : { allowed: false, reason: "forbidden" };
-  }
-  if (entity === "product") {
-    if (hasPermission(member, "products")) return { allowed: true, data: incomingData };
-    if ((hasPermission(member, "orders") || hasPermission(member, "prepare")) && !deleted && existingData && isOrderStockUpdate(existingData, incomingData)) {
-      return { allowed: true, data: incomingData };
+}
+
+// ---------- Order fields for `prepare` and `money` ----------
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T/;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const isString = (v: unknown) => typeof v === "string";
+const isIsoDateOrNull = (v: unknown) => v === null || (typeof v === "string" && ISO_DATE_RE.test(v) && Number.isFinite(Date.parse(v)));
+const isListOfObjects = (v: unknown) => Array.isArray(v) && v.every(isPlainObject);
+
+interface FieldRule {
+  valid: (value: unknown) => boolean;
+  /** Optional keys follow the payload when it leaves them out (cleared); required ones stay as stored. */
+  optional: boolean;
+}
+
+/** The order fields each permission may change, and what a valid value looks like. A value that is not
+ * valid is ignored: the stored one stays. */
+const PREPARE_FIELDS: Record<string, FieldRule> = {
+  status: { valid: isString, optional: false },
+  // "Out for delivery" (tester feedback, 1 Oct 2026): status stays "ready" on the wire and this key holds
+  // when the order left; null or absent once it moves on.
+  outForDeliveryAt: { valid: isIsoDateOrNull, optional: true },
+  updatedAt: { valid: isString, optional: false },
+};
+const MONEY_FIELDS: Record<string, FieldRule> = {
+  payments: { valid: isListOfObjects, optional: false },
+  paymentStatus: { valid: isString, optional: false },
+  updatedAt: { valid: isString, optional: false },
+};
+/** The `changes` (order history) entries each permission may add — the `field` the phones and the web
+ * write for a status move ("status", "outForDelivery") or a payment ("paymentStatus", "payment"). */
+const PREPARE_HISTORY = ["status", "outForDelivery"];
+const MONEY_HISTORY = ["paymentStatus", "payment"];
+
+/** A prepare/money push of an order: only onto an existing, live order (nothing to create, delete or
+ * bring back), with a status like every order has; the covered fields come from the payload, the rest
+ * from the stored record. */
+function mergeOrderFields(member: Member, incoming: Record<string, unknown>, deleted: boolean, existing: StoredRecord | undefined): PushDecision {
+  const prepare = hasPermission(member, "prepare");
+  const money = hasPermission(member, "money");
+  if (!prepare && !money) return FORBIDDEN;
+  if (deleted || !existing || existing.deleted) return FORBIDDEN;
+  if (typeof incoming.status !== "string") return FORBIDDEN;
+
+  const fields: Record<string, FieldRule> = { ...(prepare ? PREPARE_FIELDS : {}), ...(money ? MONEY_FIELDS : {}) };
+  const history = new Set([...(prepare ? PREPARE_HISTORY : []), ...(money ? MONEY_HISTORY : [])]);
+
+  const data: Record<string, unknown> = { ...existing.data };
+  for (const [key, rule] of Object.entries(fields)) {
+    if (key in incoming) {
+      if (rule.valid(incoming[key])) data[key] = incoming[key];
+    } else if (rule.optional) {
+      delete data[key];
     }
-    return { allowed: false, reason: "forbidden" };
   }
-  if (entity === "customer") {
-    return hasPermission(member, "orders") ? { allowed: true, data: incomingData } : { allowed: false, reason: "forbidden" };
-  }
-  if (entity === "order") {
-    if (hasPermission(member, "orders")) return { allowed: true, data: incomingData };
-    if (hasPermission(member, "prepare")) {
-      if (deleted || !existingData) return { allowed: false, reason: "forbidden" };
-      if (typeof incomingData.status !== "string") return { allowed: false, reason: "forbidden" };
-      return { allowed: true, data: { ...existingData, status: incomingData.status } };
+  const changes = mergeHistory(existing.data.changes, incoming.changes, history);
+  if (changes !== undefined) data.changes = changes;
+  return allow(data);
+}
+
+/**
+ * The order history after a prepare/money push: every stored entry exactly as stored (an entry with a
+ * known id always takes its stored copy; one the payload left out is kept, at the end), plus the
+ * payload's new entries whose `field` is one this member may record. In the payload's own order, so a
+ * phone that appends sees the same list back. Undefined when neither side has a history list.
+ */
+function mergeHistory(stored: unknown, incoming: unknown, allowedFields: Set<string>): unknown[] | undefined {
+  if (!Array.isArray(stored) && !Array.isArray(incoming)) return undefined;
+  const storedList = Array.isArray(stored) ? stored : [];
+  const storedById = new Map<string, unknown>();
+  for (const entry of storedList) if (isPlainObject(entry) && typeof entry.id === "string") storedById.set(entry.id, entry);
+
+  const out: unknown[] = [];
+  const taken = new Set<unknown>();
+  for (const entry of Array.isArray(incoming) ? incoming : []) {
+    if (!isPlainObject(entry)) continue;
+    const known = typeof entry.id === "string" ? storedById.get(entry.id) : storedList.find((s) => sameJson(s, entry));
+    if (known !== undefined) {
+      if (!taken.has(known)) {
+        out.push(known);
+        taken.add(known);
+      }
+    } else if (typeof entry.field === "string" && allowedFields.has(entry.field) && !(typeof entry.id === "string" && out.some((o) => isPlainObject(o) && o.id === entry.id))) {
+      out.push(entry);
     }
-    return { allowed: false, reason: "forbidden" };
   }
-  // shop / occasion / stock_move / setting (other than the subscription, above): no specific
-  // permission gates these in the spec.
-  return { allowed: true, data: incomingData };
+  for (const entry of storedList) if (!taken.has(entry)) out.push(entry);
+  return out;
 }
 
 // ---------- Stock updates from staff who handle orders ----------
@@ -86,11 +249,6 @@ const STOCK_KEYS = new Set(["stockQuantity", "qty", "stockMoves", "updatedAt"]);
 const ORDER_STOCK_REASONS = new Set(["orderConfirmed", "orderCancelled", "orderEdited"]);
 /** The phones keep the last 50 stock moves (docs/sme-phase-2-cloud.md's product row). */
 const MAX_STOCK_MOVES = 50;
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T/;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Deep equality of JSON values, lenient only where clients legitimately differ in spelling: a missing
  * key equals null, and two ISO date strings are equal when they name the same instant. */
@@ -162,10 +320,4 @@ export function isOrderStockUpdate(existing: Record<string, unknown>, incoming: 
   if (dropped.length > 0 && after.length < MAX_STOCK_MOVES) return false;
 
   return quantityOf(incoming) === quantityOf(existing) + added;
-}
-
-/** Whether `member` may see `entity` at all on a pull — only "expense" is gated (money), matching
- * decidePush's own reasoning for that entity. */
-export function canPull(member: Member, entity: Entity): boolean {
-  return entity === "expense" ? hasPermission(member, "money") : true;
 }

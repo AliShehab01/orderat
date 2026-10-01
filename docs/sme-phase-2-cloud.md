@@ -29,7 +29,9 @@ Cloud sync stays **optional**: a seller can keep using the app offline-only, as 
   2. Upserts `orderat.users (id uuid, provider, provider_sub, email, name, created_at)`.
   3. Returns a session: a random 32-byte token stored as SHA-256 in
      `orderat.sessions (token_hash, user_id, device_name, created_at, last_seen_at, revoked_at)`.
-     Sessions are long-lived; signing out revokes them.
+     A phone's session has no fixed end; signing out revokes it. Any session unused for 180 days is
+     revoked on its next use (sliding: `last_seen_at` is refreshed on use, at most hourly), so a phone
+     in use never signs out (security review 1 Oct 2026, F05; server/auth/store.ts).
 - Every other call sends `Authorization: Bearer <anon key>` (Supabase gateway) plus
   `X-Orderat-Session: <session token>`.
 - "Delete my account" removes the user, their sessions, and every shop they own with its data.
@@ -72,10 +74,24 @@ Cloud sync stays **optional**: a seller can keep using the app offline-only, as 
 - Each `rejected` entry is `{ entity, id, reason: "forbidden", record? }`. `record` (`{ data, deleted, seq, updatedAt }`) is the server's current copy: the phone replaces its refused local edit with it. With no `record` (the server has no copy, or the member may not see it), the phone drops its local copy.
 - The app loops while `more` is true.
 
-**Permissions.**
-- Staff without `money` never receive `expense` records, and their pushes of them are rejected.
-- Staff without `products` cannot push `product` changes. One exception keeps stock right when staff handle orders: staff with `orders` or `prepare` may push an existing product when, next to the stored copy, only `stockQuantity` (or `qty`), `stockMoves` and `updatedAt` changed, the stored moves are kept unchanged (dropped only off the end of a full 50-move list), every new move has an order-driven reason (`orderConfirmed`, `orderCancelled`, `orderEdited`) and an `orderId`, and the quantity moved by exactly the new moves' deltas (server/sync/record-access.ts `isOrderStockUpdate`).
-- `prepare`-only staff can change only an order's `status`. The server copies the rest of the order from the stored record.
+**Permissions** (server/sync/record-access.ts; tightened by the security review of 1 Oct 2026, F01,
+docs/security-review-2026-10-01.md). The owner reads and writes everything. For staff:
+
+| | pulls | pushes |
+|---|---|---|
+| every member, any flags | `shop`, `setting/subscription` | nothing |
+| any one flag | also every other `setting`, `product`, `stock_move`, `occasion` | (per flag below) |
+| `orders` | also `order`, `customer` | `order`, `customer`, `occasion` (create, edit, delete) |
+| `prepare` | also `order`, `customer` | an existing order's `status`, `outForDeliveryAt`, `updatedAt` and new `changes` entries with field `status` / `outForDelivery` |
+| `money` | also `order`, `customer`, `expense` | `expense`; an existing order's `payments`, `paymentStatus`, `updatedAt` and new `changes` entries with field `paymentStatus` / `payment` |
+| `products` | (nothing more) | `product`, `stock_move` |
+
+- The `shop` record and every `setting` (including `subscription` and `deliveryDefaults`) are the owner's only.
+- A record a member may not pull is left out of the page, never sent as a deletion: tightening a member's flags never makes a phone delete what it holds.
+- A grant that lets a member pull records they could not before gives those records a fresh `seq` (`members_update`), so the next sync brings them even though the phone's cursor is past them; customers and products come before orders.
+- For `prepare` and `money` (without `orders`) the server copies the rest of the order from the stored record: they cannot create, delete or bring back an order, and stored `changes` entries are never edited or dropped.
+- Staff without `products` cannot push other `product` changes. One exception keeps stock right when staff handle orders: staff with `orders` or `prepare` may push an existing product when, next to the stored copy, only `stockQuantity` (or `qty`), `stockMoves` and `updatedAt` changed, the stored moves are kept unchanged (dropped only off the end of a full 50-move list), every new move has an order-driven reason (`orderConfirmed`, `orderCancelled`, `orderEdited`) and an `orderId`, and the quantity moved by exactly the new moves' deltas (server/sync/record-access.ts `isOrderStockUpdate`).
+- `photo_upload` needs `products` or `money` (a receipt photo); `photo_url` needs any flag.
 
 **First sign-in on a phone with existing local data.**
 - The app offers to upload this phone's shop, creating the cloud shop as owner, or to join an existing shop with an invite code.
@@ -102,12 +118,15 @@ Cloud sync stays **optional**: a seller can keep using the app offline-only, as 
 - **Input:** pasted text (a WhatsApp message) or one screenshot image (JPEG/PNG, at most 2 MB), plus the shop's product list (id, name, aliases) and `lang`/`addressAs`.
 - **Processing:** reuses `server/ai/gemini.ts` `createGeminiExtractor`, the same order reader the web version uses.
 - **Output:** a draft with the customer name, lines matched to product ids or free text, quantities, date, time and notes, each with a confidence.
+- **Delivery (tester feedback, 1 Oct 2026):** the response also carries `fulfillment` (`"delivery"` | `"pickup"` | `null`), `address` (`{ area?, block?, road?, building?, flat?, city?, text? }` | `null`: Bahrain parts when the customer gives them, with Western digits; otherwise the free-text line in `text`, and the city; `text` is the whole address as written) and `deliveryNote` (directions for the driver, or `null`). An address, a location or words like توصيل / delivery mean delivery; استلام / pickup mean pickup; an address with nothing said means delivery. The address and directions are never left in the draft's `notes` (server/ai/delivery.ts). Older apps ignore these keys.
 - **The app:**
   - A "Paste order" button on New Order (and a share-sheet target on Android: share a message to Orderat).
   - Shows the draft in the existing review form. The seller confirms or edits, then saves.
   - Nothing is saved without the seller's confirmation.
 - **Limits and data handling:**
-  - 50 per day per install (5 in demo), with a global cap.
+  - 50 per day per install (5 in demo), with a global cap. Signed in (`X-Orderat-Session`), the 50 (or 5)
+    count per account instead; without a session, 100 per client IP per day, of which 50 may claim
+    `demo: false` (security review F02, server/usage/trusted-limits.ts).
   - Phone numbers are stripped before sending.
   - Nothing is stored.
 

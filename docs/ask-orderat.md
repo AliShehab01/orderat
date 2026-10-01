@@ -48,8 +48,9 @@ Response (200):
   "remainingToday": 27
 }
 ```
-Errors: 400 invalid body, 429 `{ "error": "daily_limit" }` (per install) or `{ "error": "busy" }`
-(global daily budget reached), 502 `{ "error": "ai_unavailable" }`.
+Errors: 400 invalid body, 429 `{ "error": "daily_limit" }` (the caller's own limit: per install, per
+client IP or per account, see below) or `{ "error": "busy" }` (global daily budget reached), 502
+`{ "error": "ai_unavailable" }`.
 
 Actions are suggestions only. The app shows each one as a card with a confirm button and performs it
 locally. Allowed `category` values for `add_expense`: ingredients, packaging, delivery, ads, tools,
@@ -86,7 +87,11 @@ the period. Lists are capped: topProducts 10, topCustomers 10, unpaid 50, upcomi
   count int, primary key (install_id, day))` plus a daily total, owned by `orderat_app`.
 - Edge Function `supabase/functions/orderat-ask`: validate the body (size cap ~64 KB), enforce
   30 questions per install per day (3 in demo mode) and a global daily cap (env `ORDERAT_ASK_DAILY_CAP`,
-  default 3000), call Gemini through the existing client (server/ai/gemini.ts, model + fallbacks) with
+  default 3000). Since the security review of 1 Oct 2026 (docs/security-review-2026-10-01.md, F02) the
+  per-install count is not the only one: with a valid `X-Orderat-Session` header the 30 (or 3) count per
+  account instead; without one, a client IP gets at most 60 questions a day, of which 30 may claim
+  `demo: false` (server/usage/trusted-limits.ts, db/migrations/0009_ai_trusted_limits.sql). Then call
+  Gemini through the existing client (server/ai/gemini.ts, model + fallbacks) with
   JSON output `{answer, actions}`, validate actions against the allowed types and the refs present in
   the snapshot, and return. Log only counts and latency, never the snapshot or question.
 - System prompt essentials: you are Orderat's assistant for a home seller; answer only from the

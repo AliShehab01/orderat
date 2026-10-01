@@ -348,24 +348,51 @@ describe("createAuthHandler / session lifetime", () => {
     expect((await sql.query(`select 1 from orderat.users`)).length).toBe(1); // The account is still there.
   });
 
-  it("a session from a signin with no client (a phone's) never expires", async () => {
+  it("a session from a signin with no client (a phone's) has no fixed end: in use, it outlives 400 days", async () => {
     let clock = NOW;
     const handler = makeHandler(() => clock);
     const session = await signInAs(handler, {});
 
-    clock = new Date(NOW.getTime() + 400 * DAY_MS);
-    expect((await me(handler, session)).status).toBe(200);
+    for (const day of [150, 300, 400]) {
+      clock = new Date(NOW.getTime() + day * DAY_MS);
+      expect((await me(handler, session)).status).toBe(200);
+    }
     const rows = await sql.query<{ expires_at: Date | null }>(`select expires_at from orderat.sessions`);
     expect(rows[0]!.expires_at).toBeNull();
   });
 
-  it("client: \"app\" is a phone too: no expiry", async () => {
+  it("client: \"app\" is a phone too: no fixed end", async () => {
     let clock = NOW;
     const handler = makeHandler(() => clock);
     const session = await signInAs(handler, { client: "app", deviceName: "iPhone" });
 
-    clock = new Date(NOW.getTime() + 400 * DAY_MS);
-    expect((await me(handler, session)).status).toBe(200);
+    for (const day of [179, 358]) {
+      clock = new Date(NOW.getTime() + day * DAY_MS);
+      expect((await me(handler, session)).status).toBe(200);
+    }
+  });
+
+  // Security review 1 Oct 2026, F05: an app session unused for 180 days is signed out.
+  it("a phone session unused for 180 days is unauthorized, and stays so", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const session = await signInAs(handler, { client: "app", deviceName: "iPhone" });
+
+    clock = new Date(NOW.getTime() + 180 * DAY_MS);
+    const idle = await me(handler, session);
+    expect(idle.status).toBe(401);
+    expect(await idle.json()).toEqual({ error: "unauthorized" });
+    clock = NOW;
+    expect((await me(handler, session)).status).toBe(401);
+    expect((await sql.query(`select 1 from orderat.users`)).length).toBe(1); // Signed out, not deleted.
+  });
+
+  it("starts a new session's idle window at the signin's own clock", async () => {
+    const handler = makeHandler();
+    await signInAs(handler, {});
+    const rows = await sql.query<{ last_seen_at: Date; created_at: Date }>(`select last_seen_at, created_at from orderat.sessions`);
+    expect(new Date(rows[0]!.last_seen_at).toISOString()).toBe(NOW.toISOString());
+    expect(new Date(rows[0]!.created_at).toISOString()).toBe(NOW.toISOString());
   });
 
   it("a web signin does not shorten the same user's phone session", async () => {

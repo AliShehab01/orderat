@@ -23,6 +23,7 @@ import {
   markInviteUsed,
   pullRecords,
   removeMembership,
+  resequenceRecords,
   updateMembershipPermissions,
   upsertRecord,
 } from "./store.ts";
@@ -193,6 +194,26 @@ describe("records", () => {
     await upsertRecord(sql, otherShopId, "order", "order-1", {}, false, OWNER_ID);
     expect(await pullRecords(sql, SHOP_ID, 0, 500)).toHaveLength(1);
     expect(await pullRecords(sql, otherShopId, 0, 500)).toHaveLength(1);
+  });
+
+  it("resequenceRecords gives one entity of one shop fresh seqs, and touches nothing else", async () => {
+    const otherShopId = "55555555-5555-5555-5555-555555555555";
+    await insertShopCloud(sql, { id: otherShopId, ownerUserId: OWNER_ID, name: "Other shop" });
+    const order = await upsertRecord(sql, SHOP_ID, "order", "order-1", { status: "new" }, false, OWNER_ID);
+    const gone = await upsertRecord(sql, SHOP_ID, "order", "order-2", { status: "new" }, true, OWNER_ID);
+    const customer = await upsertRecord(sql, SHOP_ID, "customer", "c1", { name: "Sara" }, false, OWNER_ID);
+    const elsewhere = await upsertRecord(sql, otherShopId, "order", "order-1", {}, false, OWNER_ID);
+
+    expect(await resequenceRecords(sql, SHOP_ID, "order")).toBe(2);
+
+    // Both orders now sort after the customer; within one entity the new seqs come in no set order.
+    const after = (await pullRecords(sql, SHOP_ID, customer.seq, 500)).sort((a, b) => a.id.localeCompare(b.id));
+    expect(after.map((r) => r.id)).toEqual(["order-1", "order-2"]);
+    expect(after[0]).toEqual({ ...order, seq: after[0]!.seq });
+    expect(after[1]).toEqual({ ...gone, seq: after[1]!.seq });
+    expect((await findRecord(sql, SHOP_ID, "customer", "c1"))?.seq).toBe(customer.seq);
+    expect((await findRecord(sql, otherShopId, "order", "order-1"))?.seq).toBe(elsewhere.seq);
+    expect(await resequenceRecords(sql, SHOP_ID, "expense")).toBe(0);
   });
 });
 

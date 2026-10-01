@@ -10,9 +10,10 @@
 // Order of work per task, matching server/ask/handler.ts: validate the body (never counted against a
 // limit if invalid) -> resolve content (campaign/style; an unknown campaignId is silently ignored, an
 // unknown styleId is a 400) -> check the relevant Gemini config is present -> check + record the
-// per-install/global limits (before calling Gemini, so a rejected request never pays for a model
-// call) -> call Gemini -> respond. Every response is JSON; every error path returns the exact shape
-// docs/marketing-tools.md specifies.
+// caller's own limits (per account with a valid X-Orderat-Session, else per client IP and install —
+// server/usage/trusted-limits.ts) and the global one (before calling Gemini, so a rejected request
+// never pays for a model call) -> call Gemini -> respond. Every response is JSON; every error path
+// returns the exact shape docs/marketing-tools.md specifies.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 import type { GeminiConfig } from "../ai/gemini.ts";
@@ -20,6 +21,7 @@ import { GeminiImageBlockedError } from "../ai/image.ts";
 import { findCampaignById, findStyleById, type Campaign, type StudioStyle } from "../campaigns/content.ts";
 import { decodeBase64, sniffImageMimeType } from "../shared/image.ts";
 import { checkAndRecordFeatureUsage, DEFAULT_CAPTION_LIMITS, DEFAULT_PHOTO_LIMITS, type FeatureLimits } from "../usage/feature-limits.ts";
+import { identifyAiCaller } from "../usage/trusted-limits.ts";
 import { generateCaptions, GeminiCaptionError } from "./caption.ts";
 import { generatePhoto } from "./photo.ts";
 import { validateStudioBody, type CaptionRequestBody, type PhotoRequestBody } from "./validate.ts";
@@ -29,6 +31,9 @@ const MAX_PHOTO_INPUT_BYTES = 2 * 1024 * 1024;
 
 export interface StudioHandlerDeps {
   sql: SqlClient;
+  /** The salt a client IP is hashed with before it keys a per-IP limit (server/usage/trusted-limits.ts)
+   * — the same ORDERAT_AUTH_IP_SALT orderat-auth uses. */
+  ipSalt: string;
   /** Text model config for captions — undefined when ORDERAT_GEMINI_API_KEY isn't set (every
    * caption request then gets 502 ai_unavailable). */
   text?: GeminiConfig;
@@ -62,15 +67,17 @@ export function createStudioHandler(deps: StudioHandlerDeps): (req: Request) => 
   const captionLimits: FeatureLimits = { ...DEFAULT_CAPTION_LIMITS, ...deps.captionLimits };
   const photoLimits: FeatureLimits = { ...DEFAULT_PHOTO_LIMITS, ...deps.photoLimits };
 
-  async function handleCaption(body: CaptionRequestBody): Promise<Response> {
+  async function handleCaption(req: Request, body: CaptionRequestBody): Promise<Response> {
     if (!deps.text?.apiKey) {
       log({ event: "studio_caption", status: 502, reason: "not_configured" });
       return aiUnavailableResponse();
     }
 
-    const usage = await checkAndRecordFeatureUsage(deps.sql, { feature: "caption", installId: body.installId, demo: body.demo, now: now(), limits: captionLimits });
+    const at = now();
+    const caller = await identifyAiCaller(deps.sql, req, { ipSalt: deps.ipSalt, now: at });
+    const usage = await checkAndRecordFeatureUsage(deps.sql, { feature: "caption", caller, installId: body.installId, demo: body.demo, now: at, limits: captionLimits });
     if (!usage.ok) {
-      log({ event: "studio_caption", status: 429, reason: usage.reason });
+      log({ event: "studio_caption", status: 429, caller: caller.kind, reason: usage.reason });
       return jsonResponse({ error: usage.reason }, 429);
     }
 
@@ -79,7 +86,7 @@ export function createStudioHandler(deps: StudioHandlerDeps): (req: Request) => 
     const started = Date.now();
     try {
       const result = await generateCaptions(deps.text, body, campaign, fetchImpl);
-      log({ event: "studio_caption", status: 200, model: result.model, latencyMs: Date.now() - started });
+      log({ event: "studio_caption", status: 200, caller: caller.kind, model: result.model, latencyMs: Date.now() - started });
       return jsonResponse({ captions: result.captions, hashtags: result.hashtags, remainingToday: usage.remainingToday }, 200);
     } catch (err) {
       log({ event: "studio_caption", status: 502, latencyMs: Date.now() - started, reason: err instanceof GeminiCaptionError ? "gemini_error" : "unexpected_error" });
@@ -87,7 +94,7 @@ export function createStudioHandler(deps: StudioHandlerDeps): (req: Request) => 
     }
   }
 
-  async function handlePhoto(body: PhotoRequestBody): Promise<Response> {
+  async function handlePhoto(req: Request, body: PhotoRequestBody): Promise<Response> {
     const style = findStyleById(deps.styles, body.styleId);
     if (!style) {
       log({ event: "studio_photo", status: 400, reason: "unknown_style" });
@@ -115,16 +122,18 @@ export function createStudioHandler(deps: StudioHandlerDeps): (req: Request) => 
       return aiUnavailableResponse();
     }
 
-    const usage = await checkAndRecordFeatureUsage(deps.sql, { feature: "photo", installId: body.installId, demo: body.demo, now: now(), limits: photoLimits });
+    const at = now();
+    const caller = await identifyAiCaller(deps.sql, req, { ipSalt: deps.ipSalt, now: at });
+    const usage = await checkAndRecordFeatureUsage(deps.sql, { feature: "photo", caller, installId: body.installId, demo: body.demo, now: at, limits: photoLimits });
     if (!usage.ok) {
-      log({ event: "studio_photo", status: 429, reason: usage.reason });
+      log({ event: "studio_photo", status: 429, caller: caller.kind, reason: usage.reason });
       return jsonResponse({ error: usage.reason }, 429);
     }
 
     const started = Date.now();
     try {
       const result = await generatePhoto(deps.image, { mimeType: sniffed, data: bytes }, style.prompt, body.aspect, fetchImpl);
-      log({ event: "studio_photo", status: 200, model: result.model, latencyMs: Date.now() - started });
+      log({ event: "studio_photo", status: 200, caller: caller.kind, model: result.model, latencyMs: Date.now() - started });
       return jsonResponse({ image: { mimeType: result.mimeType, data: result.data }, remainingToday: usage.remainingToday }, 200);
     } catch (err) {
       if (err instanceof GeminiImageBlockedError) {
@@ -146,6 +155,6 @@ export function createStudioHandler(deps: StudioHandlerDeps): (req: Request) => 
       return validated.error === "too_large" ? tooLargeResponse() : invalidBodyResponse();
     }
 
-    return validated.body.task === "caption" ? handleCaption(validated.body) : handlePhoto(validated.body);
+    return validated.body.task === "caption" ? handleCaption(req, validated.body) : handlePhoto(req, validated.body);
   };
 }

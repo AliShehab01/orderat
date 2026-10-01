@@ -18,9 +18,9 @@ import { createAuthHandler } from "../../../server/auth/handler.ts";
 import { createJwksCache } from "../../../server/auth/jwks.ts";
 import { APPLE_JWKS_URL, GOOGLE_JWKS_URL, resolveAudiences, withExtraAudience } from "../../../server/auth/providers.ts";
 import { withAppCors } from "../../../server/shared/cors.ts";
-import { sha256HexOfString } from "../../../server/shared/crypto.ts";
 import { orderatEnv as env } from "../_shared/env.ts";
 import { getSqlClient } from "../_shared/db.ts";
+import { clientIpSalt } from "../_shared/ip-salt.ts";
 
 const databaseUrl = env("DATABASE_URL") ?? "";
 const sql = getSqlClient(databaseUrl);
@@ -51,11 +51,9 @@ const googleAudiences = withExtraAudience(
 );
 
 // The salt pair_start's per-IP rate limit hashes a client IP with, so no row ever holds the IP (the
-// same approach as orderat-shop's ORDERAT_SHOP_IP_SALT). A dedicated ORDERAT_AUTH_IP_SALT if set;
-// otherwise a one-way hash of the database URL, a secret this function already holds, so the salt is
-// still unknown to anyone reading only the database. If that URL ever changes, the one-minute windows
-// simply start over.
-const ipSalt = env("AUTH_IP_SALT") || (await sha256HexOfString(`orderat-auth-ip-salt:${databaseUrl}`));
+// same approach as orderat-shop's ORDERAT_SHOP_IP_SALT): ORDERAT_AUTH_IP_SALT, or one derived from the
+// database URL (supabase/functions/_shared/ip-salt.ts, shared with the AI functions' per-IP caps).
+const ipSalt = await clientIpSalt(databaseUrl);
 
 // Sign in with Apple token revocation on account deletion (App Store Review Guideline 5.1.1(v)):
 // ORDERAT_APPLE_TEAM_ID, ORDERAT_APPLE_KEY_ID and ORDERAT_APPLE_PRIVATE_KEY (the Sign in with Apple

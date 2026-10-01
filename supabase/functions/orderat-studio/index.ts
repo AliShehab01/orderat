@@ -23,8 +23,13 @@ import { withAppCors } from "../../../server/shared/cors.ts";
 import { createStudioHandler } from "../../../server/studio/handler.ts";
 import { orderatEnv as env } from "../_shared/env.ts";
 import { getSqlClient } from "../_shared/db.ts";
+import { clientIpSalt } from "../_shared/ip-salt.ts";
 
-const sql = getSqlClient(env("DATABASE_URL") ?? "");
+const databaseUrl = env("DATABASE_URL") ?? "";
+const sql = getSqlClient(databaseUrl);
+// Calls without a signed-in session are capped per client IP (server/usage/trusted-limits.ts), keyed by
+// the IP's salted hash, never the IP.
+const ipSalt = await clientIpSalt(databaseUrl);
 
 const geminiKey = env("GEMINI_API_KEY");
 const textFallbackModels = env("GEMINI_FALLBACK_MODELS")?.split(",").map((m) => m.trim()).filter(Boolean);
@@ -43,6 +48,7 @@ const photoDailyCap = parseCap(env("PHOTO_DAILY_CAP"));
 
 const handler = withAppCors(createStudioHandler({
   sql,
+  ipSalt,
   text,
   image,
   campaigns: campaignsFile.campaigns as Campaign[],

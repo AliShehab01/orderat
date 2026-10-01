@@ -128,6 +128,54 @@ describe("Gemini order extractor", () => {
     await expect(extract({ text: "hi", products: demoProducts(), now: NOW })).rejects.toThrow(/200/);
   });
 
+  // Tester feedback 1 Oct 2026, section 1: orderat-parse asks for delivery details; the WhatsApp agent's
+  // request stays exactly as it was.
+  it("asks for delivery, address and driver directions only when withDelivery is set", async () => {
+    const plain: { init?: RequestInit } = {};
+    await createGeminiExtractor({ apiKey: "k" }, fakeGemini({ isOrder: true, language: "ar", items: [] }, plain))({ text: "2 كيك", products: demoProducts(), now: NOW });
+    const plainBody = JSON.parse(String(plain.init!.body));
+    expect(Object.keys(plainBody.generationConfig.responseSchema.properties)).not.toContain("fulfillment");
+    expect(plainBody.contents[0].parts[0].text).not.toContain("deliveryNote");
+    expect(plainBody.generationConfig.responseSchema.properties.notes.description).toContain("delivery questions");
+
+    const withDelivery: { init?: RequestInit } = {};
+    await createGeminiExtractor({ apiKey: "k" }, fakeGemini({ isOrder: true, language: "ar", items: [] }, withDelivery))({ text: "2 كيك", products: demoProducts(), now: NOW, withDelivery: true });
+    const body = JSON.parse(String(withDelivery.init!.body));
+    const props = body.generationConfig.responseSchema.properties;
+    expect(props.fulfillment.enum).toEqual(["pickup", "delivery"]);
+    expect(Object.keys(props.address.properties)).toEqual(["area", "block", "road", "building", "flat", "city", "text"]);
+    expect(props.deliveryNote.type).toBe("STRING");
+    expect(props.notes.description).toContain("Never the delivery address");
+    const prompt = body.contents[0].parts[0].text as string;
+    for (const word of ["توصيل", "وصلوه", "delivery", "استلام", "pickup", "مجمع", "Saudi Arabia", "Never put the address"]) expect(prompt).toContain(word);
+  });
+
+  it("with withDelivery, returns the delivery details and keeps the address out of the notes", async () => {
+    const extract = createGeminiExtractor({ apiKey: "k" }, fakeGemini({
+      isOrder: true,
+      language: "ar",
+      items: [{ productId: "p-cupcake", rawText: "٢٠ كب كيك", quantity: 20 }],
+      notes: "بدون مكسرات\nالعنوان: سند مجمع ٧٤٣ طريق ٤٣٢١ بيت ٥٥",
+      fulfillment: "delivery",
+      address: { area: "سند", block: "٧٤٣", road: "٤٣٢١", building: "٥٥", text: "سند مجمع ٧٤٣ طريق ٤٣٢١ بيت ٥٥" },
+      deliveryNote: "البيت اللي جنبه مسجد",
+    }));
+    const result = await extract({ text: "ابي ٢٠ كب كيك بدون مكسرات توصيل سند مجمع ٧٤٣ طريق ٤٣٢١ بيت ٥٥ البيت اللي جنبه مسجد", products: demoProducts(), now: NOW, withDelivery: true });
+    expect(result.delivery).toEqual({
+      fulfillment: "delivery",
+      address: { area: "سند", block: "743", road: "4321", building: "55", text: "سند مجمع ٧٤٣ طريق ٤٣٢١ بيت ٥٥" },
+      deliveryNote: "البيت اللي جنبه مسجد",
+    });
+    expect(result.draft.notes).toBe("بدون مكسرات");
+  });
+
+  it("without withDelivery, returns no delivery details and leaves the notes as the model wrote them", async () => {
+    const extract = createGeminiExtractor({ apiKey: "k" }, fakeGemini({ isOrder: true, language: "en", items: [], notes: "Deliver to Saar, Road 15, House 7", address: { text: "Saar, Road 15, House 7" } }));
+    const result = await extract({ text: "x", products: demoProducts(), now: NOW });
+    expect(result.delivery).toBeUndefined();
+    expect(result.draft.notes).toBe("Deliver to Saar, Road 15, House 7");
+  });
+
   it("includes the block reason and finish reason when Gemini returns no content", async () => {
     const extract = createGeminiExtractor({ apiKey: "k", fallbackModels: [] }, (async () => new Response(JSON.stringify({
       candidates: [{ finishReason: "SAFETY", content: { parts: [] } }],

@@ -3,8 +3,8 @@
 // server/marketing-pglite-test-support.ts and server/ask/pglite-test-support.ts, pulled out to this
 // top-level file (alongside server/test-setup.ts) since db/migrations/0004_cloud.sql's tables are
 // shared by all three feature folders and no single one owns it. Applies 0001, 0002, 0003, 0004, 0005
-// (web sessions' expires_at column), then 0006 (phone-to-web pairing) and 0007 (Sign in with Apple
-// refresh tokens), the same order
+// (web sessions' expires_at column), then 0006 (phone-to-web pairing), 0007 (Sign in with Apple
+// refresh tokens), 0008 (shop payment methods) and 0009 (the AI calls' trusted limits), the same order
 // scripts/hosting-migrate.mjs applies them in (0004 assumes schema "orderat" and role "orderat_app"
 // already exist from 0001, and is otherwise independent of 0002/0003's own tables; 0005 alters 0004's
 // sessions table; 0006's web_pairings references 0004's users).
@@ -26,6 +26,7 @@ const MIGRATION_0004 = readFileSync(join(MIGRATIONS_DIR, "0004_cloud.sql"), "utf
 const MIGRATION_0005 = readFileSync(join(MIGRATIONS_DIR, "0005_web_sessions.sql"), "utf8");
 const MIGRATION_0006 = readFileSync(join(MIGRATIONS_DIR, "0006_web_pairing.sql"), "utf8");
 const MIGRATION_0007 = readFileSync(join(MIGRATIONS_DIR, "0007_apple_tokens.sql"), "utf8");
+const MIGRATION_0009 = readFileSync(join(MIGRATIONS_DIR, "0009_ai_trusted_limits.sql"), "utf8");
 
 const CLOUD_TABLES = [
   "orderat.sessions",
@@ -34,6 +35,8 @@ const CLOUD_TABLES = [
   "orderat.pair_start_rate_limit",
   "orderat.pair_approve_rate_limit",
   "orderat.apple_tokens",
+  "orderat.ai_ip_usage",
+  "orderat.ai_account_usage",
   // shop_members/invites/records reference orderat.shops_cloud, so truncating shops_cloud must
   // cascade to them too — plain `truncate ... cascade` (rather than listing every dependent table)
   // keeps this list correct even if a later migration adds another table referencing shops_cloud.
@@ -59,6 +62,7 @@ function getDb() {
     await db.exec(MIGRATION_0006);
     await db.exec(MIGRATION_0007);
     await db.exec(MIGRATION_0008);
+    await db.exec(MIGRATION_0009); // the AI calls' per-IP and per-account counters
     return db;
   })();
   return dbPromise;

@@ -16,6 +16,7 @@ import { decodeBase64, sniffImageMimeType } from "../shared/image.ts";
 import { DEFAULT_STAFF_PERMISSIONS, hasPermission, normalizePermissions, OWNER_PERMISSIONS, type Member } from "./permissions.ts";
 import { pullForMember, pushChanges } from "./push-pull.ts";
 import { bumpSyncRateLimit, MAX_SYNCS_PER_MINUTE } from "./rate-limit.ts";
+import { canPull, newlyVisibleEntities } from "./record-access.ts";
 import {
   countStaff,
   findActiveInviteByCodeHash,
@@ -29,6 +30,7 @@ import {
   listShopsForUser,
   markInviteUsed,
   removeMembership,
+  resequenceRecords,
   updateMembershipPermissions,
 } from "./store.ts";
 import {
@@ -229,18 +231,27 @@ export function createSyncHandler(deps: SyncHandlerDeps): (req: Request) => Prom
     return jsonResponse({ members }, 200);
   }
 
+  /** Sets a staff member's flags. A grant that lets them pull records they could not before gives those
+   * records a fresh seq (server/sync/record-access.ts's newlyVisibleEntities, in the order a phone needs
+   * them): their phone's cursor already went past them unsent, and the phones keep their cursor when
+   * flags change, so this is what brings them on the next sync. */
   async function handleMembersUpdate(userId: string, body: MembersUpdateBody): Promise<Response> {
     const membership = await findMembership(deps.sql, body.shopId, userId);
     if (!membership || membership.role !== "owner") {
       log({ event: "sync_members_update", status: 403 });
       return forbiddenResponse();
     }
-    const updated = await updateMembershipPermissions(deps.sql, body.shopId, body.userId, normalizePermissions(body.permissions));
-    if (!updated) {
+    const before = await findMembership(deps.sql, body.shopId, body.userId);
+    const permissions = normalizePermissions(body.permissions);
+    const updated = await updateMembershipPermissions(deps.sql, body.shopId, body.userId, permissions);
+    if (!updated || !before) {
       log({ event: "sync_members_update", status: 404 });
       return notFoundResponse();
     }
-    log({ event: "sync_members_update", status: 200 });
+    const resend = newlyVisibleEntities({ role: before.role, permissions: before.permissions }, { role: before.role, permissions });
+    let resent = 0;
+    for (const entity of resend) resent += await resequenceRecords(deps.sql, body.shopId, entity);
+    log({ event: "sync_members_update", status: 200, resentEntities: resend, resent });
     return jsonResponse({ ok: true }, 200);
   }
 
@@ -255,9 +266,12 @@ export function createSyncHandler(deps: SyncHandlerDeps): (req: Request) => Prom
     return jsonResponse({ ok: true, removed }, 200);
   }
 
+  /** A product photo (`products`) or an expense's receipt photo (`money`): the two records that carry a
+   * photo id and the two flags allowed to write them (server/sync/record-access.ts). */
   async function handlePhotoUpload(userId: string, body: PhotoUploadBody): Promise<Response> {
     const membership = await findMembership(deps.sql, body.shopId, userId);
-    if (!membership || !hasPermission({ role: membership.role, permissions: membership.permissions }, "products")) {
+    const member = membership ? { role: membership.role, permissions: membership.permissions } : undefined;
+    if (!member || !(hasPermission(member, "products") || hasPermission(member, "money"))) {
       log({ event: "sync_photo_upload", status: 403 });
       return forbiddenResponse();
     }
@@ -288,9 +302,11 @@ export function createSyncHandler(deps: SyncHandlerDeps): (req: Request) => Prom
     return jsonResponse({ photoId }, 200);
   }
 
+  /** Any member who may pull a record carrying a photo id (a product's, an expense's): any flag at all.
+   * A member with every flag off pulls no such record, so has no photo to fetch. */
   async function handlePhotoUrl(userId: string, body: PhotoUrlBody): Promise<Response> {
     const membership = await findMembership(deps.sql, body.shopId, userId);
-    if (!membership) {
+    if (!membership || !canPull({ role: membership.role, permissions: membership.permissions }, "product", "")) {
       log({ event: "sync_photo_url", status: 403 });
       return forbiddenResponse();
     }

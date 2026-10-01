@@ -49,9 +49,12 @@ export async function pushChanges(sql: SqlClient, shopId: string, member: Member
 
   for (const change of changes) {
     const existing = await findRecord(sql, shopId, change.entity, change.id);
-    const decision = decidePush(member, change.entity, change.id, change.data, change.deleted, existing?.data);
+    const stored = existing ? { data: existing.data, deleted: existing.deleted } : undefined;
+    const decision = decidePush(member, change.entity, change.id, change.data, change.deleted, stored);
     if (!decision.allowed) {
-      const visible = existing && canPull(member, change.entity);
+      // The server's copy goes back only to a member allowed to pull it; for anyone else, the phone
+      // drops its local copy (docs/sme-phase-2-cloud.md "Sync").
+      const visible = existing && canPull(member, change.entity, change.id);
       rejected.push({
         entity: change.entity,
         id: change.id,
@@ -80,12 +83,14 @@ export interface PullResult {
 
 /**
  * The next page of records after `cursor`, filtered to what `member` may see (record-access.ts's
- * canPull — currently only "expense", gated on the `money` permission). The returned `cursor` always
- * reflects the highest seq considered on this page, even when some of those rows were filtered out
- * for this particular caller, so a filtered-out row is never re-fetched on the next call.
+ * canPull, per entity and permission). A record left out is simply not sent — never turned into a
+ * deletion — so a phone keeps whatever it already holds. The returned `cursor` always reflects the
+ * highest seq considered on this page, even when some of those rows were filtered out for this
+ * particular caller, so a filtered-out row is never re-fetched on the next call; when a later grant
+ * makes such rows visible, members_update gives them a fresh seq (server/sync/handler.ts).
  */
 export async function pullForMember(sql: SqlClient, shopId: string, member: Member, cursor: number): Promise<PullResult> {
   const page = await pullRecords(sql, shopId, cursor, PULL_PAGE_SIZE);
   const newCursor = page.length > 0 ? page[page.length - 1]!.seq : cursor;
-  return { changes: page.filter((row) => canPull(member, row.entity)), cursor: newCursor, more: page.length === PULL_PAGE_SIZE };
+  return { changes: page.filter((row) => canPull(member, row.entity, row.id)), cursor: newCursor, more: page.length === PULL_PAGE_SIZE };
 }

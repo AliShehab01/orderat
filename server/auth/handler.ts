@@ -11,7 +11,8 @@
 //
 // A `signin` body may say `client: "web"` (the browser app): that session then expires
 // WEB_SESSION_DAYS after signin (server/auth/store.ts). Without it, or with `client: "app"` (the
-// phones), the session never expires.
+// phones), the session has no fixed end. Any session ends after SESSION_IDLE_DAYS without a call
+// (sliding; security review 1 Oct 2026, F05).
 //
 // Phone-to-web login ("Open on computer"): the website calls `pair_start` (no session: getting one is
 // the point) and shows the pairing's code as a QR code and as 6 digits; the seller's signed-in phone
@@ -158,11 +159,13 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
   /** Starts a session for `userId` and returns its raw token, of which only the SHA-256 hex is stored.
    * Only a browser's session ends, WEB_SESSION_DAYS from now: a `client: "web"` signin's and every
    * session a pairing starts. A phone's, whose signin says `client: "app"` or nothing at all, has no
-   * end. */
+   * fixed end. Either one ends after SESSION_IDLE_DAYS without a call (server/auth/store.ts), counted
+   * from this signin's own clock. */
   async function startSession(userId: string, deviceName: string | undefined, client: "web" | "app" | undefined): Promise<string> {
     const { token, tokenHash } = await newSessionToken();
-    const expiresAt = client === "web" ? new Date(now().getTime() + WEB_SESSION_MS) : undefined;
-    await createSession(deps.sql, { tokenHash, userId, deviceName, expiresAt });
+    const at = now();
+    const expiresAt = client === "web" ? new Date(at.getTime() + WEB_SESSION_MS) : undefined;
+    await createSession(deps.sql, { tokenHash, userId, deviceName, expiresAt, now: at });
     return token;
   }
 

@@ -286,6 +286,25 @@ export async function upsertRecord(
   return toRecordRow(rows[0]!);
 }
 
+/**
+ * Gives every record of `entity` in `shopId` a fresh seq — data, deleted, updated_at and updated_by
+ * untouched — so every device of the shop pulls them again from wherever its cursor is. For
+ * server/sync/handler.ts's members_update: records a staff member was not allowed to pull went past
+ * their phone's cursor unsent, and a grant must bring them. Returns how many records moved.
+ */
+export async function resequenceRecords(sql: SqlClient, shopId: string, entity: Entity): Promise<number> {
+  const rows = await sql.query<{ count: number }>(
+    `with moved as (
+       update orderat.records set seq = nextval(pg_get_serial_sequence('orderat.records', 'seq'))
+       where shop_id = $1 and entity = $2
+       returning 1
+     )
+     select count(*)::int as count from moved`,
+    [shopId, entity],
+  );
+  return rows[0]?.count ?? 0;
+}
+
 /** Up to `limit` records for `shopId` with seq > cursor, oldest-first — the exact "records with
  * seq > cursor, up to 500" page docs/sme-phase-2-cloud.md's `sync` action pulls, before
  * server/sync/push-pull.ts filters it by the caller's own permissions. */

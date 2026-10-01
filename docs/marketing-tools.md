@@ -132,7 +132,9 @@ App behavior:
   Arabic for `ar`. Prices formatted like Ask Orderat (BHD/KWD/OMR 3 decimals, others 2, Latin
   digits). The link, when given, is included as is in each caption.
 - Limits: 20 per install per day (3 in demo mode); global cap `ORDERAT_CAPTION_DAILY_CAP`,
-  default 3000.
+  default 3000. Signed in (`X-Orderat-Session`), the 20 (or 3) count per account instead; without a
+  session, 40 per client IP per day, of which 20 may claim `demo: false` (security review F02,
+  docs/security-review-2026-10-01.md).
 - Model: the same text model chain as Ask Orderat (`ORDERAT_GEMINI_MODEL` + fallbacks), JSON
   output `{captions, hashtags}`.
 
@@ -154,7 +156,9 @@ App behavior:
 - Response: `{ "image": { "mimeType": "image/png", "data": "<base64>" }, "remainingToday": 9 }`.
 - 422 `unsafe_image` when the model blocks the image or returns no image.
 - Limits: 10 per install per day (2 in demo mode); global cap `ORDERAT_PHOTO_DAILY_CAP`,
-  default 300 (cost control: image models are paid only).
+  default 300 (cost control: image models are paid only). Signed in, the 10 (or 2) count per account
+  instead; without a session, 20 per client IP per day, of which 10 may claim `demo: false` (security
+  review F02).
 - Model: `ORDERAT_IMAGE_MODEL`, default `gemini-3.1-flash-image`, fallbacks
   `ORDERAT_IMAGE_FALLBACK_MODELS`, default `gemini-2.5-flash-image`. Uses
   `generationConfig.responseModalities: ["IMAGE"]` and `imageConfig.aspectRatio`. Timeout 60 s.

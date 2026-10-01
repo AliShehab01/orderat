@@ -19,6 +19,11 @@ const MIGRATION_0001 = readFileSync(join(MIGRATIONS_DIR, "0001_orderat_isolation
 const MIGRATION_0002 = readFileSync(join(MIGRATIONS_DIR, "0002_ai_usage.sql"), "utf8");
 const MIGRATION_0003 = readFileSync(join(MIGRATIONS_DIR, "0003_marketing.sql"), "utf8");
 const MIGRATION_0008 = readFileSync(join(MIGRATIONS_DIR, "0008_shop_payment_methods.sql"), "utf8");
+// The AI calls' trusted limits (server/usage/trusted-limits.ts): 0009's counters, and 0004/0005's
+// users and sessions, which a signed-in call's account quota resolves its X-Orderat-Session against.
+const MIGRATION_0004 = readFileSync(join(MIGRATIONS_DIR, "0004_cloud.sql"), "utf8");
+const MIGRATION_0005 = readFileSync(join(MIGRATIONS_DIR, "0005_web_sessions.sql"), "utf8");
+const MIGRATION_0009 = readFileSync(join(MIGRATIONS_DIR, "0009_ai_trusted_limits.sql"), "utf8");
 
 const MARKETING_TABLES = [
   "orderat.feature_usage",
@@ -30,6 +35,10 @@ const MARKETING_TABLES = [
   "orderat.shop_photos",
   "orderat.shop_orders",
   "orderat.shop_views_daily",
+  "orderat.ai_ip_usage",
+  "orderat.ai_account_usage",
+  "orderat.sessions",
+  "orderat.users",
 ];
 
 let dbPromise: Promise<InstanceType<typeof PGlite>> | undefined;
@@ -41,6 +50,9 @@ function getDb() {
     await db.exec(MIGRATION_0002);
     await db.exec(MIGRATION_0003);
     await db.exec(MIGRATION_0008); // shops.payment_methods
+    await db.exec(MIGRATION_0004);
+    await db.exec(MIGRATION_0005);
+    await db.exec(MIGRATION_0009);
     return db;
   })();
   return dbPromise;

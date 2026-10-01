@@ -16,8 +16,13 @@ import { createParseHandler } from "../../../server/parse/handler.ts";
 import { withAppCors } from "../../../server/shared/cors.ts";
 import { orderatEnv as env } from "../_shared/env.ts";
 import { getSqlClient } from "../_shared/db.ts";
+import { clientIpSalt } from "../_shared/ip-salt.ts";
 
-const sql = getSqlClient(env("DATABASE_URL") ?? "");
+const databaseUrl = env("DATABASE_URL") ?? "";
+const sql = getSqlClient(databaseUrl);
+// Calls without a signed-in session are capped per client IP (server/usage/trusted-limits.ts), keyed by
+// the IP's salted hash, never the IP.
+const ipSalt = await clientIpSalt(databaseUrl);
 
 // GEMINI_API_KEY/GEMINI_MODEL/GEMINI_FALLBACK_MODELS are the same settings server/dev.ts and every
 // other Gemini-backed function here already read (server/ai/gemini.ts's createGeminiExtractor is the
@@ -32,6 +37,6 @@ const gemini = geminiKey ? { apiKey: geminiKey, model: env("GEMINI_MODEL"), fall
 const dailyCapRaw = env("PARSE_DAILY_CAP");
 const dailyCap = dailyCapRaw && /^\d+$/.test(dailyCapRaw) ? Number(dailyCapRaw) : undefined;
 
-const handler = withAppCors(createParseHandler({ sql, gemini, limits: dailyCap ? { globalCap: dailyCap } : undefined }));
+const handler = withAppCors(createParseHandler({ sql, ipSalt, gemini, limits: dailyCap ? { globalCap: dailyCap } : undefined }));
 
 Deno.serve((req) => handler(req));

@@ -156,11 +156,11 @@ describe("pushChanges / staff permission filtering", () => {
     expect((await findRecord(sql, SHOP_ID, "setting", "subscription"))?.data).toEqual(ownersReport);
   });
 
-  it("still accepts a staff member's other settings, such as whatsappTemplates", async () => {
-    const staff: Member = { role: "staff", permissions: DEFAULT_STAFF_PERMISSIONS };
+  it("rejects a staff member's other settings too, such as whatsappTemplates (security review F01)", async () => {
+    const staff: Member = { role: "staff", permissions: { orders: true, prepare: true, money: true, products: true } };
     const result = await pushChanges(sql, SHOP_ID, staff, [change({ entity: "setting", id: "whatsappTemplates", data: { value: ["Hi {name}"] } })], STAFF_ID);
-    expect(result.rejected).toEqual([]);
-    expect((await findRecord(sql, SHOP_ID, "setting", "whatsappTemplates"))?.data).toEqual({ value: ["Hi {name}"] });
+    expect(result.rejected).toEqual([{ entity: "setting", id: "whatsappTemplates", reason: "forbidden" }]);
+    expect(await findRecord(sql, SHOP_ID, "setting", "whatsappTemplates")).toBeUndefined();
   });
 
   it("rejects a prepare-only staff member's attempt to create a brand-new order", async () => {
@@ -177,6 +177,160 @@ describe("pushChanges / staff permission filtering", () => {
     // The owner, pulling the same page, sees both.
     const ownerPulled = await pullForMember(sql, SHOP_ID, owner, 0);
     expect(ownerPulled.changes.map((c) => c.entity).sort()).toEqual(["expense", "product"]);
+  });
+});
+
+// Security review 1 Oct 2026, F01: a staff member with every flag off used to pull every customer,
+// order and product, and could push the shop record and any setting (a made-up VAT setting, say). Every
+// flag off, each flag alone, and the owner, against one shop holding a record of every kind.
+describe("F01 / what each member pulls and may push", () => {
+  const AT = "2026-10-01T10:00:00.000Z";
+  const SHOP = { nameAr: "كيك سارة", currencyCode: "BHD", vat: { enabled: true, rateBps: 1000 } };
+  const ORDER = { customerId: "c1", status: "ready", fulfillmentType: "delivery", paymentStatus: "unpaid", items: [{ id: "i1", productId: "p1", quantity: 2, unitPriceMinor: 5000 }], payments: [], changes: [], updatedAt: AT };
+  const PRODUCT = { nameAr: "كيك", priceMinor: 5000, costMinor: 2000, trackStock: true, stockQuantity: 10, stockMoves: [] };
+  const seed: ChangeInput[] = [
+    change({ entity: "shop", id: SHOP_ID, data: SHOP }),
+    change({ entity: "setting", id: "subscription", data: { value: { status: "active", expiresAt: "2027-01-01T00:00:00.000Z" } } }),
+    change({ entity: "setting", id: "whatsappTemplates", data: { value: { "orderReady.ar": "طلبك جاهز" } } }),
+    change({ entity: "setting", id: "deliveryDefaults", data: { value: { feeMinor: 500 } } }),
+    change({ entity: "product", id: "p1", data: PRODUCT }),
+    change({ entity: "stock_move", id: "m1", data: { delta: 5 } }),
+    change({ entity: "customer", id: "c1", data: { name: "Fatima", phone: "+97333000000" } }),
+    change({ entity: "order", id: "o1", data: ORDER }),
+    change({ entity: "expense", id: "e1", data: { amountMinor: 3000, category: "ingredients" } }),
+    change({ entity: "occasion", id: "x1", data: { kind: "eid", nameAr: "العيد" } }),
+  ];
+  const staff = (flags: Partial<Member["permissions"]>): Member => ({ role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, ...flags } });
+  const pulledKinds = async (member: Member) =>
+    (await pullForMember(sql, SHOP_ID, member, 0)).changes.map((c) => (c.entity === "setting" ? `setting:${c.id}` : c.entity));
+
+  beforeEach(async () => {
+    expect(await pushChanges(sql, SHOP_ID, owner, seed, OWNER_ID)).toEqual({ conflicts: [], rejected: [] });
+  });
+
+  it("every flag off: pulls the shop and the subscription setting only, and every push is refused", async () => {
+    const none = staff({});
+    expect(await pulledKinds(none)).toEqual(["shop", "setting:subscription"]);
+
+    const attempts = seed.map((c) => ({ ...c, data: { ...c.data, tampered: true } }));
+    const result = await pushChanges(sql, SHOP_ID, none, [...attempts, change({ entity: "setting", id: "vat", data: { value: { rateBps: 0 } } }), change({ entity: "order", id: "o2", data: ORDER })], STAFF_ID);
+    expect(result.conflicts).toEqual([]);
+    expect(result.rejected.map((r) => `${r.entity}/${r.id}`)).toEqual([...seed.map((c) => `${c.entity}/${c.id}`), "setting/vat", "order/o2"]);
+    // The server's copy comes back only for what this member may pull; the rest the phone drops.
+    expect(result.rejected.filter((r) => r.record).map((r) => `${r.entity}/${r.id}`)).toEqual([`shop/${SHOP_ID}`, "setting/subscription"]);
+    // Nothing changed on the server.
+    for (const c of seed) expect((await findRecord(sql, SHOP_ID, c.entity, c.id))?.data).toEqual(c.data);
+    expect(await findRecord(sql, SHOP_ID, "setting", "vat")).toBeUndefined();
+  });
+
+  it("a filtered record is left out, never sent as a deletion, even once the owner deletes it", async () => {
+    await pushChanges(sql, SHOP_ID, owner, [change({ entity: "order", id: "o1", data: ORDER, deleted: true })], OWNER_ID);
+    const pulled = await pullForMember(sql, SHOP_ID, staff({}), 0);
+    expect(pulled.changes.some((c) => c.entity === "order" || c.deleted)).toBe(false);
+    // Staff who may see orders do get the tombstone.
+    const ordersPull = await pullForMember(sql, SHOP_ID, staff({ orders: true }), 0);
+    expect(ordersPull.changes.find((c) => c.entity === "order")).toMatchObject({ id: "o1", deleted: true });
+  });
+
+  it("orders alone: no expenses; writes orders, customers and occasions; not the shop, settings or products", async () => {
+    const member = staff({ orders: true });
+    expect(await pulledKinds(member)).toEqual(["shop", "setting:subscription", "setting:whatsappTemplates", "setting:deliveryDefaults", "product", "stock_move", "customer", "order", "occasion"]);
+
+    const result = await pushChanges(sql, SHOP_ID, member, [
+      change({ entity: "order", id: "o2", data: { ...ORDER, customerId: "c2" } }),
+      change({ entity: "customer", id: "c2", data: { name: "Noora" } }),
+      change({ entity: "occasion", id: "x1", data: { kind: "eid", nameAr: "عيد الأضحى" } }),
+      change({ entity: "shop", id: SHOP_ID, data: { ...SHOP, vat: { enabled: false } } }),
+      change({ entity: "setting", id: "deliveryDefaults", data: { value: { feeMinor: 0 } } }),
+      change({ entity: "product", id: "p1", data: { ...PRODUCT, priceMinor: 1 } }),
+      change({ entity: "expense", id: "e1", data: { amountMinor: 1 } }),
+    ], STAFF_ID);
+    expect(result.rejected.map((r) => `${r.entity}/${r.id}`)).toEqual([`shop/${SHOP_ID}`, "setting/deliveryDefaults", "product/p1", "expense/e1"]);
+    expect(result.rejected.find((r) => r.entity === "expense")!.record).toBeUndefined();
+    expect(result.rejected.find((r) => r.entity === "shop")!.record!.data).toEqual(SHOP);
+    expect((await findRecord(sql, SHOP_ID, "order", "o2"))?.data.customerId).toBe("c2");
+    expect((await findRecord(sql, SHOP_ID, "occasion", "x1"))?.data.nameAr).toBe("عيد الأضحى");
+  });
+
+  it("prepare alone: what preparing takes; writes an order's status and outForDeliveryAt only", async () => {
+    const member = staff({ prepare: true });
+    expect(await pulledKinds(member)).toEqual(["shop", "setting:subscription", "setting:whatsappTemplates", "setting:deliveryDefaults", "product", "stock_move", "customer", "order", "occasion"]);
+
+    const outEntry = { id: "h1", field: "outForDelivery", oldValue: null, newValue: AT, note: null, at: AT };
+    const result = await pushChanges(sql, SHOP_ID, member, [
+      change({ entity: "order", id: "o1", data: { ...ORDER, outForDeliveryAt: AT, changes: [outEntry], paymentStatus: "paid", items: [] } }),
+      change({ entity: "customer", id: "c1", data: { name: "Renamed" } }),
+      change({ entity: "order", id: "o2", data: ORDER }),
+    ], STAFF_ID);
+    expect(result.rejected.map((r) => `${r.entity}/${r.id}`)).toEqual(["customer/c1", "order/o2"]);
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))?.data).toEqual({ ...ORDER, outForDeliveryAt: AT, changes: [outEntry] });
+  });
+
+  it("prepare alone: delivered — status, a cleared outForDeliveryAt and the appended history all stored, nothing else", async () => {
+    const member = staff({ prepare: true });
+    const outEntry = { id: "h1", field: "outForDelivery", oldValue: null, newValue: AT, note: null, at: AT };
+    await pushChanges(sql, SHOP_ID, owner, [change({ entity: "order", id: "o1", data: { ...ORDER, outForDeliveryAt: AT, changes: [outEntry] } })], OWNER_ID);
+
+    const later = "2026-10-01T11:00:00.000Z";
+    const cleared = { id: "h2", field: "outForDelivery", oldValue: AT, newValue: null, note: null, at: later };
+    const delivered = { id: "h3", field: "status", oldValue: "ready", newValue: "collected", note: null, at: later };
+    const sneaky = { id: "h4", field: "deliveryFeeMinor", oldValue: "0", newValue: "999", note: null, at: later };
+    const rewritten = { ...outEntry, newValue: "2026-09-01T00:00:00.000Z" };
+    const pushed = { ...ORDER, status: "collected", outForDeliveryAt: null, updatedAt: later, deliveryFeeMinor: 999, changes: [rewritten, cleared, delivered, sneaky] };
+    expect((await pushChanges(sql, SHOP_ID, member, [change({ entity: "order", id: "o1", data: pushed })], STAFF_ID)).rejected).toEqual([]);
+
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))?.data).toEqual({
+      ...ORDER,
+      status: "collected",
+      outForDeliveryAt: null,
+      updatedAt: later,
+      changes: [outEntry, cleared, delivered], // The stored entry as stored; only the new status entries added.
+    });
+  });
+
+  it("money alone: adds expenses; writes expenses and an order's payments only", async () => {
+    const member = staff({ money: true });
+    expect(await pulledKinds(member)).toEqual(["shop", "setting:subscription", "setting:whatsappTemplates", "setting:deliveryDefaults", "product", "stock_move", "customer", "order", "expense", "occasion"]);
+
+    const payment = { id: "pay1", amountMinor: 10000, method: "cash", note: null, paidAt: AT };
+    const result = await pushChanges(sql, SHOP_ID, member, [
+      change({ entity: "expense", id: "e2", data: { amountMinor: 700, category: "packaging" } }),
+      change({ entity: "order", id: "o1", data: { ...ORDER, status: "collected", payments: [payment], paymentStatus: "paid" } }),
+      change({ entity: "product", id: "p1", data: { ...PRODUCT, costMinor: 1 } }),
+    ], STAFF_ID);
+    expect(result.rejected.map((r) => `${r.entity}/${r.id}`)).toEqual(["product/p1"]);
+    expect((await findRecord(sql, SHOP_ID, "expense", "e2"))?.data.amountMinor).toBe(700);
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))?.data).toEqual({ ...ORDER, payments: [payment], paymentStatus: "paid" });
+  });
+
+  it("products alone: the catalogue only; writes products and stock moves", async () => {
+    const member = staff({ products: true });
+    expect(await pulledKinds(member)).toEqual(["shop", "setting:subscription", "setting:whatsappTemplates", "setting:deliveryDefaults", "product", "stock_move", "occasion"]);
+
+    const result = await pushChanges(sql, SHOP_ID, member, [
+      change({ entity: "product", id: "p2", data: { ...PRODUCT, nameAr: "كوكيز" } }),
+      change({ entity: "product", id: "p1", data: { ...PRODUCT, priceMinor: 5500 } }),
+      change({ entity: "order", id: "o1", data: { ...ORDER, status: "collected" } }),
+      change({ entity: "customer", id: "c1", data: { name: "x" } }),
+    ], STAFF_ID);
+    expect(result.rejected).toEqual([{ entity: "order", id: "o1", reason: "forbidden" }, { entity: "customer", id: "c1", reason: "forbidden" }]);
+    expect((await findRecord(sql, SHOP_ID, "product", "p1"))?.data.priceMinor).toBe(5500);
+  });
+
+  it("the owner is unaffected: pulls every record, and every push applies", async () => {
+    expect(await pulledKinds(owner)).toEqual(seed.map((c) => (c.entity === "setting" ? `setting:${c.id}` : c.entity)));
+    const edits = seed.map((c) => ({ ...c, data: { ...c.data, edited: true } }));
+    expect((await pushChanges(sql, SHOP_ID, owner, edits, OWNER_ID)).rejected).toEqual([]);
+    for (const c of edits) expect((await findRecord(sql, SHOP_ID, c.entity, c.id))?.data).toEqual(c.data);
+  });
+
+  it("deliveryDefaults (tester feedback 1 Oct): the owner's {feeMinor} is stored and reaches order staff; staff cannot change it", async () => {
+    expect((await findRecord(sql, SHOP_ID, "setting", "deliveryDefaults"))?.data).toEqual({ value: { feeMinor: 500 } });
+    const pulled = await pullForMember(sql, SHOP_ID, staff({ orders: true }), 0);
+    expect(pulled.changes.find((c) => c.entity === "setting" && c.id === "deliveryDefaults")?.data).toEqual({ value: { feeMinor: 500 } });
+
+    const result = await pushChanges(sql, SHOP_ID, staff({ orders: true }), [change({ entity: "setting", id: "deliveryDefaults", data: { value: { feeMinor: 0 } } })], STAFF_ID);
+    expect(result.rejected).toEqual([expect.objectContaining({ entity: "setting", id: "deliveryDefaults", reason: "forbidden", record: expect.objectContaining({ data: { value: { feeMinor: 500 } } }) })]);
   });
 });
 
