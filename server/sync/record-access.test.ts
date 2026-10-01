@@ -1,45 +1,177 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_STAFF_PERMISSIONS, type Member } from "./permissions.ts";
-import { canPull, decidePush, isOrderStockUpdate } from "./record-access.ts";
+import { DEFAULT_STAFF_PERMISSIONS, type Member, type Permissions } from "./permissions.ts";
+import { canPull, decidePush, ENTITIES, isOrderStockUpdate, newlyVisibleEntities, type Entity } from "./record-access.ts";
 
+const staff = (flags: Partial<Permissions>): Member => ({ role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, ...flags } });
 const owner: Member = { role: "owner", permissions: DEFAULT_STAFF_PERMISSIONS }; // Deliberately empty permissions: role alone should be enough.
-const noPerms: Member = { role: "staff", permissions: DEFAULT_STAFF_PERMISSIONS };
-const withOrders: Member = { role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, orders: true } };
-const withPrepare: Member = { role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, prepare: true } };
-const withMoney: Member = { role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, money: true } };
-const withProducts: Member = { role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, products: true } };
+const noPerms = staff({});
+const withOrders = staff({ orders: true });
+const withPrepare = staff({ prepare: true });
+const withMoney = staff({ money: true });
+const withProducts = staff({ products: true });
+const everyPermission = staff({ orders: true, prepare: true, money: true, products: true });
 
-describe("decidePush / expense (money)", () => {
-  it("allows an owner to push an expense", () => {
-    expect(decidePush(owner, "expense", "r1", { amount: 10 }, false, undefined)).toEqual({ allowed: true, data: { amount: 10 } });
+/** A stored, live record (decidePush's `existing`). */
+const live = (data: Record<string, unknown>) => ({ data, deleted: false });
+const FORBIDDEN = { allowed: false, reason: "forbidden" };
+
+// One sample record per kind of thing a pull can carry: every entity, and the setting ids that differ.
+const SAMPLES: [Entity, string, string][] = [
+  ["shop", "shop-1", "shop"],
+  ["setting", "subscription", "setting:subscription"],
+  ["setting", "whatsappTemplates", "setting:whatsappTemplates"],
+  ["setting", "deliveryDefaults", "setting:deliveryDefaults"],
+  ["product", "p1", "product"],
+  ["stock_move", "m1", "stock_move"],
+  ["customer", "c1", "customer"],
+  ["order", "o1", "order"],
+  ["expense", "e1", "expense"],
+  ["occasion", "x1", "occasion"],
+];
+const visibleTo = (member: Member) => SAMPLES.filter(([entity, id]) => canPull(member, entity, id)).map(([, , label]) => label);
+const SETTINGS = ["setting:subscription", "setting:whatsappTemplates", "setting:deliveryDefaults"];
+
+// Security review 1 Oct 2026, F01: staff used to pull every record but expenses whatever their flags.
+describe("canPull (per entity and permission)", () => {
+  it("the owner sees every record", () => {
+    expect(visibleTo(owner)).toEqual(SAMPLES.map(([, , label]) => label));
   });
 
-  it("allows staff with money to push an expense", () => {
-    expect(decidePush(withMoney, "expense", "r1", { amount: 10 }, false, undefined)).toEqual({ allowed: true, data: { amount: 10 } });
+  it("a staff member with every flag off sees only the shop record and the subscription setting", () => {
+    expect(visibleTo(noPerms)).toEqual(["shop", "setting:subscription"]);
   });
 
-  it("rejects staff without money pushing an expense", () => {
-    expect(decidePush(noPerms, "expense", "r1", { amount: 10 }, false, undefined)).toEqual({ allowed: false, reason: "forbidden" });
-    expect(decidePush(withOrders, "expense", "r1", { amount: 10 }, false, undefined)).toEqual({ allowed: false, reason: "forbidden" });
+  it("orders: shop, settings, products, customers, orders and occasions, never expenses", () => {
+    expect(visibleTo(withOrders)).toEqual(["shop", ...SETTINGS, "product", "stock_move", "customer", "order", "occasion"]);
+  });
+
+  it("prepare: what preparing takes (orders with their customers and products), never expenses", () => {
+    expect(visibleTo(withPrepare)).toEqual(["shop", ...SETTINGS, "product", "stock_move", "customer", "order", "occasion"]);
+  });
+
+  it("money: orders with their payments, customers and products for the reports, and expenses", () => {
+    expect(visibleTo(withMoney)).toEqual(["shop", ...SETTINGS, "product", "stock_move", "customer", "order", "expense", "occasion"]);
+  });
+
+  it("products: the catalogue and its stock, never customers, orders or expenses", () => {
+    expect(visibleTo(withProducts)).toEqual(["shop", ...SETTINGS, "product", "stock_move", "occasion"]);
+  });
+
+  it("a staff member holding every flag sees everything the owner does", () => {
+    expect(visibleTo(everyPermission)).toEqual(visibleTo(owner));
   });
 });
 
-describe("decidePush / product (products)", () => {
-  it("allows staff with products to push a product", () => {
-    expect(decidePush(withProducts, "product", "r1", { name: "Cake" }, false, undefined)).toEqual({ allowed: true, data: { name: "Cake" } });
+describe("decidePush / the owner is unaffected", () => {
+  it("may write, create and delete every entity, the subscription and deliveryDefaults settings included", () => {
+    for (const entity of ENTITIES) {
+      expect(decidePush(owner, entity, "r1", { x: 2 }, false, undefined)).toEqual({ allowed: true, data: { x: 2 } });
+      expect(decidePush(owner, entity, "r1", { x: 2 }, false, live({ x: 1 }))).toEqual({ allowed: true, data: { x: 2 } });
+      expect(decidePush(owner, entity, "r1", { x: 2 }, true, live({ x: 1 }))).toEqual({ allowed: true, data: { x: 2 } });
+    }
+    const report = { value: { status: "active", expiresAt: "2027-01-01T00:00:00.000Z", platform: "ios", updatedAt: "2026-09-29T12:00:00.000Z" } };
+    expect(decidePush(owner, "setting", "subscription", report, false, live({ value: { status: "expired" } }))).toEqual({ allowed: true, data: report });
+    expect(decidePush(owner, "setting", "deliveryDefaults", { value: { feeMinor: 500 } }, false, undefined)).toEqual({ allowed: true, data: { value: { feeMinor: 500 } } });
+  });
+});
+
+describe("decidePush / a staff member with every flag off", () => {
+  it("may push nothing at all: new, edited or deleted, of any entity", () => {
+    for (const entity of ENTITIES) {
+      for (const id of entity === "setting" ? ["subscription", "whatsappTemplates", "deliveryDefaults", "vat"] : ["r1"]) {
+        expect(decidePush(noPerms, entity, id, { x: 2 }, false, undefined)).toEqual(FORBIDDEN);
+        expect(decidePush(noPerms, entity, id, { x: 2 }, false, live({ x: 1 }))).toEqual(FORBIDDEN);
+        expect(decidePush(noPerms, entity, id, { x: 2 }, true, live({ x: 1 }))).toEqual(FORBIDDEN);
+      }
+    }
+  });
+});
+
+// The shop record and every setting are the owner's: staff used to be able to rewrite the shop (VAT,
+// currency) and push any setting, such as a made-up VAT one. No setting synced today is per staff member
+// (per-device preferences never sync), so none is left open.
+describe("decidePush / shop and settings are owner only", () => {
+  it("refuses staff, even with every permission, writing the shop record or any setting", () => {
+    for (const member of [withOrders, withPrepare, withMoney, withProducts, everyPermission]) {
+      expect(decidePush(member, "shop", "shop-1", { nameAr: "x", vat: { enabled: true, rateBps: 0 } }, false, live({ nameAr: "كيك" }))).toEqual(FORBIDDEN);
+      for (const id of ["subscription", "whatsappTemplates", "deliveryDefaults", "vat"]) {
+        expect(decidePush(member, "setting", id, { value: { x: 1 } }, false, undefined)).toEqual(FORBIDDEN);
+        expect(decidePush(member, "setting", id, { value: { x: 1 } }, false, live({ value: {} }))).toEqual(FORBIDDEN);
+        expect(decidePush(member, "setting", id, {}, true, live({ value: {} }))).toEqual(FORBIDDEN);
+      }
+    }
+  });
+});
+
+describe("decidePush / orders", () => {
+  it("full write of orders, customers and occasions, including creating and deleting them", () => {
+    for (const entity of ["order", "customer", "occasion"] as const) {
+      expect(decidePush(withOrders, entity, "r1", { x: 2 }, false, undefined)).toEqual({ allowed: true, data: { x: 2 } });
+      expect(decidePush(withOrders, entity, "r1", { x: 2 }, false, live({ x: 1 }))).toEqual({ allowed: true, data: { x: 2 } });
+      expect(decidePush(withOrders, entity, "r1", { x: 2 }, true, live({ x: 1 }))).toEqual({ allowed: true, data: { x: 2 } });
+    }
   });
 
-  it("rejects staff without products pushing a product", () => {
-    expect(decidePush(withOrders, "product", "r1", { name: "Cake" }, false, undefined)).toEqual({ allowed: false, reason: "forbidden" });
+  it("nothing else: no expenses, products (beyond stock, below) or stock moves", () => {
+    for (const entity of ["expense", "product", "stock_move"] as const) {
+      expect(decidePush(withOrders, entity, "r1", { x: 2 }, false, undefined)).toEqual(FORBIDDEN);
+      expect(decidePush(withOrders, entity, "r1", { x: 2 }, false, live({ x: 1 }))).toEqual(FORBIDDEN);
+    }
   });
 
-  it("allows an owner regardless of their own permissions object", () => {
-    expect(decidePush(owner, "product", "r1", { name: "Cake" }, false, undefined).allowed).toBe(true);
+  it("orders wins over prepare and money when staff hold several (full write, not a merge)", () => {
+    const both = staff({ orders: true, prepare: true, money: true });
+    const edited = { status: "confirmed", customerName: "Fully rewritten" };
+    expect(decidePush(both, "order", "r1", edited, false, live({ status: "pending", customerName: "Sara" }))).toEqual({ allowed: true, data: edited });
+  });
+});
+
+describe("decidePush / money", () => {
+  it("full write of expenses", () => {
+    expect(decidePush(withMoney, "expense", "e1", { amountMinor: 10 }, false, undefined)).toEqual({ allowed: true, data: { amountMinor: 10 } });
+    expect(decidePush(withMoney, "expense", "e1", { amountMinor: 10 }, true, live({ amountMinor: 5 }))).toEqual({ allowed: true, data: { amountMinor: 10 } });
+  });
+
+  it("nothing else but an order's money fields (below): no customers, products, occasions or stock moves", () => {
+    for (const entity of ["customer", "product", "occasion", "stock_move"] as const) {
+      expect(decidePush(withMoney, entity, "r1", { x: 2 }, false, undefined)).toEqual(FORBIDDEN);
+      expect(decidePush(withMoney, entity, "r1", { x: 2 }, false, live({ x: 1 }))).toEqual(FORBIDDEN);
+    }
+  });
+
+  it("expenses need money: refused for every other flag", () => {
+    for (const member of [withOrders, withPrepare, withProducts]) {
+      expect(decidePush(member, "expense", "e1", { amountMinor: 10 }, false, undefined)).toEqual(FORBIDDEN);
+    }
+  });
+});
+
+describe("decidePush / products", () => {
+  it("full write of products and stock moves", () => {
+    for (const entity of ["product", "stock_move"] as const) {
+      expect(decidePush(withProducts, entity, "r1", { name: "Cake" }, false, undefined)).toEqual({ allowed: true, data: { name: "Cake" } });
+      expect(decidePush(withProducts, entity, "r1", { name: "Cake" }, true, live({ name: "Old" }))).toEqual({ allowed: true, data: { name: "Cake" } });
+    }
+  });
+
+  it("nothing else", () => {
+    for (const entity of ["order", "customer", "occasion", "expense"] as const) {
+      expect(decidePush(withProducts, entity, "r1", { x: 2 }, false, live({ x: 1 }))).toEqual(FORBIDDEN);
+    }
+  });
+});
+
+describe("decidePush / prepare", () => {
+  it("nothing but an order's status fields (below) and order stock on products: no customers, occasions, stock moves", () => {
+    for (const entity of ["customer", "occasion", "stock_move", "expense"] as const) {
+      expect(decidePush(withPrepare, entity, "r1", { x: 2 }, false, undefined)).toEqual(FORBIDDEN);
+      expect(decidePush(withPrepare, entity, "r1", { x: 2 }, false, live({ x: 1 }))).toEqual(FORBIDDEN);
+    }
   });
 });
 
 // Staff who confirm or cancel orders without the products permission still move stock (review finding
-// 3): a product push that only adds order-driven stock moves and moves the quantity by their sum.
+// 3 of 29 Sep): a product push that only adds order-driven stock moves and moves the quantity by their sum.
 describe("decidePush / product stock from staff handling orders", () => {
   const oldMove = { id: "m0", delta: 5, reason: "received", orderId: null, note: null, at: "2026-09-29T10:00:00.000Z" };
   const stored = { nameAr: "كيك", nameEn: null, priceMinor: 5000, trackStock: true, stockQuantity: 10, lowStockThreshold: 3, stockMoves: [oldMove], createdAt: "2026-09-01T00:00:00.000Z" };
@@ -48,7 +180,7 @@ describe("decidePush / product stock from staff handling orders", () => {
 
   it("lets staff with orders or prepare push an order's stock change to an existing product", () => {
     for (const member of [withOrders, withPrepare]) {
-      expect(decidePush(member, "product", "p1", pushed(), false, stored)).toEqual({ allowed: true, data: pushed() });
+      expect(decidePush(member, "product", "p1", pushed(), false, live(stored))).toEqual({ allowed: true, data: pushed() });
     }
   });
 
@@ -60,16 +192,18 @@ describe("decidePush / product stock from staff handling orders", () => {
     expect(isOrderStockUpdate(stored, incoming)).toBe(true);
   });
 
-  it("still rejects staff without orders or prepare, a new product and a deletion", () => {
-    expect(decidePush(noPerms, "product", "p1", pushed(), false, stored)).toEqual({ allowed: false, reason: "forbidden" });
-    expect(decidePush(withMoney, "product", "p1", pushed(), false, stored)).toEqual({ allowed: false, reason: "forbidden" });
-    expect(decidePush(withOrders, "product", "p1", pushed(), false, undefined)).toEqual({ allowed: false, reason: "forbidden" });
-    expect(decidePush(withOrders, "product", "p1", pushed(), true, stored)).toEqual({ allowed: false, reason: "forbidden" });
+  it("still rejects staff without orders or prepare, a new product, a deletion and a deleted product", () => {
+    expect(decidePush(noPerms, "product", "p1", pushed(), false, live(stored))).toEqual(FORBIDDEN);
+    expect(decidePush(withMoney, "product", "p1", pushed(), false, live(stored))).toEqual(FORBIDDEN);
+    expect(decidePush(withOrders, "product", "p1", pushed(), false, undefined)).toEqual(FORBIDDEN);
+    expect(decidePush(withOrders, "product", "p1", pushed(), true, live(stored))).toEqual(FORBIDDEN);
+    // A tombstone is not a product to move stock on: that push would bring it back.
+    expect(decidePush(withOrders, "product", "p1", pushed(), false, { data: stored, deleted: true })).toEqual(FORBIDDEN);
   });
 
   it("rejects any change beyond stock: price, name, tracking", () => {
     for (const change of [{ priceMinor: 1 }, { nameAr: "x" }, { trackStock: false }, { lowStockThreshold: 0 }]) {
-      expect(decidePush(withOrders, "product", "p1", pushed(change), false, stored)).toEqual({ allowed: false, reason: "forbidden" });
+      expect(decidePush(withOrders, "product", "p1", pushed(change), false, live(stored))).toEqual(FORBIDDEN);
     }
   });
 
@@ -90,107 +224,121 @@ describe("decidePush / product stock from staff handling orders", () => {
   });
 });
 
-describe("decidePush / customer (orders)", () => {
-  it("allows staff with orders to push a customer", () => {
-    expect(decidePush(withOrders, "customer", "r1", { name: "Sara" }, false, undefined)).toEqual({ allowed: true, data: { name: "Sara" } });
+// An existing order, as the phones and the web write it (docs/sme-phase-2-cloud.md "Record formats").
+const AT = "2026-09-30T10:00:00.000Z";
+const statusEntry = { id: "h1", field: "status", oldValue: "new", newValue: "confirmed", note: null, at: "2026-09-29T09:00:00.000Z" };
+const storedOrder = {
+  customerId: "c1",
+  status: "ready",
+  fulfillmentType: "delivery",
+  dueAt: "2026-10-01T10:00:00.000Z",
+  address: { area: "Riffa" },
+  deliveryFeeMinor: 1000,
+  paymentStatus: "unpaid",
+  items: [{ id: "i1", productId: "p1", nameSnapshot: "Cake", quantity: 2, unitPriceMinor: 5000, unitCostMinor: 2000 }],
+  payments: [],
+  changes: [statusEntry],
+  notes: "No nuts",
+  createdAt: "2026-09-29T08:00:00.000Z",
+  updatedAt: "2026-09-29T09:00:00.000Z",
+};
+
+describe("decidePush / prepare: an existing order's status fields only", () => {
+  it("takes status, outForDeliveryAt, updatedAt and new status history; every other field stays as stored", () => {
+    const outEntry = { id: "h2", field: "outForDelivery", oldValue: null, newValue: AT, note: null, at: AT };
+    const incoming = {
+      ...storedOrder,
+      outForDeliveryAt: AT,
+      updatedAt: AT,
+      changes: [statusEntry, outEntry],
+      // Attempts beyond preparing are ignored, never stored:
+      customerId: "someone-else",
+      items: [{ id: "sneaky", productId: "p1", nameSnapshot: "Cake", quantity: 99, unitPriceMinor: 1, unitCostMinor: 0 }],
+      paymentStatus: "paid",
+      payments: [{ id: "pay1", amountMinor: 11000, method: "cash", paidAt: AT }],
+      deliveryFeeMinor: 0,
+      invoiceNumber: 7,
+    };
+    expect(decidePush(withPrepare, "order", "o1", incoming, false, live(storedOrder))).toEqual({
+      allowed: true,
+      data: { ...storedOrder, outForDeliveryAt: AT, updatedAt: AT, changes: [statusEntry, outEntry] },
+    });
   });
 
-  it("rejects staff with only prepare (customers aren't covered by prepare)", () => {
-    expect(decidePush(withPrepare, "customer", "r1", { name: "Sara" }, false, undefined)).toEqual({ allowed: false, reason: "forbidden" });
+  it("moves an order on (ready → collected) and back, clearing outForDeliveryAt with null or by leaving it out", () => {
+    const out = { ...storedOrder, outForDeliveryAt: AT };
+    const collected = decidePush(withPrepare, "order", "o1", { ...out, status: "collected", outForDeliveryAt: null }, false, live(out));
+    expect(collected).toEqual({ allowed: true, data: { ...out, status: "collected", outForDeliveryAt: null } });
+    const { outForDeliveryAt: _omit, ...withoutKey } = out;
+    void _omit;
+    const back = decidePush(withPrepare, "order", "o1", { ...withoutKey, status: "ready" }, false, live(out));
+    expect(back).toEqual({ allowed: true, data: withoutKey });
   });
 
-  it("rejects staff with no permissions", () => {
-    expect(decidePush(noPerms, "customer", "r1", { name: "Sara" }, false, undefined)).toEqual({ allowed: false, reason: "forbidden" });
-  });
-});
-
-describe("decidePush / order (orders full write, prepare status-only)", () => {
-  const existing = { status: "pending", customerName: "Sara", items: [{ id: "p1", qty: 2 }] };
-
-  it("staff with orders may fully rewrite an order, including creating a brand-new one", () => {
-    const fresh = { status: "pending", customerName: "New customer" };
-    expect(decidePush(withOrders, "order", "r1", fresh, false, undefined)).toEqual({ allowed: true, data: fresh });
-    const edited = { status: "confirmed", customerName: "Renamed", items: [] };
-    expect(decidePush(withOrders, "order", "r1", edited, false, existing)).toEqual({ allowed: true, data: edited });
+  it("ignores an outForDeliveryAt that is neither a date nor null", () => {
+    expect(decidePush(withPrepare, "order", "o1", { ...storedOrder, outForDeliveryAt: 42 }, false, live(storedOrder))).toEqual({ allowed: true, data: storedOrder });
   });
 
-  it("staff with only prepare may change an existing order's status, keeping every other field from the stored record", () => {
-    const decision = decidePush(withPrepare, "order", "r1", { status: "prepped", customerName: "Attempted rename", items: [{ id: "sneaky", qty: 99 }] }, false, existing);
-    expect(decision).toEqual({ allowed: true, data: { status: "prepped", customerName: "Sara", items: [{ id: "p1", qty: 2 }] } });
+  it("history: keeps every stored entry as stored, adds only status entries, and drops other new ones", () => {
+    const tampered = { ...statusEntry, newValue: "collected" };
+    const payEntry = { id: "h3", field: "paymentStatus", oldValue: "unpaid", newValue: "paid", note: null, at: AT };
+    const statusNow = { id: "h4", field: "status", oldValue: "ready", newValue: "collected", note: null, at: AT };
+    const incoming = { ...storedOrder, status: "collected", changes: [tampered, payEntry, statusNow] };
+    const decision = decidePush(withPrepare, "order", "o1", incoming, false, live(storedOrder));
+    expect(decision).toEqual({ allowed: true, data: { ...storedOrder, status: "collected", changes: [statusEntry, statusNow] } });
+    // A client that dropped stored entries (or sent none) never removes them.
+    const dropped = decidePush(withPrepare, "order", "o1", { ...storedOrder, status: "collected", changes: [statusNow] }, false, live(storedOrder));
+    expect(dropped).toEqual({ allowed: true, data: { ...storedOrder, status: "collected", changes: [statusNow, statusEntry] } });
   });
 
-  it("prepare-only cannot create a brand-new order (nothing stored to copy the rest from)", () => {
-    expect(decidePush(withPrepare, "order", "r1", { status: "pending" }, false, undefined)).toEqual({ allowed: false, reason: "forbidden" });
-  });
-
-  it("prepare-only cannot delete an order (a tombstone isn't a status change)", () => {
-    expect(decidePush(withPrepare, "order", "r1", { status: "pending" }, true, existing)).toEqual({ allowed: false, reason: "forbidden" });
-  });
-
-  it("prepare-only is rejected when the incoming data has no status field", () => {
-    expect(decidePush(withPrepare, "order", "r1", { customerName: "x" }, false, existing)).toEqual({ allowed: false, reason: "forbidden" });
-  });
-
-  it("staff with neither orders nor prepare cannot push an order at all", () => {
-    expect(decidePush(noPerms, "order", "r1", { status: "prepped" }, false, existing)).toEqual({ allowed: false, reason: "forbidden" });
-    expect(decidePush(withMoney, "order", "r1", { status: "prepped" }, false, existing)).toEqual({ allowed: false, reason: "forbidden" });
-  });
-
-  it("orders permission wins over prepare when staff somehow has both (full write, not status-only)", () => {
-    const both: Member = { role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, orders: true, prepare: true } };
-    const edited = { status: "confirmed", customerName: "Fully rewritten" };
-    expect(decidePush(both, "order", "r1", edited, false, existing)).toEqual({ allowed: true, data: edited });
-  });
-});
-
-describe("decidePush / entities with no specific permission gate", () => {
-  it("any member — even with zero permissions — may push shop, occasion, stock_move and setting", () => {
-    for (const entity of ["shop", "occasion", "stock_move", "setting"] as const) {
-      expect(decidePush(noPerms, entity, "r1", { x: 1 }, false, undefined)).toEqual({ allowed: true, data: { x: 1 } });
-    }
-  });
-});
-
-// The `setting` record "subscription" is the owner's own subscription report, which the website's paid
-// check reads to open the shop: only the owner may write it. Every other setting keeps the open rule.
-describe("decidePush / the subscription setting (owner only)", () => {
-  const everyPermission: Member = { role: "staff", permissions: { orders: true, prepare: true, money: true, products: true } };
-  const report = { value: { status: "active", expiresAt: "2027-01-01T00:00:00.000Z", platform: "ios", updatedAt: "2026-09-29T12:00:00.000Z" } };
-
-  it("lets the owner write it, new or existing", () => {
-    expect(decidePush(owner, "setting", "subscription", report, false, undefined)).toEqual({ allowed: true, data: report });
-    expect(decidePush(owner, "setting", "subscription", report, false, { value: { status: "expired" } })).toEqual({ allowed: true, data: report });
-  });
-
-  it("refuses staff, even with every permission, whether writing or deleting it", () => {
-    expect(decidePush(everyPermission, "setting", "subscription", report, false, undefined)).toEqual({ allowed: false, reason: "forbidden" });
-    expect(decidePush(noPerms, "setting", "subscription", report, false, { value: {} })).toEqual({ allowed: false, reason: "forbidden" });
-    expect(decidePush(everyPermission, "setting", "subscription", {}, true, { value: {} })).toEqual({ allowed: false, reason: "forbidden" });
-  });
-
-  it("still lets staff write every other setting, such as whatsappTemplates", () => {
-    expect(decidePush(noPerms, "setting", "whatsappTemplates", { value: ["Hi"] }, false, undefined)).toEqual({ allowed: true, data: { value: ["Hi"] } });
-  });
-
-  it("is about the setting entity only: another entity's record with that id keeps its own rule", () => {
-    expect(decidePush(noPerms, "occasion", "subscription", { x: 1 }, false, undefined)).toEqual({ allowed: true, data: { x: 1 } });
+  it("cannot create a brand-new order, delete one, bring back a deleted one, or push one without a status", () => {
+    expect(decidePush(withPrepare, "order", "o1", { status: "new" }, false, undefined)).toEqual(FORBIDDEN);
+    expect(decidePush(withPrepare, "order", "o1", { status: "new" }, true, live(storedOrder))).toEqual(FORBIDDEN);
+    expect(decidePush(withPrepare, "order", "o1", { ...storedOrder, status: "new" }, false, { data: storedOrder, deleted: true })).toEqual(FORBIDDEN);
+    const { status: _omit, ...withoutStatus } = storedOrder;
+    void _omit;
+    expect(decidePush(withPrepare, "order", "o1", withoutStatus, false, live(storedOrder))).toEqual(FORBIDDEN);
   });
 });
 
-describe("canPull", () => {
-  it("hides expense from staff without money", () => {
-    expect(canPull(noPerms, "expense")).toBe(false);
-    expect(canPull(withOrders, "expense")).toBe(false);
+describe("decidePush / money: an existing order's money fields only", () => {
+  it("takes payments, paymentStatus, updatedAt and new payment history; the status and everything else stay", () => {
+    const payment = { id: "pay1", amountMinor: 11000, method: "cash", note: null, paidAt: AT };
+    const payEntry = { id: "h3", field: "paymentStatus", oldValue: "unpaid", newValue: "paid", note: null, at: AT };
+    const sneakyStatus = { id: "h4", field: "status", oldValue: "ready", newValue: "cancelled", note: null, at: AT };
+    const incoming = { ...storedOrder, status: "cancelled", payments: [payment], paymentStatus: "paid", updatedAt: AT, changes: [statusEntry, payEntry, sneakyStatus], deliveryFeeMinor: 0 };
+    expect(decidePush(withMoney, "order", "o1", incoming, false, live(storedOrder))).toEqual({
+      allowed: true,
+      data: { ...storedOrder, payments: [payment], paymentStatus: "paid", updatedAt: AT, changes: [statusEntry, payEntry] },
+    });
   });
 
-  it("shows expense to staff with money, and to the owner", () => {
-    expect(canPull(withMoney, "expense")).toBe(true);
-    expect(canPull(owner, "expense")).toBe(true);
+  it("cannot create or delete an order", () => {
+    expect(decidePush(withMoney, "order", "o1", { status: "new", payments: [] }, false, undefined)).toEqual(FORBIDDEN);
+    expect(decidePush(withMoney, "order", "o1", storedOrder, true, live(storedOrder))).toEqual(FORBIDDEN);
   });
 
-  it("never hides any other entity", () => {
-    for (const entity of ["shop", "product", "customer", "order", "occasion", "stock_move", "setting"] as const) {
-      expect(canPull(noPerms, entity)).toBe(true);
-    }
+  it("prepare and money together take both sets of fields", () => {
+    const payment = { id: "pay1", amountMinor: 11000, method: "cash", note: null, paidAt: AT };
+    const incoming = { ...storedOrder, status: "collected", payments: [payment], paymentStatus: "paid", notes: "changed" };
+    expect(decidePush(staff({ prepare: true, money: true }), "order", "o1", incoming, false, live(storedOrder))).toEqual({
+      allowed: true,
+      data: { ...storedOrder, status: "collected", payments: [payment], paymentStatus: "paid" },
+    });
+  });
+});
+
+describe("newlyVisibleEntities (records to send again after a permission grant)", () => {
+  it("lists what a grant makes visible, in the order a phone needs them (customers and products before orders)", () => {
+    expect(newlyVisibleEntities(noPerms, withOrders)).toEqual(["setting", "product", "stock_move", "customer", "occasion", "order"]);
+    expect(newlyVisibleEntities(noPerms, withProducts)).toEqual(["setting", "product", "stock_move", "occasion"]);
+    expect(newlyVisibleEntities(withProducts, withMoney)).toEqual(["customer", "order", "expense"]);
+    expect(newlyVisibleEntities(withOrders, staff({ orders: true, money: true }))).toEqual(["expense"]);
+  });
+
+  it("is empty when nothing new becomes visible: same flags, fewer flags, or another flag with the same reach", () => {
+    expect(newlyVisibleEntities(withOrders, withOrders)).toEqual([]);
+    expect(newlyVisibleEntities(everyPermission, noPerms)).toEqual([]);
+    expect(newlyVisibleEntities(withOrders, withPrepare)).toEqual([]);
   });
 });

@@ -392,6 +392,68 @@ describe("createSyncHandler / members", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, removed: false });
   });
+
+  // Security review F01: a new staff member starts with every flag off and pulls just the shop, so their
+  // phone's cursor moves past every order. The phones keep their cursor when flags change; the grant
+  // gives what it makes visible a fresh seq, so the next sync brings it (customers before orders).
+  describe("permission grants re-send what they make visible", () => {
+    const SYNCED_AT = /^\d{4}-\d{2}-\d{2}T/;
+    async function shopWithRecords() {
+      const ctx = await setUpShopWithStaff();
+      const changes = [
+        { entity: "shop", id: ctx.shopId, data: { nameAr: "كيك سارة" } },
+        { entity: "product", id: "p1", data: { nameAr: "كيك", priceMinor: 5000 } },
+        { entity: "customer", id: "c1", data: { name: "Fatima" } },
+        { entity: "order", id: "o1", data: { customerId: "c1", status: "new" } },
+        { entity: "expense", id: "e1", data: { amountMinor: 3000 } },
+      ];
+      await ctx.handler(post({ action: "sync", shopId: ctx.shopId, cursor: 0, changes }, ctx.ownerSession));
+      return ctx;
+    }
+    const sync = async (handler: (req: Request) => Promise<Response>, shopId: string, session: string, cursor: number) =>
+      (await handler(post({ action: "sync", shopId, cursor, changes: [] }, session))).json();
+    const grant = (handler: (req: Request) => Promise<Response>, shopId: string, ownerSession: string, userId: string, flags: Record<string, boolean>) =>
+      handler(post({ action: "members_update", shopId, userId, permissions: { orders: false, prepare: false, money: false, products: false, ...flags } }, ownerSession));
+
+    it("a staff phone already past every record gets customers, products and orders once orders is granted", async () => {
+      const { handler, ownerSession, shopId, staffSession, staffId } = await shopWithRecords();
+      const first = await sync(handler, shopId, staffSession, 0);
+      expect(first.changes.map((c: { entity: string }) => c.entity)).toEqual(["shop"]);
+
+      expect((await grant(handler, shopId, ownerSession, staffId, { orders: true })).status).toBe(200);
+      const next = await sync(handler, shopId, staffSession, first.cursor);
+      expect(next.changes.map((c: { entity: string; id: string }) => `${c.entity}/${c.id}`)).toEqual(["product/p1", "customer/c1", "order/o1"]);
+      expect(next.membership.permissions).toEqual({ orders: true, prepare: false, money: false, products: false });
+      expect(next.changes.every((c: { updatedAt: string }) => SYNCED_AT.test(c.updatedAt))).toBe(true);
+      // Nothing more on the sync after that.
+      expect((await sync(handler, shopId, staffSession, next.cursor)).changes).toEqual([]);
+    });
+
+    it("re-sent records are the same records: the owner's phone gets them again unchanged", async () => {
+      const { handler, ownerSession, shopId, staffId } = await shopWithRecords();
+      const ownerFirst = await sync(handler, shopId, ownerSession, 0);
+      await grant(handler, shopId, ownerSession, staffId, { money: true });
+      const ownerNext = await sync(handler, shopId, ownerSession, ownerFirst.cursor);
+      const before = new Map(ownerFirst.changes.map((c: { entity: string; id: string }) => [`${c.entity}/${c.id}`, c]));
+      expect(ownerNext.changes.length).toBeGreaterThan(0);
+      for (const c of ownerNext.changes) {
+        const old = before.get(`${c.entity}/${c.id}`) as { data: unknown; updatedAt: string; seq: number };
+        expect(c.data).toEqual(old.data);
+        expect(c.updatedAt).toBe(old.updatedAt);
+        expect(c.seq).toBeGreaterThan(old.seq);
+      }
+    });
+
+    it("a grant that shows nothing new, and a revocation, re-send nothing", async () => {
+      const { handler, ownerSession, shopId, staffSession, staffId } = await shopWithRecords();
+      await grant(handler, shopId, ownerSession, staffId, { orders: true });
+      const all = await sync(handler, shopId, staffSession, 0);
+      await grant(handler, shopId, ownerSession, staffId, { prepare: true }); // Same reach as orders.
+      expect((await sync(handler, shopId, staffSession, all.cursor)).changes).toEqual([]);
+      await grant(handler, shopId, ownerSession, staffId, {}); // Every flag off.
+      expect((await sync(handler, shopId, staffSession, all.cursor)).changes).toEqual([]);
+    });
+  });
 });
 
 describe("createSyncHandler / photos", () => {
@@ -444,12 +506,32 @@ describe("createSyncHandler / photos", () => {
     expect(await res.json()).toEqual({ error: "upload_failed" });
   });
 
-  it("any member (not just owner/products) can fetch a signed photo_url", async () => {
-    const { handler, staffSession, shopId } = await setUpShop();
+  it("allows a photo upload from staff with money (an expense's receipt photo)", async () => {
+    const { handler, staffSession, shopId } = await setUpShop({ money: true });
+    const res = await handler(post({ action: "photo_upload", shopId, mimeType: "image/jpeg", data: JPEG_BYTES.toString("base64") }, staffSession));
+    expect(res.status).toBe(200);
+  });
+
+  it("still refuses a photo upload from staff with only orders or prepare", async () => {
+    for (const flags of [{ orders: true }, { prepare: true }]) {
+      const { handler, staffSession, shopId } = await setUpShop(flags);
+      const res = await handler(post({ action: "photo_upload", shopId, mimeType: "image/jpeg", data: JPEG_BYTES.toString("base64") }, staffSession));
+      expect(res.status).toBe(403);
+    }
+  });
+
+  it("any member holding a permission (not just owner/products) can fetch a signed photo_url", async () => {
+    const { handler, staffSession, shopId } = await setUpShop({ prepare: true });
     const res = await handler(post({ action: "photo_url", shopId, photoId: "a".repeat(64) }, staffSession));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.url).toContain(shopId);
+  });
+
+  it("a member with every flag off pulls no photo ids and gets no photo_url (security review F01)", async () => {
+    const { handler, staffSession, shopId } = await setUpShop();
+    const res = await handler(post({ action: "photo_url", shopId, photoId: "a".repeat(64) }, staffSession));
+    expect(res.status).toBe(403);
   });
 
   it("returns not_found when the signed URL dependency has nothing for that photo", async () => {
