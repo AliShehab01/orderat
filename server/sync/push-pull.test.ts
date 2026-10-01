@@ -266,6 +266,28 @@ describe("F01 / what each member pulls and may push", () => {
     expect((await findRecord(sql, SHOP_ID, "order", "o1"))?.data).toEqual({ ...ORDER, outForDeliveryAt: AT, changes: [outEntry] });
   });
 
+  it("prepare alone: delivered — status, a cleared outForDeliveryAt and the appended history all stored, nothing else", async () => {
+    const member = staff({ prepare: true });
+    const outEntry = { id: "h1", field: "outForDelivery", oldValue: null, newValue: AT, note: null, at: AT };
+    await pushChanges(sql, SHOP_ID, owner, [change({ entity: "order", id: "o1", data: { ...ORDER, outForDeliveryAt: AT, changes: [outEntry] } })], OWNER_ID);
+
+    const later = "2026-10-01T11:00:00.000Z";
+    const cleared = { id: "h2", field: "outForDelivery", oldValue: AT, newValue: null, note: null, at: later };
+    const delivered = { id: "h3", field: "status", oldValue: "ready", newValue: "collected", note: null, at: later };
+    const sneaky = { id: "h4", field: "deliveryFeeMinor", oldValue: "0", newValue: "999", note: null, at: later };
+    const rewritten = { ...outEntry, newValue: "2026-09-01T00:00:00.000Z" };
+    const pushed = { ...ORDER, status: "collected", outForDeliveryAt: null, updatedAt: later, deliveryFeeMinor: 999, changes: [rewritten, cleared, delivered, sneaky] };
+    expect((await pushChanges(sql, SHOP_ID, member, [change({ entity: "order", id: "o1", data: pushed })], STAFF_ID)).rejected).toEqual([]);
+
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))?.data).toEqual({
+      ...ORDER,
+      status: "collected",
+      outForDeliveryAt: null,
+      updatedAt: later,
+      changes: [outEntry, cleared, delivered], // The stored entry as stored; only the new status entries added.
+    });
+  });
+
   it("money alone: adds expenses; writes expenses and an order's payments only", async () => {
     const member = staff({ money: true });
     expect(await pulledKinds(member)).toEqual(["shop", "setting:subscription", "setting:whatsappTemplates", "setting:deliveryDefaults", "product", "stock_move", "customer", "order", "expense", "occasion"]);
