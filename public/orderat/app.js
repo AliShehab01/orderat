@@ -2134,12 +2134,29 @@ document.addEventListener('keydown', e => {
   const el = e.target;
   if ((e.key === 'Enter' || e.key === ' ') && el.getAttribute?.('role') === 'button' && el.dataset.act) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el, e); return; }
   if (e.key !== 'Enter' || e.isComposing || el.tagName !== 'INPUT') return;
+  // A field outside a form (Settings, a search box) has nothing to submit: Return closes the keyboard.
+  if (!el.closest('form')) {
+    if (typingField(el)) { e.preventDefault(); el.blur(); }
+    return;
+  }
   const f = el.closest("form[data-form='new-order']");
   if (!f) return;
   e.preventDefault();
   const fields = [...f.querySelectorAll('input, select, textarea')].filter(x => !x.disabled && !['hidden', 'radio', 'checkbox', 'file', 'submit', 'button'].includes(x.type) && x.offsetParent !== null);
   const next = fields[fields.indexOf(el) + 1];
   if (next) next.focus(); else el.blur();
+});
+// Phones: a touch outside the field being typed in (a tap, or the start of a scroll) closes the keyboard,
+// as in the apps, notes boxes included; iOS Safari would keep it open. Touching another field, a label,
+// a button or a link is left to the browser.
+function typingField(el) {
+  return !!el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'file', 'button', 'submit', 'reset', 'hidden'].includes(el.type)));
+}
+document.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch') return;
+  const a = document.activeElement;
+  if (!typingField(a) || e.target.closest?.('input, textarea, select, label, button, a, [data-act], [contenteditable="true"]')) return;
+  a.blur();
 });
 window.addEventListener('hashchange', render);
 
