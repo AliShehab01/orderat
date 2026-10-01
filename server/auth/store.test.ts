@@ -16,11 +16,13 @@ import {
   findPendingPairingByCode,
   findUserById,
   insertPairing,
+  LAST_SEEN_REFRESH_MS,
   newPollToken,
   newSessionToken,
   pollPairing,
   resolveSession,
   revokeSession,
+  SESSION_IDLE_DAYS,
   upsertUser,
   WEB_SESSION_DAYS,
 } from "./store.ts";
@@ -81,15 +83,49 @@ describe("sessions", () => {
     expect(await resolveSession(sql, `${token}x`, new Date())).toBeUndefined();
   });
 
-  it("bumps last_seen_at on every successful resolution", async () => {
+  it("starts last_seen_at at the signin's own clock when one is given", async () => {
+    const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1" });
+    const { tokenHash } = await newSessionToken();
+    const signedInAt = new Date("2026-09-27T12:00:00.000Z");
+    await createSession(sql, { tokenHash, userId: user.id, now: signedInAt });
+
+    const rows = await sql.query<{ created_at: Date; last_seen_at: Date }>(`select created_at, last_seen_at from orderat.sessions where token_hash = $1`, [tokenHash]);
+    expect(new Date(rows[0]!.created_at).getTime()).toBe(signedInAt.getTime());
+    expect(new Date(rows[0]!.last_seen_at).getTime()).toBe(signedInAt.getTime());
+  });
+
+  it("refreshes last_seen_at on a resolution once the stored one is at least an hour old", async () => {
     const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1" });
     const { token, tokenHash } = await newSessionToken();
-    await createSession(sql, { tokenHash, userId: user.id });
+    const signedInAt = new Date("2026-09-27T12:00:00.000Z");
+    await createSession(sql, { tokenHash, userId: user.id, now: signedInAt });
 
-    const later = new Date(Date.now() + 60_000);
-    await resolveSession(sql, token, later);
+    const later = new Date(signedInAt.getTime() + LAST_SEEN_REFRESH_MS);
+    expect(await resolveSession(sql, token, later)).toBeDefined();
     const rows = await sql.query<{ last_seen_at: string }>(`select last_seen_at from orderat.sessions where token_hash = $1`, [tokenHash]);
     expect(new Date(rows[0]!.last_seen_at).getTime()).toBe(later.getTime());
+  });
+
+  it("does not write last_seen_at again within the hour (a sync every few seconds costs no extra writes)", async () => {
+    const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1" });
+    const { token, tokenHash } = await newSessionToken();
+    const signedInAt = new Date("2026-09-27T12:00:00.000Z");
+    await createSession(sql, { tokenHash, userId: user.id, now: signedInAt });
+
+    expect(await resolveSession(sql, token, new Date(signedInAt.getTime() + LAST_SEEN_REFRESH_MS - 1))).toBeDefined();
+    const rows = await sql.query<{ last_seen_at: string }>(`select last_seen_at from orderat.sessions where token_hash = $1`, [tokenHash]);
+    expect(new Date(rows[0]!.last_seen_at).getTime()).toBe(signedInAt.getTime());
+  });
+
+  it("never moves last_seen_at backwards (a resolution with an older clock leaves it alone)", async () => {
+    const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1" });
+    const { token, tokenHash } = await newSessionToken();
+    const signedInAt = new Date("2026-09-27T12:00:00.000Z");
+    await createSession(sql, { tokenHash, userId: user.id, now: signedInAt });
+
+    expect(await resolveSession(sql, token, new Date(signedInAt.getTime() - 3 * LAST_SEEN_REFRESH_MS))).toBeDefined();
+    const rows = await sql.query<{ last_seen_at: string }>(`select last_seen_at from orderat.sessions where token_hash = $1`, [tokenHash]);
+    expect(new Date(rows[0]!.last_seen_at).getTime()).toBe(signedInAt.getTime());
   });
 
   it("stops resolving a signed-out (revoked) session", async () => {
@@ -123,7 +159,7 @@ describe("session expiry (web sessions)", () => {
   async function newSession(expiresAt?: Date) {
     const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1" });
     const { token, tokenHash } = await newSessionToken();
-    await createSession(sql, { tokenHash, userId: user.id, expiresAt });
+    await createSession(sql, { tokenHash, userId: user.id, expiresAt, now: CREATED });
     return { user, token, tokenHash };
   }
 
@@ -131,14 +167,16 @@ describe("session expiry (web sessions)", () => {
     expect(WEB_SESSION_DAYS).toBe(30);
   });
 
-  it("a session created without an expiry (a phone's) never expires, however long ago it was made", async () => {
+  it("a session created without an expiry (a phone's) has no fixed end: used now and then, it lasts past 400 days", async () => {
     const { user, token, tokenHash } = await newSession();
 
     const rows = await sql.query<{ expires_at: Date | null }>(`select expires_at from orderat.sessions where token_hash = $1`, [tokenHash]);
     expect(rows[0]!.expires_at).toBeNull();
-    const resolved = await resolveSession(sql, token, new Date(CREATED.getTime() + 400 * DAY_MS));
-    expect(resolved?.user.id).toBe(user.id);
-    expect(resolved?.session.expiresAt).toBeUndefined();
+    for (const day of [100, 200, 300, 400]) {
+      const resolved = await resolveSession(sql, token, new Date(CREATED.getTime() + day * DAY_MS));
+      expect(resolved?.user.id).toBe(user.id);
+      expect(resolved?.session.expiresAt).toBeUndefined();
+    }
   });
 
   it("resolves a session until its expiry instant and not at or after it", async () => {
@@ -174,6 +212,68 @@ describe("session expiry (web sessions)", () => {
     expect(await resolveSession(sql, webToken, later)).toBeUndefined();
     expect((await resolveSession(sql, phone.token, later))?.user.id).toBe(user.id);
     expect(await findUserById(sql, user.id)).toBeDefined();
+  });
+});
+
+// Security review 1 Oct 2026, F05: an app session used to live for ever. It now ends after
+// SESSION_IDLE_DAYS without a single call (sliding: every use, at most hourly, moves the window), so a
+// phone in a drawer, or a token copied off a lost device, stops working on its own, while a phone in
+// use never signs out.
+describe("session idle expiry (F05)", () => {
+  const SIGNED_IN = new Date("2026-09-27T12:00:00.000Z");
+
+  async function phoneSession() {
+    const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1" });
+    const { token, tokenHash } = await newSessionToken();
+    await createSession(sql, { tokenHash, userId: user.id, deviceName: "iPhone", now: SIGNED_IN });
+    return { user, token, tokenHash };
+  }
+
+  it("is 180 days", () => {
+    expect(SESSION_IDLE_DAYS).toBe(180);
+  });
+
+  it("still resolves a session last used just under 180 days ago, and that use restarts the window", async () => {
+    const { user, token, tokenHash } = await phoneSession();
+    const almost = new Date(SIGNED_IN.getTime() + SESSION_IDLE_DAYS * DAY_MS - 1);
+
+    expect((await resolveSession(sql, token, almost))?.user.id).toBe(user.id);
+    const rows = await sql.query<{ last_seen_at: Date; revoked_at: Date | null }>(`select last_seen_at, revoked_at from orderat.sessions where token_hash = $1`, [tokenHash]);
+    expect(new Date(rows[0]!.last_seen_at).getTime()).toBe(almost.getTime());
+    expect(rows[0]!.revoked_at).toBeNull();
+    // 179 more days on from that use is fine again.
+    expect((await resolveSession(sql, token, new Date(almost.getTime() + 179 * DAY_MS)))?.user.id).toBe(user.id);
+  });
+
+  it("revokes a session unused for 180 days, and it stays revoked", async () => {
+    const { token, tokenHash } = await phoneSession();
+    const idle = new Date(SIGNED_IN.getTime() + SESSION_IDLE_DAYS * DAY_MS);
+
+    expect(await resolveSession(sql, token, idle)).toBeUndefined();
+    const rows = await sql.query<{ revoked_at: Date | null; last_seen_at: Date }>(`select revoked_at, last_seen_at from orderat.sessions where token_hash = $1`, [tokenHash]);
+    expect(new Date(rows[0]!.revoked_at!).getTime()).toBe(idle.getTime());
+    expect(new Date(rows[0]!.last_seen_at).getTime()).toBe(SIGNED_IN.getTime()); // Not refreshed by the failed use.
+    // Revoked, not merely idle: even a clock that goes back cannot bring it back.
+    expect(await resolveSession(sql, token, SIGNED_IN)).toBeUndefined();
+  });
+
+  it("an idle session's revocation leaves the user's other, active sessions alone", async () => {
+    const { user, token } = await phoneSession();
+    const other = await newSessionToken();
+    const laterSignin = new Date(SIGNED_IN.getTime() + 100 * DAY_MS);
+    await createSession(sql, { tokenHash: other.tokenHash, userId: user.id, deviceName: "Android", now: laterSignin });
+
+    const at = new Date(SIGNED_IN.getTime() + 200 * DAY_MS);
+    expect(await resolveSession(sql, token, at)).toBeUndefined();
+    expect((await resolveSession(sql, other.token, at))?.user.id).toBe(user.id);
+  });
+
+  it("applies to a browser session too, before its own 30-day end", async () => {
+    // Moot in practice (30 days < 180), but one rule for every session keeps resolveSession simple.
+    const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1" });
+    const { token, tokenHash } = await newSessionToken();
+    await createSession(sql, { tokenHash, userId: user.id, expiresAt: new Date(SIGNED_IN.getTime() + 400 * DAY_MS), now: SIGNED_IN });
+    expect(await resolveSession(sql, token, new Date(SIGNED_IN.getTime() + 181 * DAY_MS))).toBeUndefined();
   });
 });
 

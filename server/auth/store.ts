@@ -120,18 +120,34 @@ export async function newSessionToken(): Promise<NewSessionToken> {
 
 /** How long a browser's session lasts, counted from its signin (docs/superpowers/specs/
  * 2026-09-29-orderat-web-design.md). A browser keeps its session in localStorage, where a forgotten or
- * stolen one would otherwise stay valid for good; the phones' sessions have no expiry at all. */
+ * stolen one would otherwise stay valid for good. A phone's session has no fixed end, only the idle
+ * limit below. */
 export const WEB_SESSION_DAYS = 30;
 
+/** Every session, a phone's included, ends once it has gone this many days without a single call
+ * (security review 1 Oct 2026, F05; docs/security-review-2026-10-01.md). Sliding: each use moves the
+ * window, so a phone that syncs at least twice a year never signs out, while one left in a drawer, or a
+ * token copied off a lost device, stops working on its own. */
+export const SESSION_IDLE_DAYS = 180;
+const SESSION_IDLE_MS = SESSION_IDLE_DAYS * 24 * 60 * 60 * 1000;
+
+/** last_seen_at is rewritten at most this often: a phone syncing every few seconds costs one write an
+ * hour, not one per call, and the 180-day window above needs nothing finer. */
+export const LAST_SEEN_REFRESH_MS = 60 * 60 * 1000;
+
 /** `expiresAt` is set only for a browser's session (server/auth/handler.ts passes WEB_SESSION_DAYS from
- * now); left out, the session never expires, which is every phone's. */
+ * now); left out, the session has no fixed end (every phone's), only SESSION_IDLE_DAYS. `now` is the
+ * signin's own clock for created_at/last_seen_at (the database's now() when left out), so the idle
+ * window is measured on the same clock resolveSession is handed. */
 export async function createSession(
   sql: SqlClient,
-  input: { tokenHash: string; userId: string; deviceName?: string; expiresAt?: Date },
+  input: { tokenHash: string; userId: string; deviceName?: string; expiresAt?: Date; now?: Date },
 ): Promise<void> {
+  const at = input.now?.toISOString() ?? null;
   await sql.query(
-    `insert into orderat.sessions (token_hash, user_id, device_name, expires_at) values ($1, $2, $3, $4)`,
-    [input.tokenHash, input.userId, input.deviceName ?? null, input.expiresAt?.toISOString() ?? null],
+    `insert into orderat.sessions (token_hash, user_id, device_name, expires_at, created_at, last_seen_at)
+     values ($1, $2, $3, $4, coalesce($5::timestamptz, now()), coalesce($5::timestamptz, now()))`,
+    [input.tokenHash, input.userId, input.deviceName ?? null, input.expiresAt?.toISOString() ?? null, at],
   );
 }
 
@@ -140,8 +156,10 @@ export interface SessionRow {
   userId: string;
   deviceName?: string;
   revokedAt?: string;
-  /** The instant this session stops working; absent for one that never expires (every phone's). */
+  /** The instant this session stops working; absent for one with no fixed end (every phone's). */
   expiresAt?: Date;
+  /** The last call made with it, to the hour (LAST_SEEN_REFRESH_MS): what SESSION_IDLE_DAYS counts from. */
+  lastSeenAt: Date;
 }
 
 function toSessionRow(row: Record<string, unknown>): SessionRow {
@@ -153,12 +171,13 @@ function toSessionRow(row: Record<string, unknown>): SessionRow {
     // `new Date(...)` takes the Date both SQL drivers hand a timestamptz back as, and the ISO text a
     // driver configured otherwise would.
     expiresAt: row.expires_at == null ? undefined : new Date(row.expires_at as string | Date),
+    lastSeenAt: new Date(row.last_seen_at as string | Date),
   };
 }
 
 async function findSessionByTokenHash(sql: SqlClient, tokenHash: string): Promise<SessionRow | undefined> {
   const rows = await sql.query<Record<string, unknown>>(
-    `select token_hash, user_id, device_name, revoked_at, expires_at from orderat.sessions where token_hash = $1`,
+    `select token_hash, user_id, device_name, revoked_at, expires_at, last_seen_at from orderat.sessions where token_hash = $1`,
     [tokenHash],
   );
   return rows[0] ? toSessionRow(rows[0]) : undefined;
@@ -172,15 +191,18 @@ export interface ResolvedSession {
 /**
  * Resolves a raw session token (the app's X-Orderat-Session header) to its session + user, or
  * undefined for anything that doesn't authenticate: unknown, revoked, expired (a browser session past
- * its WEB_SESSION_DAYS, from `expires_at <= now` on), or belonging to a since-deleted user. Hashes
+ * its WEB_SESSION_DAYS, from `expires_at <= now` on), idle (no call for SESSION_IDLE_DAYS, which also
+ * revokes it for good), or belonging to a since-deleted user. Hashes
  * the token, looks the hash up, then re-checks the found row's own hash
  * against the computed one with a constant-time comparison before trusting it — the same
  * belt-and-suspenders pattern as server/shop/store.ts's findShopByToken (see that file's comment for
  * the full reasoning: the lookup already matched on equality, so this can only ever agree with it,
  * but it keeps a plain, potentially-short-circuiting `===` from ever being the thing that decided
- * authentication). Bumps `last_seen_at` on every successful resolution, per
- * docs/sme-phase-2-cloud.md. Every other caller that authenticates by session (server/sync/handler.ts,
- * server/auth/handler.ts itself) goes through this, never findSessionByTokenHash directly.
+ * authentication). Refreshes `last_seen_at` on a successful resolution once the stored one is at least
+ * LAST_SEEN_REFRESH_MS old (never moving it backwards), per docs/sme-phase-2-cloud.md. Every other
+ * caller that authenticates by session (server/sync/handler.ts, server/auth/handler.ts itself, and the
+ * AI functions' account quotas, server/usage/ai-caller.ts) goes through this, never
+ * findSessionByTokenHash directly.
  */
 export async function resolveSession(sql: SqlClient, token: string, now: Date): Promise<ResolvedSession | undefined> {
   const tokenHash = await sha256HexOfString(token);
@@ -191,11 +213,20 @@ export async function resolveSession(sql: SqlClient, token: string, now: Date): 
   // simply signed out). Checked before the user lookup and the last_seen_at bump, so an expired
   // session does no more work than a revoked one.
   if (session.expiresAt && session.expiresAt.getTime() <= now.getTime()) return undefined;
+  // Idle for SESSION_IDLE_DAYS: revoked, not just refused, so it can never come back (not even with a
+  // clock that goes back), and it reads as signed out like any other revoked session.
+  if (session.lastSeenAt.getTime() + SESSION_IDLE_MS <= now.getTime()) {
+    await sql.query(`update orderat.sessions set revoked_at = $2 where token_hash = $1 and revoked_at is null`, [tokenHash, now.toISOString()]);
+    return undefined;
+  }
 
   const user = await findUserById(sql, session.userId);
   if (!user) return undefined; // Should be unreachable (FK cascade removes sessions with their user); defensive.
 
-  await sql.query(`update orderat.sessions set last_seen_at = $2 where token_hash = $1`, [tokenHash, now.toISOString()]);
+  if (now.getTime() - session.lastSeenAt.getTime() >= LAST_SEEN_REFRESH_MS) {
+    // `last_seen_at < $2`: two calls racing never move it backwards.
+    await sql.query(`update orderat.sessions set last_seen_at = $2 where token_hash = $1 and last_seen_at < $2`, [tokenHash, now.toISOString()]);
+  }
   return { session, user };
 }
 
