@@ -33,19 +33,19 @@ export interface FeatureLimits extends CallerLimits {
 }
 
 /** docs/marketing-tools.md: captions 20/day per install, 3/day in demo mode, global cap default
- * 3000 (env ORDERAT_CAPTION_DAILY_CAP). Without a signed-in session, 40/day per client IP, of which 20
+ * 3000 (env ORDERAT_CAPTION_DAILY_CAP). Without a signed-in session, 100/day per client IP, of which 50
  * may claim demo=false (docs/security-review-2026-10-01.md). */
-export const DEFAULT_CAPTION_LIMITS: FeatureLimits = { perInstall: 20, perInstallDemo: 3, globalCap: 3000, perIp: 40, perIpPaidClaim: 20 };
+export const DEFAULT_CAPTION_LIMITS: FeatureLimits = { perInstall: 20, perInstallDemo: 3, globalCap: 3000, perIp: 100, perIpPaidClaim: 50 };
 
 /** docs/marketing-tools.md: photos 10/day per install, 2/day in demo mode, global cap default 300
  * (env ORDERAT_PHOTO_DAILY_CAP) — image models are paid only, hence the much smaller global budget
- * than captions. Without a session, 20/day per client IP, of which 10 may claim demo=false. */
-export const DEFAULT_PHOTO_LIMITS: FeatureLimits = { perInstall: 10, perInstallDemo: 2, globalCap: 300, perIp: 20, perIpPaidClaim: 10 };
+ * than captions. Without a session, 40/day per client IP, of which 20 may claim demo=false. */
+export const DEFAULT_PHOTO_LIMITS: FeatureLimits = { perInstall: 10, perInstallDemo: 2, globalCap: 300, perIp: 40, perIpPaidClaim: 20 };
 
 /** docs/sme-phase-2-cloud.md: AI order entry 50/day per install, 5/day in demo mode, global cap
- * default 5000 (env ORDERAT_PARSE_DAILY_CAP). Without a session, 100/day per client IP, of which 50
+ * default 5000 (env ORDERAT_PARSE_DAILY_CAP). Without a session, 300/day per client IP, of which 150
  * may claim demo=false. */
-export const DEFAULT_PARSE_LIMITS: FeatureLimits = { perInstall: 50, perInstallDemo: 5, globalCap: 5000, perIp: 100, perIpPaidClaim: 50 };
+export const DEFAULT_PARSE_LIMITS: FeatureLimits = { perInstall: 50, perInstallDemo: 5, globalCap: 5000, perIp: 300, perIpPaidClaim: 150 };
 
 export function defaultLimitsFor(feature: Feature): FeatureLimits {
   if (feature === "caption") return DEFAULT_CAPTION_LIMITS;

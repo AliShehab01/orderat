@@ -38,15 +38,15 @@ describe("default limits", () => {
   // Per IP (docs/security-review-2026-10-01.md, F02): two paid installs' worth of calls without a session,
   // of which one paid install's worth may claim demo=false.
   it("match docs/marketing-tools.md for captions", () => {
-    expect(DEFAULT_CAPTION_LIMITS).toEqual({ perInstall: 20, perInstallDemo: 3, globalCap: 3000, perIp: 40, perIpPaidClaim: 20 });
+    expect(DEFAULT_CAPTION_LIMITS).toEqual({ perInstall: 20, perInstallDemo: 3, globalCap: 3000, perIp: 100, perIpPaidClaim: 50 });
   });
 
   it("match docs/marketing-tools.md for photos", () => {
-    expect(DEFAULT_PHOTO_LIMITS).toEqual({ perInstall: 10, perInstallDemo: 2, globalCap: 300, perIp: 20, perIpPaidClaim: 10 });
+    expect(DEFAULT_PHOTO_LIMITS).toEqual({ perInstall: 10, perInstallDemo: 2, globalCap: 300, perIp: 40, perIpPaidClaim: 20 });
   });
 
   it("match docs/sme-phase-2-cloud.md for AI order entry (parse)", () => {
-    expect(DEFAULT_PARSE_LIMITS).toEqual({ perInstall: 50, perInstallDemo: 5, globalCap: 5000, perIp: 100, perIpPaidClaim: 50 });
+    expect(DEFAULT_PARSE_LIMITS).toEqual({ perInstall: 50, perInstallDemo: 5, globalCap: 5000, perIp: 300, perIpPaidClaim: 150 });
   });
 });
 
@@ -147,7 +147,7 @@ describe("checkAndRecordFeatureUsage", () => {
   });
 
   it("demo=false without a session: at most one paid install's quota per IP, whatever the installIds", async () => {
-    for (let i = 0; i < 20; i++) expect((await checkAndRecordFeatureUsage(sql, { caller: ANON, feature: "caption", installId: `paid-${i}`, demo: false, now })).ok).toBe(true);
+    for (let i = 0; i < 50; i++) expect((await checkAndRecordFeatureUsage(sql, { caller: ANON, feature: "caption", installId: `paid-${i}`, demo: false, now })).ok).toBe(true);
     expect(await checkAndRecordFeatureUsage(sql, { caller: ANON, feature: "caption", installId: "paid-new", demo: false, now })).toEqual({ ok: false, reason: "daily_limit" });
   });
 

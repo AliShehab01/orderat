@@ -295,9 +295,9 @@ describe("createStudioHandler / limits a client cannot reset", () => {
     expect((await handler(req(validCaptionBody({ installId: "fresh-new", demo: true }), from("198.51.100.9")))).status).toBe(200);
   });
 
-  it("claiming demo=false without a session: one paid install's photos (10) per IP, whatever the installIds", async () => {
+  it("claiming demo=false without a session: 20 photos a day per IP, whatever the installIds", async () => {
     const handler = makeHandler({ image: { apiKey: "k" }, fetchImpl: fetchReturningPhoto() });
-    for (let i = 0; i < 10; i++) expect((await handler(req(validPhotoBody({ installId: `paid-${i}` }), from("203.0.113.7")))).status).toBe(200);
+    for (let i = 0; i < 20; i++) expect((await handler(req(validPhotoBody({ installId: `paid-${i}` }), from("203.0.113.7")))).status).toBe(200);
     const blocked = await handler(req(validPhotoBody({ installId: "paid-new" }), from("203.0.113.7")));
     expect(blocked.status).toBe(429);
     expect(await blocked.json()).toEqual({ error: "daily_limit" });

@@ -179,9 +179,9 @@ describe("createAskHandler / limits a client cannot reset", () => {
     expect(await blocked.json()).toEqual({ error: "daily_limit" });
   });
 
-  it("claiming demo=false without a session: at most 30 questions a day from one IP", async () => {
+  it("claiming demo=false without a session: at most 100 questions a day from one IP", async () => {
     const handler = makeHandler({ gemini: { apiKey: "k" }, fetchImpl: fetchReturning({ answer: "ok" }) });
-    for (let i = 0; i < 30; i++) expect((await handler(req(validBody({ installId: `paid-${i}` }), from("203.0.113.7")))).status).toBe(200);
+    for (let i = 0; i < 100; i++) expect((await handler(req(validBody({ installId: `paid-${i}` }), from("203.0.113.7")))).status).toBe(200);
     expect((await handler(req(validBody({ installId: "paid-new" }), from("203.0.113.7")))).status).toBe(429);
   });
 

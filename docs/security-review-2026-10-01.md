@@ -109,12 +109,15 @@ three handlers, `db/migrations/0009_ai_trusted_limits.sql`). `installId` and `de
 
 | Feature | Per install (demo) | Per account (demo) | Per IP, no session | Of which `demo: false` | Global (env) |
 |---|---|---|---|---|---|
-| Ask Orderat | 30 (3) | 30 (3) | 60 | 30 | 3000 (`ORDERAT_ASK_DAILY_CAP`) |
-| Captions | 20 (3) | 20 (3) | 40 | 20 | 3000 (`ORDERAT_CAPTION_DAILY_CAP`) |
-| Photos | 10 (2) | 10 (2) | 20 | 10 | 300 (`ORDERAT_PHOTO_DAILY_CAP`) |
-| Order entry (parse) | 50 (5) | 50 (5) | 100 | 50 | 5000 (`ORDERAT_PARSE_DAILY_CAP`) |
+| Ask Orderat | 30 (3) | 30 (3) | 200 | 100 | 3000 (`ORDERAT_ASK_DAILY_CAP`) |
+| Captions | 20 (3) | 20 (3) | 100 | 50 | 3000 (`ORDERAT_CAPTION_DAILY_CAP`) |
+| Photos | 10 (2) | 10 (2) | 40 | 20 | 300 (`ORDERAT_PHOTO_DAILY_CAP`) |
+| Order entry (parse) | 50 (5) | 50 (5) | 300 | 150 | 5000 (`ORDERAT_PARSE_DAILY_CAP`) |
 
-The per-IP numbers are in `DEFAULT_*_LIMITS` (`server/usage/feature-limits.ts`) and `DEFAULT_LIMITS`
+The per-IP caps are set well above one install's quota on purpose: Gulf mobile carriers put many phones
+behind one carrier-grade NAT address, and the phones do not send a session on AI calls yet, so a low
+per-IP cap would block real (and paying) users. Their job is fairness (one script cannot eat the global
+budget); the global caps bound spend. The per-IP numbers are in `DEFAULT_*_LIMITS` (`server/usage/feature-limits.ts`) and `DEFAULT_LIMITS`
 (`server/ask/limits.ts`).
 
 **Tests:** `server/usage/trusted-limits.test.ts`, `feature-limits.test.ts`, `server/ask/limits.test.ts`,

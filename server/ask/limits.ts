@@ -25,14 +25,15 @@ export interface AskLimits extends CallerLimits {
 }
 
 /** docs/ask-orderat.md: 30/day per install, 3/day in demo mode, global cap default 3000. Without a
- * signed-in session, 60/day per client IP, of which 30 may claim demo=false
+ * signed-in session, 200/day per client IP, of which 100 may claim demo=false (high enough for many
+ * phones sharing one carrier-grade NAT address; the global cap still bounds spend)
  * (docs/security-review-2026-10-01.md). */
 export const DEFAULT_LIMITS: AskLimits = {
   perInstall: 30,
   perInstallDemo: 3,
   globalCap: 3000,
-  perIp: 60,
-  perIpPaidClaim: 30,
+  perIp: 200,
+  perIpPaidClaim: 100,
 };
 
 /** `date`-typed columns take a plain "YYYY-MM-DD" string from both the Node and Deno postgres

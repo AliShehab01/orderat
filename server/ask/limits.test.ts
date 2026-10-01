@@ -117,8 +117,8 @@ describe("checkAndRecordUsage", () => {
   });
 
   // Security review F02 (docs/security-review-2026-10-01.md): limits the client cannot reset.
-  it("defaults: 60 questions a day per IP without a session, 30 of them claiming demo=false", () => {
-    expect(DEFAULT_LIMITS).toEqual({ perInstall: 30, perInstallDemo: 3, globalCap: 3000, perIp: 60, perIpPaidClaim: 30 });
+  it("defaults: 200 questions a day per IP without a session, 100 of them claiming demo=false", () => {
+    expect(DEFAULT_LIMITS).toEqual({ perInstall: 30, perInstallDemo: 3, globalCap: 3000, perIp: 200, perIpPaidClaim: 100 });
   });
 
   it("a new installId on every question stops at the client IP's cap", async () => {
@@ -128,7 +128,7 @@ describe("checkAndRecordUsage", () => {
   });
 
   it("demo=false without a session: at most perIpPaidClaim a day from one IP, whatever the installIds", async () => {
-    for (let i = 0; i < 30; i++) expect((await checkAndRecordUsage(sql, { caller: ANON, installId: `paid-${i}`, demo: false, now })).ok).toBe(true);
+    for (let i = 0; i < 100; i++) expect((await checkAndRecordUsage(sql, { caller: ANON, installId: `paid-${i}`, demo: false, now })).ok).toBe(true);
     expect(await checkAndRecordUsage(sql, { caller: ANON, installId: "paid-new", demo: false, now })).toEqual({ ok: false, reason: "daily_limit" });
   });
 
