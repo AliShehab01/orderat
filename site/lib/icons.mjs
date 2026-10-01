@@ -1,5 +1,6 @@
 // Small inline line-icon set (24x24, stroke=currentColor). No emoji, no logos/trademarks —
 // consistent with the brand's "line icons that describe a concrete object or action" rule.
+// The one exception is "flagBH", Bahrain's flag in its own colours, for "Made in Bahrain".
 // Usage: icon("chat", "w-6")
 
 const PATHS = {
@@ -22,10 +23,24 @@ const PATHS = {
   vat: '<path d="M4 4h16v16H4z" opacity="0"/><path d="M6 4h9l3 3v13H6V4Z"/><path d="M15 4v3h3"/><path d="M8.5 13.5 14.5 17M8.7 13.3a1.4 1.4 0 1 0 2 2 1.4 1.4 0 0 0-2-2ZM12.8 15.3a1.4 1.4 0 1 0 2 2 1.4 1.4 0 0 0-2-2Z"/>',
   bulb: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.4.3.5.8.5 1.3V16h6v-.8c0-.5.1-1 .5-1.3A6 6 0 0 0 12 3Z"/>',
   clock: '<circle cx="12" cy="12.5" r="8.5"/><path d="M12 8v5l3.5 2"/><path d="M9 2h6"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.3 2.4 3.4 5.2 3.4 8.5s-1.1 6.1-3.4 8.5c-2.3-2.4-3.4-5.2-3.4-8.5s1.1-6.1 3.4-8.5Z"/>',
+  phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.2"/><path d="M10.5 18.5h3"/>',
+  percent: '<path d="M18.5 5.5 5.5 18.5"/><circle cx="7.5" cy="7.5" r="2.3"/><circle cx="16.5" cy="16.5" r="2.3"/>',
+  cake: '<path d="M4 20.5h16"/><path d="M5.5 20.5v-7a1.5 1.5 0 0 1 1.5-1.5h10a1.5 1.5 0 0 1 1.5 1.5v7"/><path d="M5.5 16c1.1.9 2.2.9 3.3 0s2.2-.9 3.2 0 2.1.9 3.2 0 2.2-.9 3.3 0"/><path d="M12 12V8.5"/><path d="M12 6.5c-.9-.6-1-1.7 0-3 1 1.3.9 2.4 0 3Z"/>',
+  ask: '<path d="M4 5h16v10H9l-4 4V5Z"/><path d="M10.2 8.2a1.9 1.9 0 1 1 2.5 1.8c-.4.2-.7.5-.7 1v.4"/><path d="M12 13.2v.1"/>',
+  pause: '<path d="M9 6.5v11M15 6.5v11"/>',
+  play: '<path d="M8.5 5.8v12.4L18 12 8.5 5.8Z"/>',
 };
 
 export function icon(name, className = "") {
+  if (name === "flagBH") return flagBH(className);
   const d = PATHS[name] || PATHS.check;
   const cls = `icon${className ? " " + className : ""}`;
   return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+}
+
+/** Bahrain's flag (white band, five white points, red), drawn inline: flag emoji show as the letters
+ * "BH" on Windows. A national flag, not a logo; decorative, so hidden from screen readers. */
+function flagBH(className = "") {
+  return `<svg class="flag${className ? " " + className : ""}" viewBox="0 0 25 15" aria-hidden="true"><rect width="25" height="15" fill="#fff"/><path fill="#ce1126" d="M6 0l3.5 1.5L6 3l3.5 1.5L6 6l3.5 1.5L6 9l3.5 1.5L6 12l3.5 1.5L6 15h19V0z"/><rect x=".5" y=".5" width="24" height="14" fill="none" stroke="#1c1f3a" stroke-opacity=".18"/></svg>`;
 }

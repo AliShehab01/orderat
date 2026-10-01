@@ -1,9 +1,34 @@
 import { BRAND } from "../config.mjs";
 import { UI } from "../data/strings.mjs";
+import { HIGHLIGHTS, HIGHLIGHT_BUSINESS_TYPES } from "../data/highlights.mjs";
 import { esc, escAttr, html } from "./html.mjs";
 import { path } from "./urls.mjs";
 import { icon } from "./icons.mjs";
 import { storeBadges } from "./layout.mjs";
+
+/**
+ * The gently moving strip of facts under the home hero, in pure CSS (style.css "Trust strip"): two
+ * copies of the list slide by one copy's width and loop, the copy aria-hidden. Hover pauses it, and so
+ * does the visually hidden checkbox (labelled by the round toggle at the strip's end) for keyboard and
+ * touch users; prefers-reduced-motion shows the one list, still and wrapped.
+ */
+export function trustStrip(lang) {
+  const copy = lang === "ar" ? { title: "اوردرات باختصار", pause: "إيقاف حركة الشريط" } : { title: "Orderat at a glance", pause: "Pause the moving strip" };
+  const chips = [
+    ...HIGHLIGHTS.map((h) => `<li class="trust__chip">${icon(h.icon)}${esc(h[lang])}</li>`),
+    ...HIGHLIGHT_BUSINESS_TYPES.map((b) => `<li class="trust__chip trust__chip--type">${icon(b.icon)}${esc(b[lang])}</li>`),
+  ].join("");
+  return `
+<section class="trust">
+  <h2 class="sr-only">${esc(copy.title)}</h2>
+  <input class="trust__pause sr-only" type="checkbox" id="trust-pause">
+  <div class="marquee">
+    <ul class="marquee__group">${chips}</ul>
+    <ul class="marquee__group" aria-hidden="true">${chips}</ul>
+  </div>
+  <label class="trust__toggle" for="trust-pause">${icon("pause", "icon--pause")}${icon("play", "icon--play")}<span class="sr-only">${esc(copy.pause)}</span></label>
+</section>`;
+}
 
 /** Visual breadcrumb trail. crumbs: [{ name, slug }], first entry is Home. */
 export function breadcrumbsHtml(lang, crumbs) {

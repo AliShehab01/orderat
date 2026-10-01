@@ -8,7 +8,7 @@ import { SCREENSHOTS } from "../../data/screenshots.mjs";
 import { BRAND, PRICING } from "../../config.mjs";
 import { esc, escAttr } from "../html.mjs";
 import { path } from "../urls.mjs";
-import { featureCardGrid, businessCardGrid, stepsList, faqTeaser, ctaSection, sectionHeading } from "../components.mjs";
+import { featureCardGrid, businessCardGrid, stepsList, faqTeaser, ctaSection, sectionHeading, trustStrip } from "../components.mjs";
 import { softwareApplicationLd } from "../seo.mjs";
 
 const COPY = {
@@ -77,6 +77,7 @@ export function renderHome(lang) {
     ${storeBadges(lang, { compact: true })}
   </div>
 </section>
+${trustStrip(lang)}
 
 <section class="screenshots">
   <div class="wrap screenshots__strip">
