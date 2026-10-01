@@ -250,6 +250,32 @@ describe('order numbers and history', () => {
   });
 });
 
+describe('out for delivery', () => {
+  const OUT = '2026-09-29T07:30:00.000Z';
+
+  it('is a ready order with outForDeliveryAt set', () => {
+    expect(core.isOutForDelivery({ status: 'ready', outForDeliveryAt: OUT })).toBe(true);
+    expect(core.isOutForDelivery({ status: 'ready', outForDeliveryAt: null })).toBe(false);
+    expect(core.isOutForDelivery({ status: 'ready' })).toBe(false);
+    expect(core.isOutForDelivery({ status: 'collected', outForDeliveryAt: OUT })).toBe(false); // an older app delivered it
+    expect(core.isOutForDelivery(null)).toBe(false);
+  });
+
+  it('puts the step between Ready and Delivered for delivery orders only', () => {
+    const step = (status, fulfillment, outForDeliveryAt = null, options) => core.nextStep({ status, fulfillment, outForDeliveryAt }, options);
+    expect(['new', 'confirmed', 'ready', 'collected', 'cancelled', 'other'].map(s => step(s, 'delivery'))).toEqual(['confirmed', 'ready', 'out', null, null, null]);
+    expect(step('ready', 'delivery', OUT)).toBe('collected');
+    expect(step('ready', 'pickup')).toBe('collected');
+    expect(step('ready', 'delivery', null, { out: false })).toBe('collected');
+  });
+
+  it('labels the history step: out for delivery, or back to Ready', () => {
+    expect(core.historyLabel({ kind: 'outForDelivery', value: OUT })).toEqual({ key: 'history.outForDelivery' });
+    expect(core.historyLabel({ kind: 'outForDelivery', value: true })).toEqual({ key: 'history.outForDelivery' });
+    for (const value of [null, '', false, 'false', undefined]) expect(core.historyLabel({ kind: 'outForDelivery', value })).toEqual({ key: 'history.backToReady' });
+  });
+});
+
 describe('items editor', () => {
   const products = [{ id: 'p1', nameAr: 'كيك', nameEn: 'Cake', price: 6, cost: 2 }];
   it('keeps item ids, the line cost while the product is unchanged, and drops empty lines', () => {
@@ -293,6 +319,85 @@ describe('AI order entry', () => {
       items: [{ pid: 'p1', name: '', qty: 2, price: 6 }, { pid: 'custom', name: 'balloons', qty: 1, price: 0 }, { pid: 'custom', name: 'x', qty: 1, price: 0 }],
     });
     expect(core.draftFields({ items: [] }, products)).toEqual({ items: [] });
+  });
+
+  // How app.js describes the shop (addressPlace): a Bahrain shop's area list, labels in the app's language.
+  const place = (over = {}) => ({
+    bahrain: true, sep: ', ', labels: { block: 'Block', road: 'Road', building: 'Building', flat: 'Flat' },
+    areaCode: name => ({ riffa: 'riffa', 'الرفاع': 'riffa', manama: 'manama' })[String(name).toLowerCase()] || '',
+    ...over,
+  });
+
+  it('reads the delivery keys from the draft, else from the answer (an older server sends none)', () => {
+    expect(core.answerDraft({ draft: { notes: 'x', items: [] }, lang: 'ar' })).toEqual({ notes: 'x', items: [] });
+    expect(core.answerDraft({ draft: { fulfillment: 'pickup' }, fulfillment: 'delivery', address: { text: 'A' }, deliveryNote: 'Call' }))
+      .toEqual({ fulfillment: 'pickup', address: { text: 'A' }, deliveryNote: 'Call' });
+    expect(core.answerDraft({ draft: { fulfillment: null }, fulfillment: 'delivery' })).toEqual({ fulfillment: 'delivery' });
+    expect(core.answerDraft(null)).toEqual({});
+  });
+
+  it("puts a Bahrain address into the area list and the address line, the delivery note last, and leaves the notes alone", () => {
+    const d = core.draftFields({
+      items: [], notes: 'No nuts', fulfillment: 'delivery',
+      address: { area: 'Riffa', block: '935', road: 3510, building: '12', flat: '4' }, deliveryNote: 'Call when outside',
+    }, products, place());
+    expect(d).toEqual({ items: [], notes: 'No nuts', fulfillment: 'delivery', area: 'riffa', address: 'Block 935, Road 3510, Building 12, Flat 4\nCall when outside' });
+    const ar = core.draftFields({ items: [], fulfillment: 'delivery', address: { area: 'الرفاع', block: '٩٣٥' } }, products, place({ sep: '، ', labels: { block: 'مجمع' } }));
+    expect(ar).toEqual({ items: [], fulfillment: 'delivery', area: 'riffa', address: 'مجمع ٩٣٥' });
+  });
+
+  it('writes a Saudi or UAE address (no area list) as the single address field', () => {
+    const saudi = core.draftFields({ items: [], fulfillment: 'delivery', address: { text: 'حي العليا، شارع الأمير سلطان، الرياض' } }, products, place({ bahrain: false }));
+    expect(saudi).toEqual({ items: [], fulfillment: 'delivery', address: 'حي العليا، شارع الأمير سلطان، الرياض' });
+    const uae = core.draftFields({ items: [], address: { area: 'Al Barsha', city: 'Dubai', building: 'Tower 2', flat: '1203' }, deliveryNote: 'Reception' }, products, place({ bahrain: false, sep: '، ', labels: { flat: 'شقة' } }));
+    expect(uae).toEqual({ items: [], fulfillment: 'delivery', address: 'Al Barsha، Dubai، Tower 2، شقة 1203\nReception' });
+    expect(core.draftFields({ items: [], fulfillment: 'delivery', address: { area: 'Riffa' } }, products, place({ bahrain: false })).address).toBe('Riffa');
+  });
+
+  it('takes pickup or delivery as said, and an address with neither said as a delivery', () => {
+    expect(core.draftFields({ items: [], fulfillment: 'pickup' }, products, place())).toEqual({ items: [], fulfillment: 'pickup' });
+    expect(core.draftFields({ items: [], fulfillment: 'later', address: null, deliveryNote: '' }, products, place())).toEqual({ items: [] });
+    expect(core.draftFields({ items: [], fulfillment: null, address: { area: 'Manama' } }, products, place())).toEqual({ items: [], fulfillment: 'delivery', area: 'manama' });
+    expect(core.draftFields({ items: [], deliveryNote: 'Gate 2' }, products, place())).toEqual({ items: [], fulfillment: 'delivery', address: 'Gate 2' });
+    // A caller that does not say how the shop writes addresses gets no address.
+    expect(core.draftFields({ items: [], fulfillment: 'delivery', address: { text: 'x' } }, products)).toEqual({ items: [], fulfillment: 'delivery' });
+  });
+
+  it('labels bare numbers only, takes a known city when the area is not on the list, and skips repeats', () => {
+    expect(core.deliveryAddress({ area: 'Seef', city: 'Manama', block: 'Block 428', road: '٢٨٠٣' }, '', place()))
+      .toEqual({ area: 'manama', address: 'Seef, Block 428, Road ٢٨٠٣' });
+    expect(core.deliveryAddress({ block: '1', text: 'Block 1' }, '', place())).toEqual({ area: '', address: 'Block 1' });
+    expect(core.deliveryAddress({ area: 'Dubai', city: ' dubai ' }, '', place({ bahrain: false }))).toEqual({ area: '', address: 'Dubai' });
+    expect(core.deliveryAddress('Villa 7', 'Ring twice', place())).toEqual({ area: '', address: 'Villa 7\nRing twice' });
+    expect(core.deliveryAddress({ block: {}, road: NaN, text: 42 }, null, place())).toEqual({ area: '', address: '42' });
+    expect(core.deliveryAddress(undefined, undefined, place())).toEqual({ area: '', address: '' });
+  });
+});
+
+describe('default delivery fee', () => {
+  it('reads the setting value { feeMinor }; anything else is no default', () => {
+    expect(core.deliveryFeeMinor({ feeMinor: 1500 })).toBe(1500);
+    expect(core.deliveryFeeMinor({ feeMinor: 0, freeAbove: 20000 })).toBe(0);
+    for (const v of [null, undefined, 'x', [1500], { feeMinor: -5 }, { feeMinor: 1.5 }, { feeMinor: '1500' }, { feeMinor: NaN }]) expect(core.deliveryFeeMinor(v)).toBe(0);
+  });
+
+  it('fills the default into a delivery whose fee is still empty or 0 and untouched, and takes it out on pickup', () => {
+    const turn = (state, fulfillment) => core.feeForFulfillment(state, fulfillment, 1.5);
+    expect(turn({ fee: '', touched: false, auto: false }, 'delivery')).toEqual({ fee: '1.5', auto: true });
+    expect(turn({ fee: '0', touched: false, auto: false }, 'delivery')).toEqual({ fee: '1.5', auto: true });
+    expect(turn({ fee: '1.5', touched: false, auto: true }, 'delivery')).toEqual({ fee: '1.5', auto: true }); // the AI says delivery again
+    expect(turn({ fee: '1.5', touched: false, auto: true }, 'pickup')).toEqual({ fee: '', auto: false });
+    expect(turn(undefined, 'delivery')).toEqual({ fee: '1.5', auto: true });
+  });
+
+  it("never changes a fee the seller typed (0 included) or an order's saved fee, and does nothing without a default", () => {
+    const turn = (state, fulfillment, fee = 1.5) => core.feeForFulfillment(state, fulfillment, fee);
+    expect(turn({ fee: '2', touched: true }, 'delivery')).toEqual({ fee: '2', auto: false });
+    expect(turn({ fee: '0', touched: true }, 'delivery')).toEqual({ fee: '0', auto: false });
+    expect(turn({ fee: '2', touched: true }, 'pickup')).toEqual({ fee: '2', auto: false });
+    expect(turn({ fee: 3, touched: false, auto: false }, 'delivery')).toEqual({ fee: '3', auto: false });
+    expect(turn({ fee: '', touched: false, auto: false }, 'delivery', 0)).toEqual({ fee: '', auto: false });
+    expect(turn({ fee: '', touched: false, auto: false }, 'pickup')).toEqual({ fee: '', auto: false });
   });
 });
 

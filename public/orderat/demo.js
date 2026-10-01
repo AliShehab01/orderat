@@ -162,6 +162,11 @@ function makeDemoData(businessType, now = new Date()) {
     if (isPast) order.status = i % 9 === 0 ? 'cancelled' : 'collected';
     else if (isToday) order.status = ['ready', 'confirmed', 'new'][i % 3];
     else order.status = i % 2 === 0 ? 'confirmed' : 'new';
+    // Today's ready delivery order has gone out for delivery, the step between Ready and Delivered.
+    if (isToday && delivery && order.status === 'ready') {
+      order.outForDeliveryAt = new Date(now.getTime() - 10 * 60000).toISOString();
+      order.changes.push({ kind: 'outForDelivery', value: order.outForDeliveryAt, at: order.outForDeliveryAt });
+    }
 
     if (order.status !== 'cancelled') {
       const total = items.reduce((s, it) => s + it.qty * it.price, 0) + order.deliveryFee;
@@ -191,11 +196,15 @@ function makeDemoData(businessType, now = new Date()) {
     { id: demoId(), kind: 'eidAlFitr', nameAr: 'عيد الفطر', nameEn: 'Eid al-Fitr', start: eid, end: iso(eidEnd), cap: 60, blocked: false },
   ];
 
-  // Two orders waiting in the shop-link inbox, as if customers had just ordered from the public page.
+  // Two orders waiting in the shop-link inbox, as if customers had just ordered from the public page:
+  // one to pick up, one for delivery (added with the shop's default delivery fee).
   const at = (days, h, m) => new Date(today.getFullYear(), today.getMonth(), today.getDate() + days, h, m).toISOString();
   const webOrders = [
     { id: demoId(), name: 'ريم سعيد', nameEn: 'Reem Saeed', phone: '+97333001099', dueAt: at(1, 17, 0), items: [{ pid: products[1].id, qty: 2 }, { pid: products[4].id, qty: 1 }] },
-    { id: demoId(), name: 'حصة جاسم', nameEn: 'Hessa Jasim', phone: '+97333001098', dueAt: at(2, 18, 30), items: [{ pid: products[2].id, qty: 1 }] },
+    {
+      id: demoId(), name: 'حصة جاسم', nameEn: 'Hessa Jasim', phone: '+97333001098', dueAt: at(2, 18, 30), items: [{ pid: products[2].id, qty: 1 }],
+      fulfillment: 'delivery', area: 'riffa', address: 'House 12, Road 3510, Block 935',
+    },
   ];
 
   return {
@@ -203,6 +212,8 @@ function makeDemoData(businessType, now = new Date()) {
     shop: { nameAr: cat.ar, nameEn: cat.en, phone: cat.phone, currency: 'BHD', pickupHours: '4:00 PM - 8:00 PM', dailyCapacity: 35, businessType },
     products, customers, orders, expenses, occasions, webOrders,
     vat: { enabled: true, trn: '220012345600003', pricesInclude: true },
+    // The default delivery fee, in minor units like the phones' setting/deliveryDefaults: 1.000 BHD.
+    deliveryDefaults: { feeMinor: 1000 },
     stockEnabled: tracksStock,
     askEnabled: true,
     hiddenCampaigns: [],

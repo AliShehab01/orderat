@@ -13,6 +13,12 @@
 // - stock: moves { id, delta, reason, orderId, note, at } newest first, the last 50 kept
 //   (Store.applyStockForStatusChange / applyStockDifference / adjustStock).
 // - buildAskSnapshot: AskSnapshotBuilder's JSON, same keys, first names and short refs only.
+// - AI order entry: an orderat-parse draft into the New order form, its pickup or delivery and address
+//   included (Bahrain's area to the area list, the rest as the one free-text address).
+// - default delivery fee: the shop's `setting/deliveryDefaults` { feeMinor }, filled into an order that
+//   turns into a delivery while its fee is still empty and untouched.
+// - out for delivery: a ready delivery order with outForDeliveryAt set (the status stays ready on the
+//   wire), the step between Ready and Delivered.
 // Web objects use major units (6.5 = 6.500 BHD); anything sent to the server is in minor units.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./cloud-map.js'));
@@ -251,6 +257,24 @@
     return { toggle, current: userId => (members.has(userId) ? Object.assign({}, members.get(userId).want) : undefined) };
   }
 
+  // ---------- Out for delivery ----------
+
+  // A delivery order between Ready and Delivered: still "ready" on the wire (older apps know no other
+  // status), with outForDeliveryAt set. An outForDelivery history entry's value is when it went out
+  // (another app may write true); null, '' or false is back to Ready.
+  const wentOut = v => v === true || (typeof v === 'string' && v !== '' && v !== 'false' && v !== 'null');
+  const isOutForDelivery = o => !!o && o.status === 'ready' && wentOut(o.outForDeliveryAt);
+  // The order's next step on its page: confirmed, ready, then for a delivery order 'out' (out for
+  // delivery) before collected (delivered); a pickup order goes from ready to collected. `out: false`
+  // skips the out step (staff whose order pushes the server keeps to the status only).
+  function nextStep(o, options) {
+    const out = !options || options.out !== false;
+    if (o.status === 'new') return 'confirmed';
+    if (o.status === 'confirmed') return 'ready';
+    if (o.status === 'ready') return out && o.fulfillment === 'delivery' && !isOutForDelivery(o) ? 'out' : 'collected';
+    return null;
+  }
+
   // ---------- Order numbers, history, items ----------
 
   // Display numbers (1, 2, 3...) in creation order; never written to the cloud.
@@ -265,6 +289,7 @@
   function historyLabel(ch) {
     if (ch.kind === 'created') return { key: 'history.created' };
     if (ch.kind === 'items') return { key: 'history.itemsEdited' };
+    if (ch.kind === 'outForDelivery') return { key: wentOut(ch.value) ? 'history.outForDelivery' : 'history.backToReady' };
     if (ch.kind === 'status' && STATUSES.indexOf(ch.value) >= 0) return { key: 'history.status', status: ch.value };
     if (ch.kind === 'payment') {
       if (typeof ch.value === 'number') return { key: 'history.payment', amount: ch.value };
@@ -289,6 +314,7 @@
 
   // ---------- AI order entry (orderat-parse) ----------
 
+  const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const cut = (s, n) => String(s || '').trim().slice(0, n);
   function parseProducts(products) {
     return (products || []).filter(p => p.active !== false).slice(0, 500).map(p => {
@@ -300,7 +326,19 @@
     }).filter(p => p.name && typeof p.id === 'string' && p.id.length <= 64);
   }
   const localInput = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-  function draftFields(draft, products) {
+  // The draft of an orderat-parse answer. The delivery keys (fulfillment 'pickup' | 'delivery' | null,
+  // address { area, block, road, building, flat, city, text }, deliveryNote) are read from the draft,
+  // else from the answer itself; an older server sends none of them.
+  const DELIVERY_KEYS = ['fulfillment', 'address', 'deliveryNote'];
+  function answerDraft(answer) {
+    const a = isObj(answer) ? answer : {};
+    const d = Object.assign({}, isObj(a.draft) ? a.draft : {});
+    DELIVERY_KEYS.forEach(k => { if (d[k] == null && a[k] != null) d[k] = a[k]; });
+    return d;
+  }
+  // `place` says how the shop writes an address: { bahrain, areaCode(name) → the form's area code or '',
+  // labels: { block, road, building, flat }, sep }. Without it the draft's address is left out.
+  function draftFields(draft, products, place) {
     const d = draft || {}, out = {};
     out.items = (d.items || []).map(it => {
       const p = (products || []).find(x => x.id === it.productId), qty = it.quantity > 0 ? it.quantity : 1;
@@ -309,7 +347,63 @@
     if (d.customerName) out.name = d.customerName;
     if (isFinite(time(d.collectionAt))) out.due = localInput(time(d.collectionAt));
     if (d.notes) out.notes = d.notes;
+    if (d.fulfillment === 'pickup' || d.fulfillment === 'delivery') out.fulfillment = d.fulfillment;
+    if (place) {
+      const a = deliveryAddress(d.address, d.deliveryNote, place);
+      if (a.area) out.area = a.area;
+      if (a.address) out.address = a.address;
+      // An address with no pickup or delivery said is a delivery: on pickup the form would hide it.
+      if (!out.fulfillment && (a.area || a.address)) out.fulfillment = 'delivery';
+    }
     return out;
+  }
+
+  // The order form's delivery address from the parts the AI (or the demo reader) found. A Bahrain shop
+  // picks its area from a list, so a known area (or city) goes there and everything else into the one
+  // free-text address: the other places, then "Block 935, Road 3510, Building 12, Flat 4" (a bare number
+  // gets its label), then the address as written, then the delivery note, one per line. Any other shop
+  // has the single address field, so it all goes into the text.
+  const ADDRESS_PARTS = ['block', 'road', 'building', 'flat'];
+  const LEADING_DIGIT = /^[0-9٠-٩۰-۹]/;
+  const piece = v => (typeof v === 'string' ? v.trim() : typeof v === 'number' && isFinite(v) ? String(v) : '');
+  const sameName = (a, b) => a.toLowerCase().replace(/\s+/g, ' ') === b.toLowerCase().replace(/\s+/g, ' ');
+  function deliveryAddress(address, note, place) {
+    const p = place || {}, labels = isObj(p.labels) ? p.labels : {}, sep = p.sep || ', ';
+    const a = isObj(address) ? address : { text: address };
+    const code = name => (name && p.bahrain && typeof p.areaCode === 'function' ? piece(p.areaCode(name)) : '');
+    const areaName = piece(a.area), city = piece(a.city);
+    const areaCode = code(areaName), cityCode = areaCode ? '' : code(city);
+    const parts = [];
+    if (areaName && !areaCode) parts.push(areaName);
+    if (city && !cityCode && !(areaName && sameName(city, areaName))) parts.push(city);
+    ADDRESS_PARTS.forEach(k => {
+      const v = piece(a[k]);
+      if (v) parts.push(LEADING_DIGIT.test(v) && piece(labels[k]) ? `${piece(labels[k])} ${v}` : v);
+    });
+    const line = parts.join(sep), text = piece(a.text), extra = piece(note);
+    const lines = [line, text === line ? '' : text, extra].filter(Boolean);
+    return { area: areaCode || cityCode, address: lines.join('\n').slice(0, 500) };
+  }
+
+  // ---------- Default delivery fee ----------
+
+  // The shop's `setting/deliveryDefaults` value { feeMinor } → the fee in minor units; 0 when there is
+  // none, or it is not a whole number of minor units >= 0.
+  function deliveryFeeMinor(value) {
+    const n = isObj(value) ? value.feeMinor : undefined;
+    return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : 0;
+  }
+  // An order form's delivery fee when its pickup or delivery changes (the switch, the AI, a shop-link
+  // order): { fee as typed, touched (the seller typed in it), auto (it holds the default) } → the new
+  // { fee, auto }. Turning into a delivery with the fee still empty or 0 and untouched puts the shop's
+  // default in (still editable); back to pickup takes an auto-filled fee out. A typed fee never changes.
+  function feeForFulfillment(state, fulfillment, defaultFee) {
+    const s = state || {}, fee = s.fee == null ? '' : String(s.fee);
+    if (fulfillment === 'delivery') {
+      if (!s.touched && !(parseFloat(fee) > 0) && defaultFee > 0) return { fee: String(defaultFee), auto: true };
+      return { fee, auto: !!s.auto && !s.touched };
+    }
+    return s.auto && !s.touched ? { fee: '', auto: false } : { fee, auto: false };
   }
 
   // ---------- Ask Orderat snapshot (AskSnapshot.swift) ----------
@@ -421,6 +515,7 @@
   return {
     subscriptionAllowed, subscriptionActive, aiDemo, callingCode, localDigits, normalizePhone, access, formatInvoice, nextInvoice, invoiceLabel,
     vatMinor, defaultRateBps, applyVat, orderMinor, stockForStatus, stockForEdit, orderNumbers, historyLabel,
-    cleanItems, parseProducts, draftFields, buildAskSnapshot, canMoveOrderStock, flushBeforeLeaving, createPermissionEditor,
+    cleanItems, parseProducts, answerDraft, draftFields, deliveryAddress, buildAskSnapshot, canMoveOrderStock, flushBeforeLeaving,
+    createPermissionEditor, deliveryFeeMinor, feeForFulfillment, isOutForDelivery, nextStep,
   };
 });

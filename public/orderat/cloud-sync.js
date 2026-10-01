@@ -12,10 +12,12 @@
 // (called without a state, they use the last one handed over, else the last one built).
 // Edit web objects in place (or replace a list); an object replaced by a copy has no origin and is judged
 // against the latest record. A state is
-//   { shop, vat, stockEnabled, products, customers, orders, expenses, occasions, waTemplates, subscription }
+//   { shop, vat, stockEnabled, products, customers, orders, expenses, occasions, waTemplates,
+//     deliveryDefaults, subscription }
 // with deleted records left out; subscription is the `setting/subscription` record's value (or null) and
-// is never written, like every setting other than whatsappTemplates (waTemplates) and every entity the
-// web does not show (stock_move). The web never deletes the shop or a setting.
+// is never written, like every setting other than whatsappTemplates (waTemplates) and deliveryDefaults
+// (its value { feeMinor }, the shop's default delivery fee) and every entity the web does not show
+// (stock_move). Any other setting id is left alone. The web never deletes the shop or a setting.
 //
 // How edits reach the server:
 // - Each web object remembers the cloud data (and seq) it was built from. A commit hands the live object
@@ -60,8 +62,8 @@
   const KEEP_BUILDS = 20;
   // The web state's list for each listed entity.
   const LISTS = { customer: 'customers', product: 'products', occasion: 'occasions', order: 'orders', expense: 'expenses' };
-  // The settings the web edits, by setting id.
-  const WEB_SETTINGS = { whatsappTemplates: 'waTemplates' };
+  // The settings the web edits, by setting id → their key in the web state.
+  const WEB_SETTINGS = { whatsappTemplates: 'waTemplates', deliveryDefaults: 'deliveryDefaults' };
   // A 403 on the whole sync call: this account is not a member of the shop any more.
   const FAILURE_NOTICES = { forbidden: 'no_access' };
 
@@ -149,7 +151,7 @@
     function buildState() {
       const ctx = makeCtx();
       const gen = ++lastBuild;
-      const state = { shop: null, vat: null, stockEnabled: false, products: [], customers: [], orders: [], expenses: [], occasions: [], waTemplates: null, subscription: null };
+      const state = { shop: null, vat: null, stockEnabled: false, products: [], customers: [], orders: [], expenses: [], occasions: [], waTemplates: null, deliveryDefaults: null, subscription: null };
       const keys = {};
       Object.keys(LISTS).forEach(entity => { keys[entity] = new Set(); });
       // The server's records in the order they first came, then records only the web has so far.

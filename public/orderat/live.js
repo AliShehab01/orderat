@@ -78,7 +78,7 @@ const Live = (() => {
       shopLink: { slug: '', bio: '', leadDays: 1, delivery: 'both', acceptsWebOrders: true, showAll: true, published: false },
       shop: { nameAr: '', nameEn: '', phone: '', currency: 'BHD', pickupHours: '', dailyCapacity: null, businessType: 'home' },
       vat: { enabled: false, trn: '', pricesInclude: true, rateBps: null }, stockEnabled: false,
-      products: [], customers: [], orders: [], expenses: [], occasions: [], waTemplates: null, subscription: null,
+      products: [], customers: [], orders: [], expenses: [], occasions: [], waTemplates: null, deliveryDefaults: null, subscription: null,
     };
   }
 
@@ -590,15 +590,20 @@ const Live = (() => {
       .then(b => api().parse(Object.assign({ products, addressAs: S.addressAs, demo: aiDemo() }, b)))
       .then(answer => {
         if (!D) return;
-        const f = core().draftFields(answer.draft, S.products);
+        const f = core().draftFields(core().answerDraft(answer), S.products, addressPlace());
         if (f.items.length) D.items = f.items;
+        const c = f.name ? S.customers.find(x => x.name === f.name || x.nameEn === f.name) : null;
         if (f.name) {
           D.name = f.name;
-          const c = S.customers.find(x => x.name === f.name || x.nameEn === f.name);
           if (c && c.phone) D.phone = c.phone;
         }
         if (f.due) D.due = f.due;
         if (f.notes) D.notes = f.notes;
+        // Pickup or delivery and the address the AI found go into the delivery fields, never the notes.
+        if (f.fulfillment) setDraftFulfillment(f.fulfillment);
+        if (f.area) D.area = f.area;
+        else if (D.fulfillment === 'delivery' && !D.area && c && c.area && bahrain()) D.area = c.area;
+        if (f.address) D.address = f.address;
         D.note = f.items.length ? t('neworder.aiRead') : t('neworder.noMatch');
       })
       .catch(error => { if (D) D.note = aiError(error); })

@@ -18,8 +18,7 @@ const PRICE = { monthly: 9.99, yearly: 79.99 };
 const CURRENCIES = { BHD: [3, 'BH'], SAR: [2, 'SA'], AED: [2, 'AE'], OMR: [3, 'OM'], KWD: [3, 'KW'], QAR: [2, 'QA'] };
 const VAT_RATES = { BH: 10, SA: 15, AE: 5, OM: 5, KW: 0, QA: 0 };
 const STATUSES = ['new', 'confirmed', 'ready', 'collected', 'cancelled'];
-const NEXT = { new: 'confirmed', confirmed: 'ready', ready: 'collected' };
-const NEXT_LABEL = { new: 'orders.confirm', confirmed: 'orders.markReady', ready: 'orders.markCollected' };
+const NEXT_LABEL = { confirmed: 'orders.confirm', ready: 'orders.markReady', out: 'orders.markOutForDelivery', collected: 'orders.markCollected' };
 const STATUS_TONE = { new: 'neutral', confirmed: 'brand', ready: 'warn', collected: 'ok', cancelled: 'bad' };
 const PAY_TONE = { unpaid: 'bad', deposit: 'warn', paid: 'ok' };
 const METHODS = ['benefit', 'cash', 'transfer', 'card'];
@@ -29,6 +28,8 @@ const OCCASION_KINDS = ['ramadan', 'eidAlFitr', 'eidAlAdha', 'bahrainNationalDay
 const BUSINESS_TYPES = ['home', 'shop', 'services', 'food', 'foodTruck', 'other'];
 const TYPE_ICONS = { home: 'home', shop: 'shop', services: 'scissors', food: 'cup', foodTruck: 'truck', other: 'dots' };
 const WA_TEMPLATES = ['confirmOrder', 'orderReady', 'pickupReminder', 'paymentReminder', 'thankYou'];
+// A delivery order's messages: "out for delivery" in place of the pickup ones.
+const WA_DELIVERY_TEMPLATES = ['confirmOrder', 'outForDelivery', 'paymentReminder', 'thankYou'];
 const RANGES = { week: 7, month: 30, threeMonths: 90, year: 365, all: 0 };
 const TABS = ['today', 'orders', 'new', 'money', 'shop'];
 const TAKEN_SLUGS = ['sweetstudio', 'demo', 'orderat', 'shop', 'test'];
@@ -146,6 +147,8 @@ const hash = s => [...String(s || '')].reduce((a, c) => (a * 31 + c.charCodeAt(0
 const locale = () => (S.lang === 'en' ? 'en-US' : 'ar-BH-u-nu-latn');
 const currency = () => CURRENCIES[S.shop.currency] || CURRENCIES.BHD;
 const country = () => currency()[1];
+// Bahrain's areas are a list to pick from; any other shop writes its delivery address as one line.
+const bahrain = () => country() === 'BH';
 const vatRate = () => (Live.on && typeof S.vat.rateBps === 'number' ? S.vat.rateBps / 100 : VAT_RATES[country()] || 0);
 const vatOn = () => S.vat.enabled && vatRate() > 0;
 // Wrapped in a left-to-right isolate so Arabic text shows "248.500 BHD", as the apps do, not "BHD 248.500".
@@ -182,6 +185,11 @@ const costOf = o => sum(o.items, it => it.qty * (it.cost || 0));
 const itemsLine = o => o.items.map(it => `${it.qty}× ${pick(it.nameAr, it.nameEn)}`).join(S.lang === 'en' ? ', ' : '، ');
 // A delivery order's address: the phones' block, road and building (read-only), then the free text.
 const addressText = o => [o.addressLine, o.address].map(v => String(v || '').trim()).filter(Boolean).join(', ');
+// How this shop writes an address, for the AI's (and the demo reader's) address parts (live-core).
+const addressPlace = () => ({
+  bahrain: bahrain(), areaCode: areaCodeOf, sep: S.lang === 'en' ? ', ' : '، ',
+  labels: { block: t('address.block'), road: t('address.road'), building: t('address.building'), flat: t('address.flat') },
+});
 const invoiceNo = o => (Live.on ? Live.invoiceNo(o) : `INV-${new Date(o.dueAt).getFullYear()}-${String(o.no || 0).padStart(4, '0')}`);
 // The VAT an order shows: its own snapshot in the live shop (like the phones), the shop setting in the demo.
 const orderVatRate = o => (Live.on ? Live.vatOf(o) : vatOn() ? vatRate() : 0);
@@ -226,9 +234,15 @@ function periodStats(a, b) {
 
 const badge = (tone, label) => `<span class="badge ${esc(tone || '')}">${esc(label)}</span>`;
 const statusBadge = s => badge(STATUS_TONE[s], t('order.status.' + s));
-// A delivery order ends as Delivered, not Collected (labels only: the status is shared with the phones).
-const orderBadge = o => (o.status === 'collected' && o.fulfillment === 'delivery' ? badge(STATUS_TONE.collected, t('status.delivered')) : statusBadge(o.status));
-const nextLabel = o => t(o.status === 'ready' && o.fulfillment === 'delivery' ? 'status.outForDelivery' : NEXT_LABEL[o.status]);
+// A delivery order goes Ready → Out for delivery → Delivered: out for delivery is a ready order with
+// outForDeliveryAt set (the status stays ready for the phones), and Delivered is collected (labels only).
+const isOut = o => OrderatLiveCore.isOutForDelivery(o);
+const orderBadge = o => (isOut(o) ? badge('out', t('status.outForDelivery'))
+  : o.status === 'collected' && o.fulfillment === 'delivery' ? badge(STATUS_TONE.collected, t('status.delivered')) : statusBadge(o.status));
+// Staff who may only change the status skip the out-for-delivery step: the server keeps nothing but the
+// status of their order pushes (server/sync/record-access.ts).
+const nextStep = o => OrderatLiveCore.nextStep(o, { out: can('orders') });
+const nextLabel = o => { const s = nextStep(o); return t(s === 'collected' && o.fulfillment === 'delivery' ? 'orders.markDelivered' : NEXT_LABEL[s]); };
 const payBadge = s => badge(PAY_TONE[s], t('payment.status.' + s));
 const sourceTag = s => `<span class="src src-${esc(s)}" title="${esc(t('source.' + s))}">${icon(s)}</span>`;
 const empty = msg => `<p class="empty">${esc(msg)}</p>`;
@@ -509,7 +523,7 @@ function webOrdersCard() {
   const rows = S.webOrders.map(w => {
     const d = new Date(w.dueAt);
     const items = w.items.map(it => { const p = productOf(it.pid); return p ? `${it.qty}× ${pName(p)}` : ''; }).filter(Boolean).join(S.lang === 'en' ? ', ' : '، ');
-    return `<div class="row web-order"><span class="row-main"><b>${esc(pick(w.name, w.nameEn))}</b><small>${esc(items)} · ${esc(fmtShort(d))} ${esc(fmtTime(d))}</small></span><span class="row-actions"><button class="btn primary small" data-act="web-add" data-id="${esc(w.id)}">${esc(t('today.webOrderAdd'))}</button><button class="btn ghost small" data-act="web-dismiss" data-id="${esc(w.id)}">${esc(t('today.webOrderDismiss'))}</button></span></div>`;
+    return `<div class="row web-order"><span class="row-main"><b>${esc(pick(w.name, w.nameEn))}</b><small>${esc(items)} · ${esc(fmtShort(d))} ${esc(fmtTime(d))}${w.fulfillment === 'delivery' ? ' · ' + esc(t('fulfillment.delivery')) : ''}</small></span><span class="row-actions"><button class="btn primary small" data-act="web-add" data-id="${esc(w.id)}">${esc(t('today.webOrderAdd'))}</button><button class="btn ghost small" data-act="web-dismiss" data-id="${esc(w.id)}">${esc(t('today.webOrderDismiss'))}</button></span></div>`;
   }).join('');
   return `<section class="card"><h3 class="card-title">${icon('link')} ${esc(t('today.webOrders'))}</h3>${rows}</section>`;
 }
@@ -586,10 +600,11 @@ function ordersListHtml() {
   return groups.map(g => `<h3 class="group-title${g.k === 'overdue' ? ' bad-text' : ''}">${esc(title(g.k))}</h3><div class="card list">${g.list.map(o => orderRow(o, g.k === 'overdue')).join('')}</div>`).join('');
 }
 
-// The demo's entries and the phones' (read from the cloud: a payment-status change has no amount).
-function historyLabel(ch) {
+// The demo's entries and the phones' (read from the cloud: a payment-status change has no amount). A
+// delivery order's collected reads Delivered, as on its badge.
+function historyLabel(ch, o) {
   const h = OrderatLiveCore.historyLabel(ch);
-  if (h.status) return `${t('history.status')}: ${t('order.status.' + h.status)}`;
+  if (h.status) return `${t('history.status')}: ${h.status === 'collected' && o?.fulfillment === 'delivery' ? t('status.delivered') : t('order.status.' + h.status)}`;
   if (h.key === 'history.payment') return `${t('history.payment')}: ${money(h.amount)}`;
   if (h.payment) return t(h.key, t('payment.status.' + h.payment));
   return t(h.key);
@@ -599,6 +614,7 @@ function waMessage(kind, o) {
   if (kind === 'confirmOrder') return t('whatsapp.message.confirmOrder', name, shop, itemsLine(o), `${fmtDay(d)} ${fmtTime(d)}`);
   if (kind === 'orderReady') return t('whatsapp.message.orderReady', name, shop, itemsLine(o));
   if (kind === 'pickupReminder') return t('whatsapp.message.pickupReminder', name, shop, fmtTime(d));
+  if (kind === 'outForDelivery') return t('whatsapp.message.outForDelivery', name, shop);
   if (kind === 'paymentReminder') return t('whatsapp.message.paymentReminder', name, shop, money(totals(o).due));
   return t('whatsapp.message.thankYou', name, shop);
 }
@@ -619,20 +635,23 @@ function viewOrder(id) {
     (o.payments || []).map(p => `<div class="line small pay-row"><span>${esc(money(p.amount))} · ${esc(t('payment.method.' + p.method))}${p.at ? ` · ${esc(fmtShort(new Date(p.at)))}` : ''}${p.note ? ` · ${esc(p.note)}` : ''}</span>${can('orders') ? `<button class="icon-btn" data-act="delete-payment" data-id="${esc(o.id)}" data-pay="${esc(p.id || '')}" data-at="${esc(p.at || '')}" aria-label="${esc(t('pay.delete'))}" title="${esc(t('pay.delete'))}">${icon('trash')}</button>` : ''}</div>`).join(''),
     T.due > 0 && o.status !== 'cancelled' && can('orders') ? `<div class="line"><span class="muted">${esc(t('orders.remaining'))} ${esc(money(T.due))}</span></div><div class="btn-row"><button class="btn ghost" data-act="pay" data-id="${esc(o.id)}">${esc(t('recordPayment'))}</button><button class="btn primary" data-act="pay-full" data-id="${esc(o.id)}">${esc(t('pay.paidInFull'))}</button></div>` : '',
   ].join('');
+  // Out for delivery offers its message first.
+  const templates = o.fulfillment !== 'delivery' ? WA_TEMPLATES
+    : isOut(o) ? ['outForDelivery', ...WA_DELIVERY_TEMPLATES.filter(k => k !== 'outForDelivery')] : WA_DELIVERY_TEMPLATES;
   const wa = c?.phone
-    ? `<div class="chips wrap">${WA_TEMPLATES.map(k => `<a class="chip" href="${esc(waLink(c.phone, waMessage(k, o)))}" target="_blank" rel="noopener">${icon('whatsapp')} ${esc(t('whatsapp.template.' + k))}</a>`).join('')}</div>`
+    ? `<div class="chips wrap">${templates.map(k => `<a class="chip${k === 'outForDelivery' && isOut(o) ? ' on' : ''}" href="${esc(waLink(c.phone, waMessage(k, o)))}" target="_blank" rel="noopener">${icon('whatsapp')} ${esc(t('whatsapp.template.' + k))}</a>`).join('')}</div>`
     : `<p class="muted small">${esc(t('orders.noPhone'))}</p>`;
-  const history = o.changes.slice().reverse().map(ch => { const at = new Date(ch.at); return line(historyLabel(ch), `${fmtShort(at)} ${fmtTime(at)}`, 'small'); }).join('');
+  const history = o.changes.slice().reverse().map(ch => { const at = new Date(ch.at); return line(historyLabel(ch, o), `${fmtShort(at)} ${fmtTime(at)}`, 'small'); }).join('');
   const body = `<div class="stack">
     <section class="card od-head${canEditOrder(o) ? ' tappable" data-act="edit-order" data-id="' + esc(o.id) + '" role="button" tabindex="0' : ''}">
       <div class="split"><h2>${esc(fmtDay(d))} · ${esc(fmtTime(d))}</h2>${orderBadge(o)}</div>
       <p class="od-meta">${sourceTag(o.source)}<b>${esc(cName(c))}</b>${c?.phone ? `<a dir="ltr" href="tel:${esc(normPhone(c.phone))}">${esc(c.phone)}</a>` : ''}</p>
       <p class="od-meta muted">${icon(o.fulfillment === 'delivery' ? 'truck' : 'bag')}<span>${esc(t('fulfillment.' + o.fulfillment))}${o.area ? ' · ' + esc(t('area.' + o.area)) : ''} · ${esc(t('orders.via', t('source.' + o.source)))}</span></p>
-      ${o.fulfillment === 'delivery' && addressText(o) ? `<div class="od-address"><p><span class="muted small">${esc(t('order.address'))}</span><br>${esc(addressText(o))}</p><div class="chips wrap"><button class="chip small" data-act="copy" data-text="${esc(addressText(o))}">${icon('copy')} ${esc(t('order.copyAddress'))}</button><a class="chip small" href="${esc('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent([addressText(o), o.area ? t('area.' + o.area) : ''].filter(Boolean).join(', ')))}" target="_blank" rel="noopener">${icon('external')} ${esc(t('order.openMaps'))}</a></div></div>` : ''}
+      ${o.fulfillment === 'delivery' && addressText(o) ? `<div class="od-address"><p><span class="muted small">${esc(t('order.address'))}</span><br>${esc(addressText(o))}</p><div class="chips wrap"><button class="chip small" data-act="copy" data-text="${esc(addressText(o))}">${icon('copy')} ${esc(t('order.copyAddress'))}</button><a class="chip small" href="${esc('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent([addressText(o).replace(/\s*\n+\s*/g, ', '), o.area ? t('area.' + o.area) : ''].filter(Boolean).join(', ')))}" target="_blank" rel="noopener">${icon('external')} ${esc(t('order.openMaps'))}</a></div></div>` : ''}
       ${o.notes ? `<p class="od-notes">${esc(o.notes)}</p>` : ''}
     </section>
     <section class="card lines">${lines}</section>
-    ${open && can('status') ? `<div class="btn-col">${NEXT[o.status] ? `<button class="btn primary block big" data-act="advance" data-id="${esc(o.id)}">${esc(nextLabel(o))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${esc(o.id)}">${esc(t('orders.cancel'))}</button></div>` : ''}
+    ${open && can('status') ? `<div class="btn-col">${nextStep(o) ? `<button class="btn primary block big" data-act="advance" data-id="${esc(o.id)}">${esc(nextLabel(o))}</button>` : ''}<button class="btn danger-soft block" data-act="cancel-order" data-id="${esc(o.id)}">${esc(t('orders.cancel'))}</button></div>` : ''}
     ${o.status === 'cancelled' && can('status') ? `<button class="btn ghost block" data-act="reopen-order" data-id="${esc(o.id)}">${esc(t('orders.reopen'))}</button>` : ''}
     <section class="card"><h3 class="card-title">${icon('whatsapp')} ${esc(t('orders.sendWhatsApp'))}</h3>${wa}</section>
     <a class="card row" href="#/shop/receipts/${esc(o.id)}"><span class="row-ic">${icon('receipt')}</span><span class="row-main"><b>${esc(t('shop.receipt'))}</b><small><bdi dir="ltr">${esc(invoiceNo(o))}</bdi></small></span>${icon('chev', 'chev')}</a>
@@ -644,15 +663,17 @@ function viewOrder(id) {
 }
 
 const canEditOrder = o => o.status !== 'cancelled' && can('orders');
+// An address the AI wrote over several lines shows them all.
+const addressRows = v => Math.min(4, Math.max(2, String(v || '').split('\n').length));
 // The order's time, pickup or delivery, area, fee, address and notes (the items have their own editor).
 function openEditOrder(o) {
   const delivery = o.fulfillment === 'delivery';
   openModal(t('order.edit'), `<form data-form="edit-order" data-id="${esc(o.id)}" class="stack">
-    ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" value="${esc(inputDateTime(new Date(o.dueAt)))}" required>`)}
+    ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" enterkeyhint="next" value="${esc(inputDateTime(new Date(o.dueAt)))}" required>`)}
     <div class="field"><span>${esc(t('neworder.fulfillment'))}</span>${seg('fulfillment', ['pickup', 'delivery'], o.fulfillment, k => t('fulfillment.' + k), 'edit-order-fulfillment')}</div>
     <div class="stack-sm" id="eo-delivery"${delivery ? '' : ' hidden'}>
-      <div class="grid2">${field(t('shop.area'), `<select name="area"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, o.area, a => t('area.' + a))}</select>`)}${field(t('orders.deliveryFee'), `<input name="fee" type="number" step="any" min="0" inputmode="decimal" value="${esc(o.deliveryFee || 0)}">`)}</div>
-      ${field(t('order.address'), `<textarea name="address" rows="2" maxlength="200">${esc(o.address || '')}</textarea>`)}
+      <div class="grid2">${bahrain() ? field(t('shop.area'), `<select name="area"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, o.area, a => t('area.' + a))}</select>`) : ''}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" value="${esc(o.deliveryFee || 0)}" data-live="edit-order-fee"${delivery ? ' data-touched="1"' : ''}>`)}</div>
+      ${field(t('order.address'), `<textarea name="address" rows="${addressRows(o.address)}" maxlength="200">${esc(o.address || '')}</textarea>`)}
     </div>
     ${field(t('neworder.notesTitle'), `<textarea name="notes" rows="2">${esc(o.notes || '')}</textarea>`)}
     <div class="btn-row"><button type="button" class="btn ghost" data-act="edit-items" data-id="${esc(o.id)}">${icon('edit')} ${esc(t('orders.editItems'))}</button><button class="btn primary grow">${esc(t('common.save'))}</button></div>
@@ -669,7 +690,17 @@ function setStatus(o, status) {
   else if (S.stockEnabled && status === 'confirmed' && !o.stockApplied) { applyStock(o, -1); o.stockApplied = true; }
   if ((status === 'cancelled' || status === 'new') && o.stockApplied) { applyStock(o, 1); o.stockApplied = false; }
   o.status = status;
+  // Out for delivery belongs to Ready: delivered (collected), cancelled or any other status clears it.
+  if (status !== 'ready' && o.outForDeliveryAt) o.outForDeliveryAt = null;
   o.changes.push({ kind: 'status', value: status, at: new Date().toISOString() });
+  save();
+}
+// Out for delivery: the order stays ready (older apps simply see Ready) with outForDeliveryAt set, and
+// the step goes into its history (field outForDelivery); back to Ready clears it.
+function setOutForDelivery(o, on) {
+  const at = new Date().toISOString();
+  o.outForDeliveryAt = on ? at : null;
+  o.changes.push({ kind: 'outForDelivery', value: on ? at : null, at });
   save();
 }
 
@@ -784,8 +815,9 @@ function newDraft() {
   try { source = localStorage.getItem(LAST_SOURCE_KEY); } catch { source = null; }
   if (!['whatsapp', 'instagram', 'manual'].includes(source)) source = now ? 'manual' : 'whatsapp';
   return {
-    text: '', name: '', phone: '', source, items: [], due: inputDateTime(now ? new Date() : due), when: now ? 'now' : '', fulfillment: 'pickup', area: '', address: '', fee: '1',
-    deposit: '', paidFull: now, method: now ? 'cash' : 'benefit', notes: '', note: '', reading: false,
+    text: '', name: '', phone: '', source, items: [], due: inputDateTime(now ? new Date() : due), when: now ? 'now' : '', fulfillment: 'pickup', area: '', address: '', fee: '', feeAuto: false, feeTouched: false,
+    // Pays on pickup/delivery (unpaid) unless the business sells on the spot; a deposit only when asked for.
+    pay: now ? 'full' : 'later', depositOpen: false, deposit: '', method: now ? 'cash' : 'benefit', notes: '', note: '', reading: false,
   };
 }
 // The one shared "Walk-in" customer of paid-in-full orders without a name, found by name, made once.
@@ -796,6 +828,17 @@ function walkIn() {
   return c;
 }
 const draftEmpty = () => !D.items.some(it => qtyNum(it.qty) > 0);
+// The shop's default delivery fee in major units (setting/deliveryDefaults, synced with the phones).
+// A demo saved before the setting existed keeps the 1.000 New order always filled in.
+const defaultFee = () => (S.deliveryDefaults === undefined ? 1 : OrderatCloudMap.fromMinor(OrderatLiveCore.deliveryFeeMinor(S.deliveryDefaults), currency()[0]));
+// New order's pickup or delivery, from the switch, the AI or the demo reader: a delivery whose fee is
+// still empty and untouched gets the default fee; back to pickup takes an auto-filled fee out.
+function setDraftFulfillment(value) {
+  D.fulfillment = value === 'delivery' ? 'delivery' : 'pickup';
+  const next = OrderatLiveCore.feeForFulfillment({ fee: D.fee, touched: D.feeTouched, auto: D.feeAuto }, D.fulfillment, defaultFee());
+  D.fee = next.fee;
+  D.feeAuto = next.auto;
+}
 const draftTotal = () => totals({ items: D.items.map(it => ({ qty: qtyNum(it.qty), price: parseFloat(it.price) || 0 })), deliveryFee: D.fulfillment === 'delivery' ? parseFloat(D.fee) || 0 : 0 }).total;
 
 function examples() {
@@ -806,11 +849,11 @@ function examples() {
   return S.lang === 'en'
     ? [
       { label: 'Sara', text: `Hi, this is Sara Abdulla 🌸 Can I get 2 ${alias(a, true)} and 1 ${alias(b, true)} for tomorrow at 5? I'll pick up` },
-      { label: 'Noora', text: `Hello! 3 ${alias(c, true)} please, delivery to Riffa on Thursday at 7pm. Noora Ahmed 33001002` },
+      { label: 'Noora', text: `Hello! 3 ${alias(c, true)} please, delivery on Thursday at 7pm to Riffa, block 935, road 3510, house 12. Noora Ahmed 33001002` },
     ]
     : [
       { label: 'سارة', text: `السلام عليكم، معك سارة عبدالله 🌸 أبي 2 ${alias(a, false)} و${alias(b, false)} وحدة، بكرة الساعة 5 استلام` },
-      { label: 'نورة', text: `مرحبا، أبغى 3 ${alias(c, false)} توصيل للرفاع يوم الخميس الساعة 7 المغرب. نورة أحمد 33001002` },
+      { label: 'نورة', text: `مرحبا، أبغى 3 ${alias(c, false)} توصيل يوم الخميس الساعة 7 المغرب للرفاع، مجمع 935 طريق 3510 منزل 12. نورة أحمد 33001002` },
     ];
 }
 
@@ -831,7 +874,7 @@ function viewNew() {
   <form data-form="new-order" class="stack" novalidate>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.customerTitle'))}</h3>
       <div class="grid2">
-        ${errField(t('neworder.customerName'), `<input name="name" data-live="draft" enterkeyhint="next" value="${esc(D.name)}" list="customer-names" autocomplete="off"${D.paidFull ? ` placeholder="${esc(t('customers.walkIn'))}"` : ''}${D.errors?.name ? ' aria-invalid="true"' : ''}>`, D.errors?.name)}
+        ${errField(t('neworder.customerName'), `<input name="name" data-live="draft" enterkeyhint="next" value="${esc(D.name)}" list="customer-names" autocomplete="off"${D.pay === 'full' ? ` placeholder="${esc(t('customers.walkIn'))}"` : ''}${D.errors?.name ? ' aria-invalid="true"' : ''}>`, D.errors?.name)}
         ${field(t('neworder.customerPhone'), `<input name="phone" data-live="draft" enterkeyhint="next" value="${esc(D.phone)}" dir="ltr" inputmode="tel" autocomplete="off">`)}
       </div>
       <datalist id="customer-names">${S.customers.map(c => `<option value="${esc(cName(c))}">`).join('')}</datalist>
@@ -847,15 +890,9 @@ function viewNew() {
       ${D.when === 'today' || D.when === 'tomorrow' ? `<div class="chips wrap">${QUICK_TIMES.map(h => `<button type="button" class="chip small${D.due.slice(11) === h ? ' on' : ''}" data-act="due-time" data-v="${h}" dir="ltr">${esc(fmtTime(new Date(`2000-01-01T${h}`)))}</button>`).join('')}</div>` : ''}
       ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" enterkeyhint="next" data-live="draft" value="${esc(D.due)}">`)}
       <div class="field"><span>${esc(t('neworder.fulfillment'))}</span>${seg('fulfillment', ['pickup', 'delivery'], D.fulfillment, k => t('fulfillment.' + k), 'draft')}</div>
-      ${D.fulfillment === 'delivery' ? `<div class="grid2">${field(t('shop.area'), `<select name="area" data-live="draft"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, D.area, a => t('area.' + a))}</select>`)}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.fee)}">`)}</div>${field(t('order.address'), `<textarea name="address" rows="2" maxlength="200" data-live="draft" autocomplete="street-address">${esc(D.address || '')}</textarea>`)}` : ''}
+      ${D.fulfillment === 'delivery' ? `<div class="grid2">${bahrain() ? field(t('shop.area'), `<select name="area" data-live="draft"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, D.area, a => t('area.' + a))}</select>`) : ''}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.fee)}" placeholder="0">${D.feeAuto ? `<small class="muted small" id="d-fee-hint">${esc(t('neworder.feeDefault'))}</small>` : ''}`)}</div>${field(t('order.address'), `<textarea name="address" rows="${addressRows(D.address)}" maxlength="200" data-live="draft" autocomplete="street-address">${esc(D.address || '')}</textarea>`)}` : ''}
     </section>
-    <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.paymentTitle'))}</h3>
-      ${toggle('paidFull', t('neworder.paidInFull'), D.paidFull, 'draft-paid')}
-      <div class="grid2">
-        ${D.paidFull ? '' : field(t('neworder.depositOptional'), `<input name="deposit" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.deposit)}">`)}
-        ${field(t('payment.method'), `<select name="method" data-live="draft">${options(METHODS, D.method, m => t('payment.method.' + m))}</select>`)}
-      </div>
-    </section>
+    <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.paymentTitle'))}</h3>${paymentChoice()}</section>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.notesTitle'))}</h3><textarea name="notes" rows="2" data-live="draft" aria-label="${esc(t('neworder.notesTitle'))}">${esc(D.notes)}</textarea></section>
     <div class="save-bar"><span>${esc(t('orders.total'))} <b id="d-total">${esc(money(draftTotal()))}</b></span><button class="btn primary big" id="d-save"${draftEmpty() ? ' disabled' : ''}>${esc(t('neworder.save'))}</button></div>
   </form></div>`;
@@ -863,9 +900,22 @@ function viewNew() {
   return { title: t('tab.new'), back: 'today', actions, body };
 }
 
+// New order's payment: pays on pickup/delivery (unpaid, the default) or paid in full, and under the first
+// a small "Partial payment (deposit)" that opens the amount. The order is saved as before: no payment,
+// one payment of the total, or one of the deposit.
+function paymentChoice() {
+  const later = t(D.fulfillment === 'delivery' ? 'pay.onDelivery' : 'pay.onPickup');
+  const method = field(t('payment.method'), `<select name="method" data-live="draft">${options(METHODS, D.method, m => t('payment.method.' + m))}</select>`);
+  const choice = `<div>${seg('pay', ['later', 'full'], D.pay, k => (k === 'full' ? t('neworder.paidInFull') : later), 'draft-pay')}</div>`;
+  if (D.pay === 'full') return `${choice}<div class="grid2">${method}</div>`;
+  if (!D.depositOpen) return `${choice}<button type="button" class="link-btn pay-more" data-act="pay-deposit" data-v="1">${icon('plus')} ${esc(t('pay.partial'))}</button>`;
+  return `${choice}<div class="grid2">${field(t('pay.depositAmount'), `<input name="deposit" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.deposit)}">`)}${method}</div>
+    <button type="button" class="link-btn pay-more" data-act="pay-deposit" data-v="0">${icon('x')} ${esc(t('pay.noDeposit'))}</button>`;
+}
+
 // A small on-device reader standing in for the apps' AI order entry (orderat-parse): matches menu
-// items and their aliases, quantities, the day and time, a known customer or phone, and pickup or
-// delivery. The screen labels its result as a demo.
+// items and their aliases, quantities, the day and time, a known customer or phone, pickup or
+// delivery, and a Bahrain address's block, road, building and flat. The screen labels its result as a demo.
 const NUM_WORDS = { 'واحد': 1, 'واحده': 1, 'وحده': 1, 'حبه': 1, 'اثنين': 2, 'ثنين': 2, 'ثنتين': 2, 'اثنتين': 2, 'ثلاث': 3, 'ثلاثه': 3, 'اربع': 4, 'اربعه': 4, 'خمس': 5, 'خمسه': 5, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'a': 1, 'an': 1 };
 const WEEKDAYS = [['الاحد', 'sunday'], ['الاثنين', 'monday'], ['الثلاثا', 'tuesday'], ['الاربعا', 'wednesday'], ['الخميس', 'thursday'], ['الجمعه', 'friday'], ['السبت', 'saturday']];
 const AREA_WORDS = { manama: ['منامه', 'manama'], muharraq: ['محرق', 'muharraq'], riffa: ['رفاع', 'riffa'], hamadTown: ['مدينه حمد', 'hamad town'], isaTown: ['مدينه عيسي', 'isa town'], sitra: ['ستره', 'sitra'], budaiya: ['بديع', 'budaiya'], adliya: ['عدليه', 'adliya'], janabiya: ['جنبيه', 'janabiya'] };
@@ -874,6 +924,28 @@ const norm = s => String(s || '').toLowerCase()
   .replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه')
   .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
 const cleanWord = w => (w || '').replace(/[،,.!?؟]/g, '');
+// A place name as whole words, without "al-": " رفاع شرقي " for "الرفاع الشرقي".
+const placeKey = s => ` ${norm(s).replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(' ').map(w => w.replace(/^(?:ال|لل)(?=\S{2})/, '')).join(' ')} `;
+// A place the AI (or the demo reader) found → the Bahrain area the order form lists, or ''.
+function areaCodeOf(name) {
+  const s = placeKey(name);
+  if (!s.trim()) return '';
+  return AREAS.find(k => k !== 'other' && [...(AREA_WORDS[k] || []), ...(I18N['area.' + k] || [])].some(w => s.includes(placeKey(w)))) || '';
+}
+const ADDRESS_WORDS = {
+  block: 'مجمع|بلوك|block|blk', road: 'طريق|شارع|road|rd|street', flat: 'شقة|شقه|flat|apartment|apt',
+  building: 'مبنى|مبني|بيت|منزل|فيلا|عمارة|عماره|building|bldg|house|villa',
+};
+// The numbers after "block", "road", "building" and "flat" (or their Arabic words) in a message.
+function addressParts(raw) {
+  const s = String(raw || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+  const out = {};
+  Object.keys(ADDRESS_WORDS).forEach(k => {
+    const m = s.match(new RegExp(`(?:^|[^\\p{L}])(?:${ADDRESS_WORDS[k]})\\s*(?:رقم|no\\.?|#)?\\s*(\\d{1,5}[a-z]?)(?![\\d\\p{L}])`, 'iu'));
+    if (m) out[k] = m[1];
+  });
+  return out;
+}
 
 function qtyNear(s, i, len) {
   const before = s.slice(Math.max(0, i - 14), i), after = s.slice(i + len, i + len + 16);
@@ -924,7 +996,7 @@ function parseMessage(raw) {
     const w = WEEKDAYS.findIndex(names => names.some(n => s.includes(n)));
     if (w >= 0) day = ((w - now.getDay() + 7) % 7) || 7;
   }
-  const tm = s.match(/(?:الساعه|ساعه|at|@)\s*(\d{1,2})(?:[:.](\d{2}))?(?:\s*(am|pm|ص|م|صباحا|الصبح|الظهر|العصر|المغرب|مساء|بالليل|الليل)(?=$|[\s،,.!?؟]))?/)
+  const tm = s.match(/(?:الساعه|ساعه|\bat|@)\s*(\d{1,2})(?:[:.](\d{2}))?(?:\s*(am|pm|ص|م|صباحا|الصبح|الظهر|العصر|المغرب|مساء|بالليل|الليل)(?=$|[\s،,.!?؟]))?/)
     || s.match(/(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)(?=$|[\s،,.!?؟])/);
   let due = '';
   if (day !== null || tm) {
@@ -942,9 +1014,12 @@ function parseMessage(raw) {
     base.setHours(Math.min(h, 23), Math.min(mi, 59));
     due = inputDateTime(base);
   }
-  const fulfillment = /توصيل|deliver/.test(s) ? 'delivery' : /استلام|pick ?up|collect/.test(s) ? 'pickup' : '';
-  const area = Object.keys(AREA_WORDS).find(k => AREA_WORDS[k].some(w => s.includes(w))) || '';
-  return { items: items.map(({ pos, ...it }) => it), name, phone: customer?.phone || (ph ? '+' + cc + ph[1] : ''), due, fulfillment, area };
+  let fulfillment = /توصيل|deliver/.test(s) ? 'delivery' : /استلام|pick ?up|collect/.test(s) ? 'pickup' : '';
+  const area = bahrain() ? Object.keys(AREA_WORDS).find(k => AREA_WORDS[k].some(w => s.includes(w))) || '' : '';
+  const parts = addressParts(raw);
+  const address = Object.keys(parts).length ? OrderatLiveCore.deliveryAddress(parts, '', addressPlace()).address : '';
+  if (!fulfillment && address) fulfillment = 'delivery';
+  return { items: items.map(({ pos, ...it }) => it), name, phone: customer?.phone || (ph ? '+' + cc + ph[1] : ''), due, fulfillment, area, address };
 }
 
 function readDraft(source, note) {
@@ -954,7 +1029,8 @@ function readDraft(source, note) {
   setTimeout(() => {
     const r = parseMessage(source);
     if (r.items.length) D.items = r.items;
-    ['name', 'phone', 'due', 'fulfillment', 'area'].forEach(k => { if (r[k]) D[k] = r[k]; });
+    ['name', 'phone', 'due', 'area', 'address'].forEach(k => { if (r[k]) D[k] = r[k]; });
+    if (r.fulfillment) setDraftFulfillment(r.fulfillment);
     D.note = r.items.length ? note : t('neworder.noMatch');
     D.reading = false;
     if (route()[0] === 'new') render();
@@ -1401,6 +1477,14 @@ function viewReceipt(id) {
 
 // ---------- Settings and team ----------
 
+// The default delivery fee (setting/deliveryDefaults, synced with the phones), set by the owner and
+// filled into delivery orders on New order.
+function deliveryFeeSetting() {
+  if (!Live.access().owner) return '';
+  const shown = S.deliveryDefaults === null ? '' : String(round(defaultFee()));
+  return `<section class="card stack-sm">${field(`${t('settings.deliveryFee')} (${S.shop.currency})`, `<input type="number" step="any" min="0" inputmode="decimal" data-live="delivery-fee" value="${esc(shown)}" placeholder="0" dir="ltr">`)}<p class="muted small">${esc(t('settings.deliveryFeeFooter'))}</p></section>`;
+}
+
 function viewSettings() {
   if (Live.on) return viewLiveSettings();
   const C = S.cloud;
@@ -1426,6 +1510,7 @@ function viewSettings() {
       ${field(t('shop.currency'), `<select data-live="currency">${options(Object.keys(CURRENCIES), S.shop.currency, c => c)}</select>`)}
       ${field(t('settings.businessType'), `<select data-live="business-type">${options(BUSINESS_TYPES, S.shop.businessType, b => t('businessType.' + b))}</select>`)}
     </section>
+    ${deliveryFeeSetting()}
     <section class="card stack-sm"><h3 class="card-title">${esc(t('settings.vat'))}</h3>${vat}</section>
     <section class="card stack-sm">${toggle('stock', t('settings.trackStock'), S.stockEnabled, 'stock-enabled')}<p class="muted small">${esc(t('settings.trackStockFooter'))}</p>${toggle('ask', t('settings.askOrderat'), S.askEnabled, 'ask-enabled')}</section>
     <a class="card row" href="#/start"><span class="row-ic">${icon('users')}</span><span class="row-main"><b>${esc(t('live.logIn'))}</b><small>${esc(t('live.logInHint'))}</small></span>${icon('chev', 'chev')}</a>
@@ -1462,6 +1547,7 @@ function viewLiveSettings() {
       <div class="field"><span>${esc(t('shop.currency'))}</span><b class="static">${esc(S.shop.currency)}</b><small class="muted">${esc(t('live.currencyInApp'))}</small></div>
       ${field(t('settings.businessType'), `<select data-live="business-type">${options(BUSINESS_TYPES, S.shop.businessType, b => t('businessType.' + b))}</select>`)}
     </section>
+    ${deliveryFeeSetting()}
     <section class="card stack-sm"><h3 class="card-title">${esc(t('settings.vat'))}</h3>${vat}</section>
     <section class="card stack-sm">${toggle('stock', t('settings.trackStock'), S.stockEnabled, 'stock-enabled')}<p class="muted small">${esc(t('settings.trackStockFooter'))}</p>${can('money') ? toggle('ask', t('settings.askOrderat'), S.askEnabled, 'ask-enabled') : ''}</section>
     <section class="card list">
@@ -1588,10 +1674,16 @@ const ACTIONS = {
   'web-add'(el) {
     const w = S.webOrders.find(x => x.id === el.dataset.id);
     if (!w) return;
+    // A delivery order from the shop link comes in with its address and the shop's default delivery fee.
+    const delivery = w.fulfillment === 'delivery';
     let c = S.customers.find(x => samePhone(x.phone, w.phone));
-    if (!c) { c = { id: uid(), name: w.name, nameEn: w.nameEn, phone: w.phone, area: '', notes: '' }; S.customers.push(c); }
+    if (!c) { c = { id: uid(), name: w.name, nameEn: w.nameEn, phone: w.phone, area: delivery ? w.area || '' : '', notes: '' }; S.customers.push(c); }
     const items = w.items.map(it => { const p = productOf(it.pid); return p && { pid: p.id, nameAr: p.nameAr, nameEn: p.nameEn, qty: it.qty, price: p.price, cost: p.cost }; }).filter(Boolean);
-    S.orders.push({ id: uid(), no: S.nextOrderNo++, customerId: c.id, dueAt: w.dueAt, items, fulfillment: 'pickup', area: '', deliveryFee: 0, source: 'link', payments: [], notes: '', changes: [{ kind: 'created', at: new Date().toISOString() }], status: 'new', stockApplied: false });
+    S.orders.push({
+      id: uid(), no: S.nextOrderNo++, customerId: c.id, dueAt: w.dueAt, items, fulfillment: delivery ? 'delivery' : 'pickup', area: delivery ? w.area || c.area || '' : '',
+      address: delivery ? w.address || '' : '', deliveryFee: delivery ? defaultFee() : 0, source: 'link', payments: [], notes: '',
+      changes: [{ kind: 'created', at: new Date().toISOString() }], status: 'new', stockApplied: false,
+    });
     S.webOrders = S.webOrders.filter(x => x !== w);
     save(); render(); toast(t('today.webOrderAdded'));
   },
@@ -1601,14 +1693,26 @@ const ACTIONS = {
   'orders-customer-clear'() { ordersCustomer = ''; render(); },
   'orders-more'() { ordersMore = true; render(); },
   advance(el) {
-    const id = el.dataset.id, o = orderById(id);
-    if (!o || !NEXT[o.status]) return;
-    const prev = o.status, next = NEXT[o.status];
+    const id = el.dataset.id, o = orderById(id), next = o && can('status') ? nextStep(o) : null;
+    if (!next) return;
+    if (next === 'out') {
+      setOutForDelivery(o, true);
+      render();
+      undoToast(t('orders.statusChanged', t('status.outForDelivery')), () => {
+        const now = orderById(id);
+        if (now && isOut(now)) { setOutForDelivery(now, false); render(); }
+      });
+      return;
+    }
+    const prev = o.status, prevOut = isOut(o) ? o.outForDeliveryAt : null;
     setStatus(o, next);
     render();
     undoToast(t('orders.statusChanged', next === 'collected' && o.fulfillment === 'delivery' ? t('status.delivered') : t('order.status.' + next)), () => {
       const now = orderById(id);
-      if (now && now.status === next) { setStatus(now, prev); render(); }
+      if (!now || now.status !== next) return;
+      setStatus(now, prev);
+      if (prevOut) { now.outForDeliveryAt = prevOut; save(); } // back to Out for delivery
+      render();
     });
   },
   'cancel-order'(el) { const o = orderById(el.dataset.id); if (o && confirm(t('orders.cancelConfirm'))) { setStatus(o, 'cancelled'); render(); } },
@@ -1662,6 +1766,12 @@ const ACTIONS = {
     render();
   },
   'due-time'(el) { D.due = `${D.due.slice(0, 10)}T${el.dataset.v}`; render(); },
+  'pay-deposit'(el) {
+    D.depositOpen = el.dataset.v === '1';
+    if (!D.depositOpen) D.deposit = '';
+    render();
+    if (D.depositOpen) $('form[data-form="new-order"] input[name="deposit"]')?.focus();
+  },
   'clear-draft'() {
     const typed = D && (D.text.trim() || D.name.trim() || D.phone.trim() || D.items.length || D.notes.trim());
     if (!typed || confirm(t('neworder.clearConfirm'))) { D = null; render(); }
@@ -1747,12 +1857,25 @@ const ACTIONS = {
 };
 
 const LIVE = {
-  'draft-paid'(el) { D.paidFull = el.checked; if (D.errors?.name && D.paidFull) delete D.errors.name; render(); },
-  'edit-order-fulfillment'(el) { const box = $('#eo-delivery'); if (box) box.hidden = el.value !== 'delivery'; },
+  'draft-pay'(el) { D.pay = el.value === 'full' ? 'full' : 'later'; if (D.errors?.name && D.pay === 'full') delete D.errors.name; render(); },
+  'edit-order-fulfillment'(el) {
+    const box = $('#eo-delivery');
+    if (box) box.hidden = el.value !== 'delivery';
+    // A pickup order switched to delivery here gets the default fee while its fee is untouched; a
+    // saved delivery order's own fee (data-touched) is never changed.
+    const fee = $('#modal input[name="fee"]');
+    if (!fee) return;
+    const next = OrderatLiveCore.feeForFulfillment({ fee: fee.value, touched: fee.dataset.touched === '1', auto: fee.dataset.auto === '1' }, el.value, defaultFee());
+    fee.value = next.fee;
+    if (next.auto) fee.dataset.auto = '1'; else delete fee.dataset.auto;
+  },
+  'edit-order-fee'(el) { el.dataset.touched = '1'; delete el.dataset.auto; },
   'orders-q'(el) { ordersQuery = el.value; $('#orders-list').innerHTML = ordersListHtml(); },
   'customers-q'(el) { customersQuery = el.value; $('#customers-list').innerHTML = viewCustomers(true); },
   draft(el) {
     D[el.name] = el.value;
+    // A fee the seller typed is theirs: switching pickup and delivery no longer changes it.
+    if (el.name === 'fee') { D.feeTouched = true; D.feeAuto = false; $('#d-fee-hint')?.remove(); }
     // A name that is exactly a known customer fills in their phone and area when those are still empty.
     if (el.name === 'name') {
       const c = customerNamed(el.value.trim());
@@ -1761,7 +1884,7 @@ const LIVE = {
     }
     if (D.errors && D.errors[el.name]) { delete D.errors[el.name]; el.removeAttribute('aria-invalid'); el.closest('.field')?.querySelector('.field-error')?.remove(); }
     if (el.name === 'text') { const b = $('[data-act="parse"]'); if (b) b.disabled = D.reading || !D.text.trim(); }
-    if (el.name === 'fulfillment') render(); else updateTotal('d');
+    if (el.name === 'fulfillment') { setDraftFulfillment(el.value); render(); } else updateTotal('d');
   },
   item(el) {
     const it = itemList(el.dataset.p)[+el.dataset.i];
@@ -1798,6 +1921,15 @@ const LIVE = {
     save(); render();
   },
   'vat-trn'(el) { S.vat.trn = el.value.trim(); save(); },
+  // Kept in minor units like the phones ({ feeMinor }); other keys of the value stay as they are.
+  'delivery-fee'(el) {
+    const v = el.value.trim(), n = v === '' ? 0 : parseFloat(v);
+    if (!(n >= 0) || !Live.access().owner) return;
+    const feeMinor = OrderatCloudMap.toMinor(n, currency()[0]), d = S.deliveryDefaults;
+    if (d && typeof d === 'object' && !Array.isArray(d)) d.feeMinor = feeMinor;
+    else S.deliveryDefaults = { feeMinor };
+    save();
+  },
   'vat-include'(el) { S.vat.pricesInclude = el.value === 'yes'; save(); },
   'stock-enabled'(el) { S.stockEnabled = el.checked; save(); },
   'ask-enabled'(el) { S.askEnabled = el.checked; save(); },
@@ -1848,7 +1980,7 @@ const FORMS = {
     if (D.items.some(it => it.pid === 'custom' && qtyNum(it.qty) > 0 && !String(it.name || '').trim())) errors.items = t('items.nameCustom');
     else if (!items.length) errors.items = t('neworder.needItem');
     // Unpaid orders need a real name, so Who owes me never lumps strangers together.
-    if (!name && !D.paidFull) errors.name = t('err.name');
+    if (!name && D.pay !== 'full') errors.name = t('err.name');
     if (Object.keys(errors).length) { showDraftErrors(errors); return; }
     D.errors = null;
     const c = name ? draftCustomer(name) : walkIn();
@@ -1859,15 +1991,16 @@ const FORMS = {
     const order = {
       id: nid(), no: Live.on ? undefined : S.nextOrderNo++, customerId: c.id, dueAt: (isNaN(due) ? new Date() : due).toISOString(), items,
       fulfillment: D.fulfillment, area: delivery ? D.area || c.area || '' : '', address: delivery ? String(D.address || '').trim() : '', deliveryFee: delivery ? parseFloat(D.fee) || 0 : 0,
-      source: D.source, payments: [], notes: D.notes.trim(), changes: [{ kind: 'created', at: now }], status: 'new', stockApplied: false,
+      source: D.source, payments: [], notes: D.notes.trim(), changes: [{ kind: 'created', at: now }], status: 'new', outForDeliveryAt: null, stockApplied: false,
     };
     if (Live.on) {
       delete order.no; // display numbers come from creation order
       order.createdAt = now;
       Live.applyOrderVat(order); // the VAT snapshot and invoice number, like the phones
     }
-    // Paid in full: the total with its VAT, known only once the snapshot above is taken.
-    const deposit = D.paidFull ? totals(order).total : parseFloat(D.deposit);
+    // Paid in full: the total with its VAT, known only once the snapshot above is taken. A deposit only
+    // when its field is open.
+    const deposit = D.pay === 'full' ? totals(order).total : D.depositOpen ? parseFloat(D.deposit) : 0;
     if (deposit > 0) {
       order.payments.push({ amount: round(deposit), method: D.method, note: '', at: now });
       order.changes.push({ kind: 'payment', value: round(deposit), at: now });
@@ -1901,12 +2034,19 @@ const FORMS = {
     const get = k => String(fd.get(k) || '').trim();
     const due = new Date(get('due')), fulfillment = get('fulfillment') === 'delivery' ? 'delivery' : 'pickup', delivery = fulfillment === 'delivery';
     const next = {
-      dueAt: isNaN(due) ? o.dueAt : due.toISOString(), fulfillment, area: delivery ? get('area') : '',
+      // A shop outside Bahrain has no area list: the order keeps the area it has.
+      dueAt: isNaN(due) ? o.dueAt : due.toISOString(), fulfillment, area: delivery ? (fd.has('area') ? get('area') : o.area || '') : '',
       deliveryFee: delivery ? round(parseFloat(get('fee')) || 0) : 0, address: delivery ? get('address') : '', notes: get('notes'),
     };
     const moved = next.dueAt !== o.dueAt, feeChanged = next.deliveryFee !== (o.deliveryFee || 0) || next.fulfillment !== o.fulfillment;
     if (!Object.keys(next).some(k => String(next[k] ?? '') !== String(o[k] ?? ''))) { closeModal(); return; }
+    const wasOut = isOut(o);
     Object.assign(o, next);
+    // A pickup order is never out for delivery.
+    if (!delivery && o.outForDeliveryAt) {
+      o.outForDeliveryAt = null;
+      if (wasOut) o.changes.push({ kind: 'outForDelivery', value: null, at: new Date().toISOString() });
+    }
     if (feeChanged && Live.on) Live.applyOrderVat(o);
     o.changes.push({ kind: 'edited', at: new Date().toISOString() });
     save(); closeModal(); render();
@@ -2028,18 +2168,35 @@ document.addEventListener('submit', e => {
   e.preventDefault();
   FORMS[f.dataset.form]?.(f, new FormData(f));
 });
-// Return in a New order field moves to the next field and never saves (implicit submission would
-// report the Save button as the submitter, so this does not look at e.submitter).
+// Return in a New order or Edit order field moves to the next field and never saves (implicit submission
+// would report the Save button as the submitter, so this does not look at e.submitter).
 document.addEventListener('keydown', e => {
   const el = e.target;
   if ((e.key === 'Enter' || e.key === ' ') && el.getAttribute?.('role') === 'button' && el.dataset.act) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el, e); return; }
   if (e.key !== 'Enter' || e.isComposing || el.tagName !== 'INPUT') return;
-  const f = el.closest("form[data-form='new-order']");
+  // A field outside a form (Settings, a search box) has nothing to submit: Return closes the keyboard.
+  if (!el.closest('form')) {
+    if (typingField(el)) { e.preventDefault(); el.blur(); }
+    return;
+  }
+  const f = el.closest("form[data-form='new-order'], form[data-form='edit-order']");
   if (!f) return;
   e.preventDefault();
   const fields = [...f.querySelectorAll('input, select, textarea')].filter(x => !x.disabled && !['hidden', 'radio', 'checkbox', 'file', 'submit', 'button'].includes(x.type) && x.offsetParent !== null);
   const next = fields[fields.indexOf(el) + 1];
   if (next) next.focus(); else el.blur();
+});
+// Phones: a touch outside the field being typed in (a tap, or the start of a scroll) closes the keyboard,
+// as in the apps, notes boxes included; iOS Safari would keep it open. Touching another field, a label,
+// a button or a link is left to the browser.
+function typingField(el) {
+  return !!el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'file', 'button', 'submit', 'reset', 'hidden'].includes(el.type)));
+}
+document.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch') return;
+  const a = document.activeElement;
+  if (!typingField(a) || e.target.closest?.('input, textarea, select, label, button, a, [data-act], [contenteditable="true"]')) return;
+  a.blur();
 });
 window.addEventListener('hashchange', render);
 

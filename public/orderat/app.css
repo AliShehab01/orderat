@@ -21,6 +21,8 @@
   --warn-soft: #fff1d6;
   --bad: #b42318;
   --bad-soft: #fdeceb;
+  --out: #6d28d9;
+  --out-soft: #efe9fe;
   --neutral-soft: #eef0f8;
   --radius-lg: 1.25rem;
   --radius-md: 0.9rem;
@@ -46,6 +48,8 @@
   --warn-soft: #3d3016;
   --bad: #ff8a80;
   --bad-soft: #43201f;
+  --out: #c4b5fd;
+  --out-soft: #2e2458;
   --neutral-soft: #242a52;
   --shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.6);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -67,6 +71,8 @@
     --warn-soft: #3d3016;
     --bad: #ff8a80;
     --bad-soft: #43201f;
+    --out: #c4b5fd;
+    --out-soft: #2e2458;
     --neutral-soft: #242a52;
     --shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.6);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -95,6 +101,8 @@ h1, h2, h3, h4 { line-height: 1.35; }
 .small { font-size: 0.85rem; }
 .center { text-align: center; }
 .hidden { display: none !important; }
+/* The hidden attribute wins over a layout class (Edit order's delivery fields carry .stack-sm). */
+[hidden] { display: none !important; }
 .warn-text { color: var(--warn); }
 .bad-text { color: var(--bad); }
 button.kpi-link { font: inherit; color: var(--text); text-align: start; cursor: pointer; width: 100%; }
@@ -216,6 +224,8 @@ a.card.row { padding: 0.8rem 1.1rem; }
 .badge.ok { background: var(--ok-soft); color: var(--ok); }
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.bad { background: var(--bad-soft); color: var(--bad); }
+/* Out for delivery, between Ready (warn) and Delivered (ok). */
+.badge.out { background: var(--out-soft); color: var(--out); }
 .src { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; flex: none; }
 .src .ic { width: 14px; height: 14px; }
 .src-whatsapp { background: rgba(31, 157, 85, 0.14); color: #1f9d55; }
@@ -371,6 +381,9 @@ textarea { resize: vertical; line-height: 1.6; }
   .item-row > select, .item-row > input { flex: 1; }
 }
 .examples { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.75rem; }
+/* New order's payment: the deposit is a small secondary link under the two main choices. */
+.pay-more { display: inline-flex; align-items: center; gap: 0.3rem; align-self: flex-start; min-height: 44px; font-size: 0.85rem; font-weight: 500; }
+.pay-more .ic { width: 16px; height: 16px; }
 .save-bar {
   position: sticky; bottom: 1rem; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem 1rem;
   border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow);
@@ -462,6 +475,7 @@ body.has-banner .main { padding-top: calc(1.75rem + 2.4rem); }
 .od-meta { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.45rem; }
 .od-meta .ic { width: 18px; height: 18px; }
 .od-address { margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.od-address p { white-space: pre-line; }
 .od-notes { margin-top: 0.6rem; padding: 0.6rem 0.8rem; border-radius: var(--radius-sm); background: var(--surface-2); }
 .lines .link-btn { margin-top: 0.3rem; }
 .chart svg { display: block; width: 100%; height: auto; }

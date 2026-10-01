@@ -202,7 +202,7 @@ describe('start', () => {
     server.put('setting', 'askConsent', { value: true });
     const { sync } = open(server);
     const state = await sync.start();
-    expect(Object.keys(state).sort()).toEqual(['customers', 'expenses', 'occasions', 'orders', 'products', 'shop', 'stockEnabled', 'subscription', 'vat', 'waTemplates']);
+    expect(Object.keys(state).sort()).toEqual(['customers', 'deliveryDefaults', 'expenses', 'occasions', 'orders', 'products', 'shop', 'stockEnabled', 'subscription', 'vat', 'waTemplates']);
     expect(state.shop).toEqual({ nameAr: 'حلويات أم أحمد', nameEn: 'Umm Ahmed Sweets', phone: '+97336005005', currency: 'SAR', pickupHours: '4:00 PM - 8:00 PM', dailyCapacity: 35, businessType: 'home' });
     expect(state.vat).toEqual({ enabled: true, trn: '220012345600003', pricesInclude: true, rateBps: 1000 });
     expect(state.stockEnabled).toBe(true);
@@ -232,11 +232,27 @@ describe('start', () => {
     expect(server.calls.slice(1).flatMap(c => c.changes)).toEqual([]);
   });
 
-  it('shows no templates and no subscription when the shop has neither', async () => {
+  it('shows no templates, no default delivery fee and no subscription when the shop has none', async () => {
     const server = fakeServer();
     server.put('shop', SHOP_ID, SHOP());
     const state = await open(server).sync.start();
-    expect([state.waTemplates, state.subscription]).toEqual([null, null]);
+    expect([state.waTemplates, state.deliveryDefaults, state.subscription]).toEqual([null, null, null]);
+  });
+
+  it('reads the default delivery fee setting and leaves setting ids it does not know alone', async () => {
+    const server = seeded();
+    server.put('setting', 'deliveryDefaults', { value: { feeMinor: 1500, freeAbove: 20000 }, futureField: 1 }); // seq 11
+    server.put('setting', 'someFutureSetting', { value: { x: 1 } });
+    const app = await started(server);
+    expect(app.S.deliveryDefaults).toEqual({ feeMinor: 1500, freeAbove: 20000 });
+    expect(app.S).not.toHaveProperty('someFutureSetting');
+    app.S.deliveryDefaults.feeMinor = 2000; // Settings → Default delivery fee
+    await app.sync.commit(app.S);
+    expect(server.calls.at(-1).changes).toEqual([{
+      entity: 'setting', id: 'deliveryDefaults', deleted: false, baseSeq: 11,
+      data: { value: { feeMinor: 2000, freeAbove: 20000 }, futureField: 1 },
+    }]);
+    expect(server.row('setting', 'someFutureSetting').data).toEqual({ value: { x: 1 } });
   });
 
   it('keeps the membership from the last sync', async () => {
@@ -448,6 +464,17 @@ describe('commit', () => {
     expect(server.row('setting', 'subscription').data).toEqual(SUBSCRIPTION());
   });
 
+  it('creates the default delivery fee setting the first time the owner sets one', async () => {
+    const server = seeded();
+    const app = await started(server);
+    app.S.deliveryDefaults = { feeMinor: 500 };
+    await app.sync.commit(app.S);
+    expect(server.calls.at(-1).changes).toEqual([{ entity: 'setting', id: 'deliveryDefaults', deleted: false, baseSeq: 0, data: { value: { feeMinor: 500 } } }]);
+    const calls = server.calls.length;
+    await app.sync.commit(app.S);
+    expect(server.calls).toHaveLength(calls);
+  });
+
   it('hands the map the live web object, its raw record and ctx { decimals of the shop currency, now, deviceCode }', async () => {
     vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
     const server = fakeServer();
@@ -527,6 +554,16 @@ describe('pending changes kept across a reload', () => {
     expect(server.row('customer', NOORA_ID).deleted).toBe(true);
     expect(again.sync.pending).toBe(0);
     expect(again.sync.exportPending()).toEqual([]);
+  });
+
+  it('keeps an unsent default delivery fee across a reload', async () => {
+    const server = seeded();
+    const fresh = open(server);
+    expect(fresh.sync.importPending([{ entity: 'setting', id: 'deliveryDefaults', data: { value: { feeMinor: 750 } }, deleted: false, baseSeq: 0 }])).toBe(1);
+    await fresh.sync.start();
+    expect(fresh.S.deliveryDefaults).toEqual({ feeMinor: 750 });
+    await expect(fresh.sync.pull()).resolves.toBe(true);
+    expect(server.row('setting', 'deliveryDefaults').data).toEqual({ value: { feeMinor: 750 } });
   });
 
   it('skips malformed entries and takes nothing once started', async () => {
@@ -754,6 +791,21 @@ describe('orders', () => {
     await app.sync.commit(app.S);
     expect(server.pushed().filter(c => c.id === ORDER_ID)).toHaveLength(1);
     expect(app.S.orders[0].payments.map(p => p.amount)).toEqual([5, 8]);
+  });
+
+  it('sends out for delivery as a ready order with outForDeliveryAt, and reads it back', async () => {
+    const server = seeded();
+    server.put('order', ORDER_ID, { ...ORDER(), status: 'ready', fulfillmentType: 'delivery' });
+    const app = await started(server);
+    const order = app.S.orders[0];
+    expect(order.outForDeliveryAt).toBeNull();
+    order.outForDeliveryAt = '2026-09-29T07:30:00.000Z';
+    order.changes.push({ kind: 'outForDelivery', value: '2026-09-29T07:30:00.000Z', at: '2026-09-29T07:30:00.000Z' });
+    await app.sync.commit(app.S);
+    const data = server.row('order', ORDER_ID).data;
+    expect([data.status, data.outForDeliveryAt, data.changes.at(-1).field, data.changes.at(-1).newValue]).toEqual(['ready', '2026-09-29T07:30:00.000Z', 'outForDelivery', '2026-09-29T07:30:00.000Z']);
+    expect(app.S.orders[0]).toMatchObject({ status: 'ready', outForDeliveryAt: '2026-09-29T07:30:00.000Z' });
+    expect(app.sync.pending).toBe(0);
   });
 });
 

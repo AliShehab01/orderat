@@ -350,6 +350,7 @@ describe('order', () => {
       ],
       status: 'new', stockApplied: false, createdAt: '2026-09-28T09:59:00.000Z',
       vatRateBps: 1000, vatIncluded: true, vatMinor: 1545, invoiceNumber: 17, invoiceIdentifier: 'INV-A7-000017',
+      outForDeliveryAt: null,
     });
   });
 
@@ -543,7 +544,7 @@ describe('order', () => {
         { id: anId(), field: 'paymentStatus', newValue: 'deposit', at: NOW.toISOString() },
       ],
       notes: null, source: 'whatsapp',
-      vatRateBps: null, vatIncluded: null, vatMinor: null, invoiceNumber: null, invoiceIdentifier: null,
+      vatRateBps: null, vatIncluded: null, vatMinor: null, invoiceNumber: null, invoiceIdentifier: null, outForDeliveryAt: null,
       paymentStatus: 'deposit', createdAt: NOW.toISOString(), updatedAt: NOW.toISOString(),
     });
     const ids = [...out.items, ...out.payments, ...out.changes].map(x => x.id);
@@ -575,6 +576,58 @@ describe('order', () => {
     const newer = frozen({ ...older, changes: [...older.changes, { id: CH_3, field: 'dueAt', oldValue: '2026-09-30T13:00:00.000Z', newValue: '2026-09-30T14:00:00.000Z', note: null, at: '2026-09-29T07:00:00.000Z' }] });
     web.notes = 'Ring twice';
     expect(map.orderToCloud(web, newer, BHD).changes).toStrictEqual(newer.changes);
+  });
+
+  it('marks a ready delivery order out for delivery: outForDeliveryAt set, status still ready, the step in its history', () => {
+    const raw = frozen({ ...orderRecord(), status: 'ready' });
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
+    expect([web.status, web.outForDeliveryAt]).toEqual(['ready', null]);
+    web.outForDeliveryAt = '2026-09-29T07:30:00.000Z'; // app.js setOutForDelivery
+    web.changes.push({ kind: 'outForDelivery', value: '2026-09-29T07:30:00.000Z', at: '2026-09-29T07:30:00.000Z' });
+    const out = map.orderToCloud(web, raw, BHD);
+    expect(out.status).toBe('ready');
+    expect(out.outForDeliveryAt).toBe('2026-09-29T07:30:00.000Z');
+    expect(out.changes).toStrictEqual([...raw.changes, { id: anId(), field: 'outForDelivery', newValue: '2026-09-29T07:30:00.000Z', at: '2026-09-29T07:30:00.000Z' }]);
+    expect([out.futureField, out.address, out.paymentStatus, out.updatedAt]).toStrictEqual([1, raw.address, 'deposit', NOW.toISOString()]);
+
+    // Read back, then delivered: collected, the key cleared.
+    const sent = frozen(out);
+    const back = map.orderToWeb(ORDER_ID, sent, BHD);
+    expect([back.status, back.outForDeliveryAt, back.changes.at(-1).kind, back.changes.at(-1).value]).toEqual(['ready', '2026-09-29T07:30:00.000Z', 'outForDelivery', '2026-09-29T07:30:00.000Z']);
+    expect(map.orderToCloud(back, sent, { ...BHD, now: LATER })).toStrictEqual(sent);
+    back.status = 'collected';
+    back.outForDeliveryAt = null;
+    back.changes.push({ kind: 'status', value: 'collected', at: '2026-09-29T09:00:00.000Z' });
+    const done = map.orderToCloud(back, sent, { ...BHD, now: LATER });
+    expect([done.status, done.outForDeliveryAt]).toEqual(['collected', null]);
+    expect(done.changes.at(-1)).toStrictEqual({ id: anId(), field: 'status', oldValue: 'ready', newValue: 'collected', at: '2026-09-29T09:00:00.000Z' });
+  });
+
+  it("clears it on the way back to Ready, and leaves an older app's order (no key) without one", () => {
+    const raw = frozen({ ...orderRecord(), status: 'ready', outForDeliveryAt: '2026-09-29T07:30:00Z' }); // another app, no milliseconds
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
+    expect(web.outForDeliveryAt).toBe('2026-09-29T07:30:00.000Z');
+    expect(map.orderToCloud(web, raw, BHD)).toStrictEqual(raw);
+    web.outForDeliveryAt = null;
+    web.changes.push({ kind: 'outForDelivery', value: null, at: '2026-09-29T07:40:00.000Z' });
+    const out = map.orderToCloud(web, raw, BHD);
+    expect([out.status, out.outForDeliveryAt]).toEqual(['ready', null]);
+    expect(out.changes.at(-1)).toStrictEqual({ id: anId(), field: 'outForDelivery', newValue: null, at: '2026-09-29T07:40:00.000Z' });
+    const older = map.orderToWeb(ORDER_ID, androidRecord(), BHD);
+    expect(older.outForDeliveryAt).toBeNull();
+    older.notes = 'Ring twice';
+    expect(map.orderToCloud(older, androidRecord(), BHD)).not.toHaveProperty('outForDeliveryAt');
+  });
+
+  it("reads a phone's outForDelivery history entries for display", () => {
+    const changes = [
+      { id: 'h1', field: 'outForDelivery', oldValue: null, newValue: '2026-09-29T07:30:00.000Z', note: null, at: '2026-09-29T07:30:00.000Z' },
+      { id: 'h2', field: 'outForDelivery', oldValue: '2026-09-29T07:30:00.000Z', newValue: null, note: null, at: '2026-09-29T07:35:00.000Z' },
+      { id: 'h3', field: 'outForDelivery', at: '2026-09-29T07:36:00.000Z' },
+    ];
+    const web = map.orderToWeb(ORDER_ID, frozen({ ...orderRecord(), changes }), BHD);
+    expect(web.changes.map(c => [c.kind, c.value])).toEqual([['outForDelivery', '2026-09-29T07:30:00.000Z'], ['outForDelivery', null], ['outForDelivery', null]]);
+    expect(web.changes.map(c => c._c)).toEqual(changes);
   });
 });
 
