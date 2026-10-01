@@ -15,6 +15,8 @@
 // - buildAskSnapshot: AskSnapshotBuilder's JSON, same keys, first names and short refs only.
 // - AI order entry: an orderat-parse draft into the New order form, its pickup or delivery and address
 //   included (Bahrain's area to the area list, the rest as the one free-text address).
+// - default delivery fee: the shop's `setting/deliveryDefaults` { feeMinor }, filled into an order that
+//   turns into a delivery while its fee is still empty and untouched.
 // Web objects use major units (6.5 = 6.500 BHD); anything sent to the server is in minor units.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./cloud-map.js'));
@@ -362,6 +364,27 @@
     return { area: areaCode || cityCode, address: lines.join('\n').slice(0, 500) };
   }
 
+  // ---------- Default delivery fee ----------
+
+  // The shop's `setting/deliveryDefaults` value { feeMinor } → the fee in minor units; 0 when there is
+  // none, or it is not a whole number of minor units >= 0.
+  function deliveryFeeMinor(value) {
+    const n = isObj(value) ? value.feeMinor : undefined;
+    return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : 0;
+  }
+  // An order form's delivery fee when its pickup or delivery changes (the switch, the AI, a shop-link
+  // order): { fee as typed, touched (the seller typed in it), auto (it holds the default) } → the new
+  // { fee, auto }. Turning into a delivery with the fee still empty or 0 and untouched puts the shop's
+  // default in (still editable); back to pickup takes an auto-filled fee out. A typed fee never changes.
+  function feeForFulfillment(state, fulfillment, defaultFee) {
+    const s = state || {}, fee = s.fee == null ? '' : String(s.fee);
+    if (fulfillment === 'delivery') {
+      if (!s.touched && !(parseFloat(fee) > 0) && defaultFee > 0) return { fee: String(defaultFee), auto: true };
+      return { fee, auto: !!s.auto && !s.touched };
+    }
+    return s.auto && !s.touched ? { fee: '', auto: false } : { fee, auto: false };
+  }
+
   // ---------- Ask Orderat snapshot (AskSnapshot.swift) ----------
 
   const startOfDay = t => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
@@ -472,6 +495,6 @@
     subscriptionAllowed, subscriptionActive, aiDemo, callingCode, localDigits, normalizePhone, access, formatInvoice, nextInvoice, invoiceLabel,
     vatMinor, defaultRateBps, applyVat, orderMinor, stockForStatus, stockForEdit, orderNumbers, historyLabel,
     cleanItems, parseProducts, answerDraft, draftFields, deliveryAddress, buildAskSnapshot, canMoveOrderStock, flushBeforeLeaving,
-    createPermissionEditor,
+    createPermissionEditor, deliveryFeeMinor, feeForFulfillment,
   };
 });

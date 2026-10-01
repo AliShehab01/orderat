@@ -348,6 +348,33 @@ describe('AI order entry', () => {
   });
 });
 
+describe('default delivery fee', () => {
+  it('reads the setting value { feeMinor }; anything else is no default', () => {
+    expect(core.deliveryFeeMinor({ feeMinor: 1500 })).toBe(1500);
+    expect(core.deliveryFeeMinor({ feeMinor: 0, freeAbove: 20000 })).toBe(0);
+    for (const v of [null, undefined, 'x', [1500], { feeMinor: -5 }, { feeMinor: 1.5 }, { feeMinor: '1500' }, { feeMinor: NaN }]) expect(core.deliveryFeeMinor(v)).toBe(0);
+  });
+
+  it('fills the default into a delivery whose fee is still empty or 0 and untouched, and takes it out on pickup', () => {
+    const turn = (state, fulfillment) => core.feeForFulfillment(state, fulfillment, 1.5);
+    expect(turn({ fee: '', touched: false, auto: false }, 'delivery')).toEqual({ fee: '1.5', auto: true });
+    expect(turn({ fee: '0', touched: false, auto: false }, 'delivery')).toEqual({ fee: '1.5', auto: true });
+    expect(turn({ fee: '1.5', touched: false, auto: true }, 'delivery')).toEqual({ fee: '1.5', auto: true }); // the AI says delivery again
+    expect(turn({ fee: '1.5', touched: false, auto: true }, 'pickup')).toEqual({ fee: '', auto: false });
+    expect(turn(undefined, 'delivery')).toEqual({ fee: '1.5', auto: true });
+  });
+
+  it("never changes a fee the seller typed (0 included) or an order's saved fee, and does nothing without a default", () => {
+    const turn = (state, fulfillment, fee = 1.5) => core.feeForFulfillment(state, fulfillment, fee);
+    expect(turn({ fee: '2', touched: true }, 'delivery')).toEqual({ fee: '2', auto: false });
+    expect(turn({ fee: '0', touched: true }, 'delivery')).toEqual({ fee: '0', auto: false });
+    expect(turn({ fee: '2', touched: true }, 'pickup')).toEqual({ fee: '2', auto: false });
+    expect(turn({ fee: 3, touched: false, auto: false }, 'delivery')).toEqual({ fee: '3', auto: false });
+    expect(turn({ fee: '', touched: false, auto: false }, 'delivery', 0)).toEqual({ fee: '', auto: false });
+    expect(turn({ fee: '', touched: false, auto: false }, 'pickup')).toEqual({ fee: '', auto: false });
+  });
+});
+
 describe('Ask Orderat snapshot', () => {
   const at = (days, h = 12) => { const d = new Date(2026, 8, 29 + days, h, 0); return d.toISOString(); };
   const state = () => ({

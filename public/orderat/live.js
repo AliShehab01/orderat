@@ -78,7 +78,7 @@ const Live = (() => {
       shopLink: { slug: '', bio: '', leadDays: 1, delivery: 'both', acceptsWebOrders: true, showAll: true, published: false },
       shop: { nameAr: '', nameEn: '', phone: '', currency: 'BHD', pickupHours: '', dailyCapacity: null, businessType: 'home' },
       vat: { enabled: false, trn: '', pricesInclude: true, rateBps: null }, stockEnabled: false,
-      products: [], customers: [], orders: [], expenses: [], occasions: [], waTemplates: null, subscription: null,
+      products: [], customers: [], orders: [], expenses: [], occasions: [], waTemplates: null, deliveryDefaults: null, subscription: null,
     };
   }
 

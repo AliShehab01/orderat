@@ -516,7 +516,7 @@ function webOrdersCard() {
   const rows = S.webOrders.map(w => {
     const d = new Date(w.dueAt);
     const items = w.items.map(it => { const p = productOf(it.pid); return p ? `${it.qty}× ${pName(p)}` : ''; }).filter(Boolean).join(S.lang === 'en' ? ', ' : '، ');
-    return `<div class="row web-order"><span class="row-main"><b>${esc(pick(w.name, w.nameEn))}</b><small>${esc(items)} · ${esc(fmtShort(d))} ${esc(fmtTime(d))}</small></span><span class="row-actions"><button class="btn primary small" data-act="web-add" data-id="${esc(w.id)}">${esc(t('today.webOrderAdd'))}</button><button class="btn ghost small" data-act="web-dismiss" data-id="${esc(w.id)}">${esc(t('today.webOrderDismiss'))}</button></span></div>`;
+    return `<div class="row web-order"><span class="row-main"><b>${esc(pick(w.name, w.nameEn))}</b><small>${esc(items)} · ${esc(fmtShort(d))} ${esc(fmtTime(d))}${w.fulfillment === 'delivery' ? ' · ' + esc(t('fulfillment.delivery')) : ''}</small></span><span class="row-actions"><button class="btn primary small" data-act="web-add" data-id="${esc(w.id)}">${esc(t('today.webOrderAdd'))}</button><button class="btn ghost small" data-act="web-dismiss" data-id="${esc(w.id)}">${esc(t('today.webOrderDismiss'))}</button></span></div>`;
   }).join('');
   return `<section class="card"><h3 class="card-title">${icon('link')} ${esc(t('today.webOrders'))}</h3>${rows}</section>`;
 }
@@ -660,7 +660,7 @@ function openEditOrder(o) {
     ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" value="${esc(inputDateTime(new Date(o.dueAt)))}" required>`)}
     <div class="field"><span>${esc(t('neworder.fulfillment'))}</span>${seg('fulfillment', ['pickup', 'delivery'], o.fulfillment, k => t('fulfillment.' + k), 'edit-order-fulfillment')}</div>
     <div class="stack-sm" id="eo-delivery"${delivery ? '' : ' hidden'}>
-      <div class="grid2">${bahrain() ? field(t('shop.area'), `<select name="area"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, o.area, a => t('area.' + a))}</select>`) : ''}${field(t('orders.deliveryFee'), `<input name="fee" type="number" step="any" min="0" inputmode="decimal" value="${esc(o.deliveryFee || 0)}">`)}</div>
+      <div class="grid2">${bahrain() ? field(t('shop.area'), `<select name="area"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, o.area, a => t('area.' + a))}</select>`) : ''}${field(t('orders.deliveryFee'), `<input name="fee" type="number" step="any" min="0" inputmode="decimal" value="${esc(o.deliveryFee || 0)}" data-live="edit-order-fee"${delivery ? ' data-touched="1"' : ''}>`)}</div>
       ${field(t('order.address'), `<textarea name="address" rows="${addressRows(o.address)}" maxlength="200">${esc(o.address || '')}</textarea>`)}
     </div>
     ${field(t('neworder.notesTitle'), `<textarea name="notes" rows="2">${esc(o.notes || '')}</textarea>`)}
@@ -793,7 +793,7 @@ function newDraft() {
   try { source = localStorage.getItem(LAST_SOURCE_KEY); } catch { source = null; }
   if (!['whatsapp', 'instagram', 'manual'].includes(source)) source = now ? 'manual' : 'whatsapp';
   return {
-    text: '', name: '', phone: '', source, items: [], due: inputDateTime(now ? new Date() : due), when: now ? 'now' : '', fulfillment: 'pickup', area: '', address: '', fee: '1',
+    text: '', name: '', phone: '', source, items: [], due: inputDateTime(now ? new Date() : due), when: now ? 'now' : '', fulfillment: 'pickup', area: '', address: '', fee: '', feeAuto: false, feeTouched: false,
     deposit: '', paidFull: now, method: now ? 'cash' : 'benefit', notes: '', note: '', reading: false,
   };
 }
@@ -805,9 +805,16 @@ function walkIn() {
   return c;
 }
 const draftEmpty = () => !D.items.some(it => qtyNum(it.qty) > 0);
-// New order's pickup or delivery, from the switch, the AI or the demo reader.
+// The shop's default delivery fee in major units (setting/deliveryDefaults, synced with the phones).
+// A demo saved before the setting existed keeps the 1.000 New order always filled in.
+const defaultFee = () => (S.deliveryDefaults === undefined ? 1 : OrderatCloudMap.fromMinor(OrderatLiveCore.deliveryFeeMinor(S.deliveryDefaults), currency()[0]));
+// New order's pickup or delivery, from the switch, the AI or the demo reader: a delivery whose fee is
+// still empty and untouched gets the default fee; back to pickup takes an auto-filled fee out.
 function setDraftFulfillment(value) {
   D.fulfillment = value === 'delivery' ? 'delivery' : 'pickup';
+  const next = OrderatLiveCore.feeForFulfillment({ fee: D.fee, touched: D.feeTouched, auto: D.feeAuto }, D.fulfillment, defaultFee());
+  D.fee = next.fee;
+  D.feeAuto = next.auto;
 }
 const draftTotal = () => totals({ items: D.items.map(it => ({ qty: qtyNum(it.qty), price: parseFloat(it.price) || 0 })), deliveryFee: D.fulfillment === 'delivery' ? parseFloat(D.fee) || 0 : 0 }).total;
 
@@ -860,7 +867,7 @@ function viewNew() {
       ${D.when === 'today' || D.when === 'tomorrow' ? `<div class="chips wrap">${QUICK_TIMES.map(h => `<button type="button" class="chip small${D.due.slice(11) === h ? ' on' : ''}" data-act="due-time" data-v="${h}" dir="ltr">${esc(fmtTime(new Date(`2000-01-01T${h}`)))}</button>`).join('')}</div>` : ''}
       ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" enterkeyhint="next" data-live="draft" value="${esc(D.due)}">`)}
       <div class="field"><span>${esc(t('neworder.fulfillment'))}</span>${seg('fulfillment', ['pickup', 'delivery'], D.fulfillment, k => t('fulfillment.' + k), 'draft')}</div>
-      ${D.fulfillment === 'delivery' ? `<div class="grid2">${bahrain() ? field(t('shop.area'), `<select name="area" data-live="draft"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, D.area, a => t('area.' + a))}</select>`) : ''}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.fee)}">`)}</div>${field(t('order.address'), `<textarea name="address" rows="${addressRows(D.address)}" maxlength="200" data-live="draft" autocomplete="street-address">${esc(D.address || '')}</textarea>`)}` : ''}
+      ${D.fulfillment === 'delivery' ? `<div class="grid2">${bahrain() ? field(t('shop.area'), `<select name="area" data-live="draft"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, D.area, a => t('area.' + a))}</select>`) : ''}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.fee)}" placeholder="0">${D.feeAuto ? `<small class="muted small" id="d-fee-hint">${esc(t('neworder.feeDefault'))}</small>` : ''}`)}</div>${field(t('order.address'), `<textarea name="address" rows="${addressRows(D.address)}" maxlength="200" data-live="draft" autocomplete="street-address">${esc(D.address || '')}</textarea>`)}` : ''}
     </section>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.paymentTitle'))}</h3>
       ${toggle('paidFull', t('neworder.paidInFull'), D.paidFull, 'draft-paid')}
@@ -1440,6 +1447,14 @@ function viewReceipt(id) {
 
 // ---------- Settings and team ----------
 
+// The default delivery fee (setting/deliveryDefaults, synced with the phones), set by the owner and
+// filled into delivery orders on New order.
+function deliveryFeeSetting() {
+  if (!Live.access().owner) return '';
+  const shown = S.deliveryDefaults === null ? '' : String(round(defaultFee()));
+  return `<section class="card stack-sm">${field(`${t('settings.deliveryFee')} (${S.shop.currency})`, `<input type="number" step="any" min="0" inputmode="decimal" data-live="delivery-fee" value="${esc(shown)}" placeholder="0" dir="ltr">`)}<p class="muted small">${esc(t('settings.deliveryFeeFooter'))}</p></section>`;
+}
+
 function viewSettings() {
   if (Live.on) return viewLiveSettings();
   const C = S.cloud;
@@ -1465,6 +1480,7 @@ function viewSettings() {
       ${field(t('shop.currency'), `<select data-live="currency">${options(Object.keys(CURRENCIES), S.shop.currency, c => c)}</select>`)}
       ${field(t('settings.businessType'), `<select data-live="business-type">${options(BUSINESS_TYPES, S.shop.businessType, b => t('businessType.' + b))}</select>`)}
     </section>
+    ${deliveryFeeSetting()}
     <section class="card stack-sm"><h3 class="card-title">${esc(t('settings.vat'))}</h3>${vat}</section>
     <section class="card stack-sm">${toggle('stock', t('settings.trackStock'), S.stockEnabled, 'stock-enabled')}<p class="muted small">${esc(t('settings.trackStockFooter'))}</p>${toggle('ask', t('settings.askOrderat'), S.askEnabled, 'ask-enabled')}</section>
     <a class="card row" href="#/start"><span class="row-ic">${icon('users')}</span><span class="row-main"><b>${esc(t('live.logIn'))}</b><small>${esc(t('live.logInHint'))}</small></span>${icon('chev', 'chev')}</a>
@@ -1501,6 +1517,7 @@ function viewLiveSettings() {
       <div class="field"><span>${esc(t('shop.currency'))}</span><b class="static">${esc(S.shop.currency)}</b><small class="muted">${esc(t('live.currencyInApp'))}</small></div>
       ${field(t('settings.businessType'), `<select data-live="business-type">${options(BUSINESS_TYPES, S.shop.businessType, b => t('businessType.' + b))}</select>`)}
     </section>
+    ${deliveryFeeSetting()}
     <section class="card stack-sm"><h3 class="card-title">${esc(t('settings.vat'))}</h3>${vat}</section>
     <section class="card stack-sm">${toggle('stock', t('settings.trackStock'), S.stockEnabled, 'stock-enabled')}<p class="muted small">${esc(t('settings.trackStockFooter'))}</p>${can('money') ? toggle('ask', t('settings.askOrderat'), S.askEnabled, 'ask-enabled') : ''}</section>
     <section class="card list">
@@ -1627,10 +1644,16 @@ const ACTIONS = {
   'web-add'(el) {
     const w = S.webOrders.find(x => x.id === el.dataset.id);
     if (!w) return;
+    // A delivery order from the shop link comes in with its address and the shop's default delivery fee.
+    const delivery = w.fulfillment === 'delivery';
     let c = S.customers.find(x => samePhone(x.phone, w.phone));
-    if (!c) { c = { id: uid(), name: w.name, nameEn: w.nameEn, phone: w.phone, area: '', notes: '' }; S.customers.push(c); }
+    if (!c) { c = { id: uid(), name: w.name, nameEn: w.nameEn, phone: w.phone, area: delivery ? w.area || '' : '', notes: '' }; S.customers.push(c); }
     const items = w.items.map(it => { const p = productOf(it.pid); return p && { pid: p.id, nameAr: p.nameAr, nameEn: p.nameEn, qty: it.qty, price: p.price, cost: p.cost }; }).filter(Boolean);
-    S.orders.push({ id: uid(), no: S.nextOrderNo++, customerId: c.id, dueAt: w.dueAt, items, fulfillment: 'pickup', area: '', deliveryFee: 0, source: 'link', payments: [], notes: '', changes: [{ kind: 'created', at: new Date().toISOString() }], status: 'new', stockApplied: false });
+    S.orders.push({
+      id: uid(), no: S.nextOrderNo++, customerId: c.id, dueAt: w.dueAt, items, fulfillment: delivery ? 'delivery' : 'pickup', area: delivery ? w.area || c.area || '' : '',
+      address: delivery ? w.address || '' : '', deliveryFee: delivery ? defaultFee() : 0, source: 'link', payments: [], notes: '',
+      changes: [{ kind: 'created', at: new Date().toISOString() }], status: 'new', stockApplied: false,
+    });
     S.webOrders = S.webOrders.filter(x => x !== w);
     save(); render(); toast(t('today.webOrderAdded'));
   },
@@ -1787,11 +1810,24 @@ const ACTIONS = {
 
 const LIVE = {
   'draft-paid'(el) { D.paidFull = el.checked; if (D.errors?.name && D.paidFull) delete D.errors.name; render(); },
-  'edit-order-fulfillment'(el) { const box = $('#eo-delivery'); if (box) box.hidden = el.value !== 'delivery'; },
+  'edit-order-fulfillment'(el) {
+    const box = $('#eo-delivery');
+    if (box) box.hidden = el.value !== 'delivery';
+    // A pickup order switched to delivery here gets the default fee while its fee is untouched; a
+    // saved delivery order's own fee (data-touched) is never changed.
+    const fee = $('#modal input[name="fee"]');
+    if (!fee) return;
+    const next = OrderatLiveCore.feeForFulfillment({ fee: fee.value, touched: fee.dataset.touched === '1', auto: fee.dataset.auto === '1' }, el.value, defaultFee());
+    fee.value = next.fee;
+    if (next.auto) fee.dataset.auto = '1'; else delete fee.dataset.auto;
+  },
+  'edit-order-fee'(el) { el.dataset.touched = '1'; delete el.dataset.auto; },
   'orders-q'(el) { ordersQuery = el.value; $('#orders-list').innerHTML = ordersListHtml(); },
   'customers-q'(el) { customersQuery = el.value; $('#customers-list').innerHTML = viewCustomers(true); },
   draft(el) {
     D[el.name] = el.value;
+    // A fee the seller typed is theirs: switching pickup and delivery no longer changes it.
+    if (el.name === 'fee') { D.feeTouched = true; D.feeAuto = false; $('#d-fee-hint')?.remove(); }
     // A name that is exactly a known customer fills in their phone and area when those are still empty.
     if (el.name === 'name') {
       const c = customerNamed(el.value.trim());
@@ -1837,6 +1873,15 @@ const LIVE = {
     save(); render();
   },
   'vat-trn'(el) { S.vat.trn = el.value.trim(); save(); },
+  // Kept in minor units like the phones ({ feeMinor }); other keys of the value stay as they are.
+  'delivery-fee'(el) {
+    const v = el.value.trim(), n = v === '' ? 0 : parseFloat(v);
+    if (!(n >= 0) || !Live.access().owner) return;
+    const feeMinor = OrderatCloudMap.toMinor(n, currency()[0]), d = S.deliveryDefaults;
+    if (d && typeof d === 'object' && !Array.isArray(d)) d.feeMinor = feeMinor;
+    else S.deliveryDefaults = { feeMinor };
+    save();
+  },
   'vat-include'(el) { S.vat.pricesInclude = el.value === 'yes'; save(); },
   'stock-enabled'(el) { S.stockEnabled = el.checked; save(); },
   'ask-enabled'(el) { S.askEnabled = el.checked; save(); },

@@ -156,6 +156,7 @@ const I18N = {
   'neworder.fulfillment': ['Fulfillment', 'طريقة التسليم'],
   'neworder.paymentTitle': ['Payment', 'الدفع'],
   'neworder.depositOptional': ['Deposit (optional)', 'عربون (اختياري)'],
+  'neworder.feeDefault': ['Your default delivery fee', 'رسوم التوصيل الافتراضية'],
   'neworder.notesTitle': ['Notes', 'ملاحظات'],
   'neworder.save': ['Save order', 'حفظ الطلب'],
   'neworder.saved': ['Order created.', 'تم إنشاء الطلب.'],
@@ -393,6 +394,8 @@ const I18N = {
   'settings.vatPricesInclude': ['Prices include VAT?', 'الأسعار شاملة الضريبة؟'],
   'settings.vatIncludedYes': ['Yes', 'نعم'],
   'settings.vatIncludedNo': ['No', 'لا'],
+  'settings.deliveryFee': ['Default delivery fee', 'رسوم التوصيل الافتراضية'],
+  'settings.deliveryFeeFooter': ['Filled in when an order is for delivery. You can still change it on each order.', 'تنضاف تلقائياً لما يكون الطلب توصيل، وتقدر تغيّرها في كل طلب.', 'تنضاف تلقائياً لما يكون الطلب توصيل، وتقدرين تغيّرينها في كل طلب.'],
   'languageArabic': ['العربية', 'العربية'],
   'languageEnglish': ['English', 'English'],
 
