@@ -101,6 +101,8 @@ h1, h2, h3, h4 { line-height: 1.35; }
 .small { font-size: 0.85rem; }
 .center { text-align: center; }
 .hidden { display: none !important; }
+/* The hidden attribute wins over a layout class (Edit order's delivery fields carry .stack-sm). */
+[hidden] { display: none !important; }
 .warn-text { color: var(--warn); }
 .bad-text { color: var(--bad); }
 button.kpi-link { font: inherit; color: var(--text); text-align: start; cursor: pointer; width: 100%; }
