@@ -243,7 +243,7 @@ export const FEATURES = [
         },
         {
           heading: "اسأل اوردرات عن أرقامك",
-          body: "نفس فكرة المراجعة والدقة تقف خلف \"اسأل اوردرات\"، حيث تسأل بلهجتك الخليجية عن ربحك أو أكثر منتج مبيعاً أو منو باقي عليه فلوس، ويجاوبك من بيانات متجرك فقط.",
+          body: "نفس فكرة المراجعة والدقة تقف خلف \"اسأل اوردرات\"، حيث تسأل بلهجة الخليج العربي عن ربحك أو أكثر منتج مبيعاً أو منو باقي عليه فلوس، ويجاوبك من بيانات متجرك فقط.",
         },
       ],
     },
@@ -274,7 +274,7 @@ export const FEATURES = [
         },
         {
           heading: "Ask Orderat about your numbers",
-          body: "The same reviewed, grounded approach powers Ask Orderat, where you ask in Gulf Arabic how much you made this month, your best-seller, or who still owes you money — answered only from your own shop data.",
+          body: "The same reviewed, grounded approach powers Ask Orderat, where you ask in your own Arabian Gulf dialect how much you made this month, your best-seller, or who still owes you money — answered only from your own shop data.",
         },
       ],
     },
@@ -487,12 +487,12 @@ export const FEATURES = [
     relatedSlugs: ["shop-link", "whatsapp-orders"],
     ar: {
       cardTitle: "استوديو الصور وحملات المناسبات",
-      cardBody: "صورة جوال تتحول لصورة استوديو، وحملة جاهزة لكل مناسبة خليجية.",
+      cardBody: "صورة جوال تتحول لصورة استوديو، وحملة جاهزة لكل مناسبة في الخليج العربي.",
       metaTitle: "استوديو صور بالذكاء الاصطناعي وحملات مناسبات جاهزة | اوردرات",
       metaDescription:
-        "حوّل صورة منتجك بجوالك إلى صورة استوديو أو صورة مناسبة، واستخدم حملات جاهزة بأفكار وكابشنات وهاشتاقات لكل مناسبة خليجية.",
+        "حوّل صورة منتجك بجوالك إلى صورة استوديو أو صورة مناسبة، واستخدم حملات جاهزة بأفكار وكابشنات وهاشتاقات لكل مناسبة في الخليج العربي.",
       h1: "صور استوديو وحملات مناسبات جاهزة، بدون مصمم",
-      lead: "صوّر منتجك بجوالك، واوردرات يحوّلها لصورة استوديو بخلفية نظيفة. وقبل كل مناسبة خليجية، حملة جاهزة بأفكار وكابشنات وهاشتاقات.",
+      lead: "صوّر منتجك بجوالك، واوردرات يحوّلها لصورة استوديو بخلفية نظيفة. وقبل كل مناسبة في الخليج العربي، حملة جاهزة بأفكار وكابشنات وهاشتاقات.",
       highlights: [
         "صورة عادية بجوالك تتحول لصورة بخلفية استوديو أو مناسبة",
         "المنتج نفسه لا يتغيّر — يتغيّر الخلفية والإضاءة فقط",
@@ -507,7 +507,7 @@ export const FEATURES = [
           body: "اختر صورة من جوالك، اختر نمط الاستوديو أو نمط المناسبة، واختر الشكل (مربع، بورتريه، ستوري)، ويجهّز لك اوردرات النتيجة لتقارنها بالأصل قبل الحفظ.",
         },
         {
-          heading: "تقويم مناسبات الخليج",
+          heading: "تقويم مناسبات الخليج العربي",
           body: "بطاقة \"اليوم\" تذكّرك بالمناسبة القادمة قبل وقتها بأيام، بمواعيدها الهجرية والميلادية، وتقترح عليك حملة جاهزة.",
         },
         {
@@ -518,12 +518,12 @@ export const FEATURES = [
     },
     en: {
       cardTitle: "Photo studio & occasion campaigns",
-      cardBody: "A phone photo becomes a studio shot, with a ready campaign for every Gulf occasion.",
+      cardBody: "A phone photo becomes a studio shot, with a ready campaign for every Arabian Gulf occasion.",
       metaTitle: "AI photo studio and ready-made occasion campaigns | Orderat",
       metaDescription:
-        "Turn a plain phone photo into a studio or occasion photo, and use ready campaigns with tips, captions and hashtags for every Gulf occasion.",
+        "Turn a plain phone photo into a studio or occasion photo, and use ready campaigns with tips, captions and hashtags for every Arabian Gulf occasion.",
       h1: "Studio photos and occasion campaigns, no designer needed",
-      lead: "Take a plain photo of your product with your phone, and Orderat turns it into a clean studio shot. Before every Gulf occasion, a ready campaign gives you ideas, captions, and hashtags.",
+      lead: "Take a plain photo of your product with your phone, and Orderat turns it into a clean studio shot. Before every Arabian Gulf occasion, a ready campaign gives you ideas, captions, and hashtags.",
       highlights: [
         "An ordinary phone photo becomes a studio or occasion-styled photo",
         "The product itself never changes — only the background and lighting do",
@@ -538,7 +538,7 @@ export const FEATURES = [
           body: "Pick a photo from your phone, choose a studio or occasion style, and pick a shape (square, portrait, story). Orderat prepares the result in seconds so you can compare it with the original before saving.",
         },
         {
-          heading: "A calendar of Gulf occasions",
+          heading: "A calendar of Arabian Gulf occasions",
           body: "The Today card reminds you of the next occasion days ahead, with both Hijri and Gregorian dates, and suggests a ready campaign.",
         },
         {

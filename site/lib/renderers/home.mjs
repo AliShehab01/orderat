@@ -16,7 +16,7 @@ const COPY = {
     metaTitle: "اوردرات | نظّم طلبات واتساب وإنستغرام لمشروعك",
     metaDescription:
       "اوردرات تطبيق لأصحاب الأعمال الصغيرة: طلبات واتساب وإنستغرام في مكان واحد، عملاء، أرباح، فاتورة ضريبية اختيارية، مخزون اختياري، وأدوات ذكاء اصطناعي. قريباً على App Store و Google Play.",
-    eyebrow: "لأصحاب الأعمال الصغيرة في الخليج",
+    eyebrow: "لأصحاب الأعمال الصغيرة في الخليج العربي",
     h1: "طلبات واضحة. يوم أهدأ.",
     heroLead:
       "اوردرات يجمع طلبات واتساب وإنستغرام في مكان واحد بموعدها وحالتها، ويحسب لك ربحك الحقيقي — لكل مشروع منزلي، متجر، خدمة، مطعم، أو عربة طعام.",
@@ -37,7 +37,7 @@ const COPY = {
     metaTitle: "Orderat | Organize WhatsApp & Instagram orders for your business",
     metaDescription:
       "Orderat is an app for small businesses: WhatsApp and Instagram orders in one place, customers, profit, optional tax invoices, optional stock, and AI tools. Launching soon on the App Store and Google Play.",
-    eyebrow: "For small businesses across the Gulf",
+    eyebrow: "For small businesses across the Arabian Gulf",
     h1: "Orders clear. Day calm.",
     heroLead:
       "Orderat brings your WhatsApp and Instagram orders into one place with their date and status, and works out your real profit — for home businesses, shops, services, restaurants, and food trucks alike.",

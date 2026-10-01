@@ -60,7 +60,7 @@ WhatsApp-share clause is Android-only, so it stays out of the App Store copy.
 سياسة الخصوصية: https://orderatweb.com/privacy/
 اتفاقية الترخيص القياسية من Apple: https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
 
-عربي وإنجليزي، فاتح وداكن، والعملات الخليجية.
+عربي وإنجليزي، فاتح وداكن، وعملات الخليج العربي.
 
 **App Store keywords (100, comma-separated):**
 طلبات,واتساب,فاتورة,ضريبة,مخزون,مشروع,متجر,مبيعات,ارباح,مصاريف,عملاء,توصيل,حسابات,اسر منتجة
@@ -120,7 +120,7 @@ Terms of Service: https://orderatweb.com/en/terms/
 Privacy Policy: https://orderatweb.com/en/privacy/
 Apple's standard EULA: https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
 
-Arabic and English, light and dark, and Gulf currencies.
+Arabic and English, light and dark, and Arabian Gulf currencies.
 
 **App Store keywords (100):**
 orders,whatsapp,invoice,vat,stock,small business,shop,sales,profit,expenses,customers,delivery,zatca

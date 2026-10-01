@@ -12,7 +12,7 @@ export const HIGHLIGHTS = [
   { icon: "phone", ar: "بياناتك على جوالك", en: "Your data stays on your phone" },
   { icon: "percent", ar: "بدون عمولة على الطلبات", en: "No commission on orders" },
   // VAT rates for Bahrain, Saudi Arabia, the UAE and Oman (config.mjs VAT_RATES).
-  { icon: "vat", ar: "فواتير ضريبية للخليج", en: "VAT invoices for the Gulf" },
+  { icon: "vat", ar: "فواتير ضريبية للخليج العربي", en: "VAT invoices for the Arabian Gulf" },
   { icon: "ask", ar: "اسأل اوردرات بالذكاء الاصطناعي", en: "Ask Orderat, with AI" },
 ];
 
