@@ -118,6 +118,28 @@ describe("validateSyncBody / record ids", () => {
   });
 });
 
+// Tester feedback 1 Oct 2026: the new shop setting and the new order key pass validation as they are
+// (who may write them is server/sync/record-access.ts's concern).
+describe("validateSyncBody / new record keys", () => {
+  const sync = (changes: unknown[]) => validateSyncBody(JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 0, changes }));
+
+  it("accepts the deliveryDefaults setting, {feeMinor: int >= 0}", () => {
+    for (const feeMinor of [0, 500, 1250]) {
+      const result = sync([{ entity: "setting", id: "deliveryDefaults", data: { value: { feeMinor } } }]);
+      expect(result).toEqual({ ok: true, body: expect.objectContaining({ changes: [expect.objectContaining({ entity: "setting", id: "deliveryDefaults", data: { value: { feeMinor } } })] }) });
+    }
+  });
+
+  it("accepts an order's outForDeliveryAt as an ISO date or null, kept as sent", () => {
+    for (const outForDeliveryAt of ["2026-10-01T10:00:00.000Z", null]) {
+      const data = { status: "ready", fulfillmentType: "delivery", outForDeliveryAt };
+      const result = sync([{ entity: "order", id: "0f8c2a1e-3b4d-4c5e-8f90-123456789abc", data }]);
+      expect(result.ok).toBe(true);
+      if (result.ok && result.body.action === "sync") expect(result.body.changes[0]!.data).toEqual(data);
+    }
+  });
+});
+
 describe("validateSyncBody / photos", () => {
   it("accepts photo_upload and photo_url", () => {
     expect(validateSyncBody(JSON.stringify({ action: "photo_upload", shopId: SHOP_ID, mimeType: "image/jpeg", data: "abc" }))).toEqual({
