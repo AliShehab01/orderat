@@ -669,10 +669,10 @@ const addressRows = v => Math.min(4, Math.max(2, String(v || '').split('\n').len
 function openEditOrder(o) {
   const delivery = o.fulfillment === 'delivery';
   openModal(t('order.edit'), `<form data-form="edit-order" data-id="${esc(o.id)}" class="stack">
-    ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" value="${esc(inputDateTime(new Date(o.dueAt)))}" required>`)}
+    ${field(t('neworder.dueAt'), `<input type="datetime-local" name="due" enterkeyhint="next" value="${esc(inputDateTime(new Date(o.dueAt)))}" required>`)}
     <div class="field"><span>${esc(t('neworder.fulfillment'))}</span>${seg('fulfillment', ['pickup', 'delivery'], o.fulfillment, k => t('fulfillment.' + k), 'edit-order-fulfillment')}</div>
     <div class="stack-sm" id="eo-delivery"${delivery ? '' : ' hidden'}>
-      <div class="grid2">${bahrain() ? field(t('shop.area'), `<select name="area"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, o.area, a => t('area.' + a))}</select>`) : ''}${field(t('orders.deliveryFee'), `<input name="fee" type="number" step="any" min="0" inputmode="decimal" value="${esc(o.deliveryFee || 0)}" data-live="edit-order-fee"${delivery ? ' data-touched="1"' : ''}>`)}</div>
+      <div class="grid2">${bahrain() ? field(t('shop.area'), `<select name="area"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, o.area, a => t('area.' + a))}</select>`) : ''}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" value="${esc(o.deliveryFee || 0)}" data-live="edit-order-fee"${delivery ? ' data-touched="1"' : ''}>`)}</div>
       ${field(t('order.address'), `<textarea name="address" rows="${addressRows(o.address)}" maxlength="200">${esc(o.address || '')}</textarea>`)}
     </div>
     ${field(t('neworder.notesTitle'), `<textarea name="notes" rows="2">${esc(o.notes || '')}</textarea>`)}
@@ -2168,8 +2168,8 @@ document.addEventListener('submit', e => {
   e.preventDefault();
   FORMS[f.dataset.form]?.(f, new FormData(f));
 });
-// Return in a New order field moves to the next field and never saves (implicit submission would
-// report the Save button as the submitter, so this does not look at e.submitter).
+// Return in a New order or Edit order field moves to the next field and never saves (implicit submission
+// would report the Save button as the submitter, so this does not look at e.submitter).
 document.addEventListener('keydown', e => {
   const el = e.target;
   if ((e.key === 'Enter' || e.key === ' ') && el.getAttribute?.('role') === 'button' && el.dataset.act) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el, e); return; }
@@ -2179,7 +2179,7 @@ document.addEventListener('keydown', e => {
     if (typingField(el)) { e.preventDefault(); el.blur(); }
     return;
   }
-  const f = el.closest("form[data-form='new-order']");
+  const f = el.closest("form[data-form='new-order'], form[data-form='edit-order']");
   if (!f) return;
   e.preventDefault();
   const fields = [...f.querySelectorAll('input, select, textarea')].filter(x => !x.disabled && !['hidden', 'radio', 'checkbox', 'file', 'submit', 'button'].includes(x.type) && x.offsetParent !== null);
