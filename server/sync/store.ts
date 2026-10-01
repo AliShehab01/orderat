@@ -293,13 +293,16 @@ export async function upsertRecord(
  * their phone's cursor unsent, and a grant must bring them. Returns how many records moved.
  */
 export async function resequenceRecords(sql: SqlClient, shopId: string, entity: Entity): Promise<number> {
-  const rows = await sql.query<{ id: string }>(
-    `update orderat.records set seq = nextval(pg_get_serial_sequence('orderat.records', 'seq'))
-     where shop_id = $1 and entity = $2
-     returning id`,
+  const rows = await sql.query<{ count: number }>(
+    `with moved as (
+       update orderat.records set seq = nextval(pg_get_serial_sequence('orderat.records', 'seq'))
+       where shop_id = $1 and entity = $2
+       returning 1
+     )
+     select count(*)::int as count from moved`,
     [shopId, entity],
   );
-  return rows.length;
+  return rows[0]?.count ?? 0;
 }
 
 /** Up to `limit` records for `shopId` with seq > cursor, oldest-first — the exact "records with
