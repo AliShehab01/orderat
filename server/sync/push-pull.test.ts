@@ -334,6 +334,124 @@ describe("F01 / what each member pulls and may push", () => {
   });
 });
 
+// Security retest 1 Oct 2026, R01: a prepare-only or money-only push read the order, merged its own
+// fields onto that copy and wrote the whole record back, so an owner edit landing in between (a new
+// total, say) was silently put back, with no conflict reported. Each push below is interleaved
+// deterministically with another device's write: `racing` hands pushChanges a client that runs that
+// other write right after pushChanges reads the record, before the read comes back: exactly the window
+// the retest found (read, other write, write).
+describe("R01 / a push racing another write to the same record", () => {
+  const AT = "2026-10-01T10:00:00.000Z";
+  const LATER = "2026-10-01T10:05:00.000Z";
+  const ORDER = { customerId: "c1", status: "confirmed", fulfillmentType: "pickup", paymentStatus: "unpaid", items: [{ id: "i1", productId: "p1", quantity: 2, unitPriceMinor: 5000 }], totalMinor: 10000, payments: [], changes: [], updatedAt: AT };
+  const staff = (flags: Partial<Member["permissions"]>): Member => ({ role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, ...flags } });
+  const isRecordRead = (text: string) => /^\s*select\b[\s\S]*\bfrom orderat\.records\b/i.test(text);
+
+  /** `sql`, except that the first `times` reads of a record each run `otherWrite` before they return. */
+  function racing(otherWrite: () => Promise<unknown>, times = 1): SqlClient {
+    let left = times;
+    return {
+      async query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> {
+        const rows = await sql.query<T>(text, params);
+        if (left > 0 && isRecordRead(text)) {
+          left--;
+          await otherWrite();
+        }
+        return rows;
+      },
+    };
+  }
+
+  let seeded: number;
+  /** The seq the other device's write left the record at. */
+  let otherSeq: number;
+  beforeEach(async () => {
+    expect(await pushChanges(sql, SHOP_ID, owner, [change({ entity: "order", id: "o1", data: ORDER })], OWNER_ID)).toEqual({ conflicts: [], rejected: [] });
+    seeded = (await findRecord(sql, SHOP_ID, "order", "o1"))!.seq;
+    otherSeq = 0;
+  });
+
+  /** Another device's push of `c` as `member`, from the same up-to-date copy (baseSeq: the seeded seq),
+   * noting the seq it leaves the record at. */
+  const otherDevice = (member: Member, c: Partial<ChangeInput>) => async () => {
+    const result = await pushChanges(sql, SHOP_ID, member, [change({ baseSeq: seeded, ...c })], member === owner ? OWNER_ID : STAFF_ID);
+    expect(result.rejected).toEqual([]);
+    otherSeq = (await findRecord(sql, SHOP_ID, c.entity!, c.id!))!.seq;
+  };
+  /** The owner's other phone changes the total. */
+  const ownerEditsTotal = () => otherDevice(owner, { entity: "order", id: "o1", data: { ...ORDER, totalMinor: 12000, updatedAt: LATER } })();
+
+  it("prepare only: the status lands on the owner's new total, and the push reports the conflict", async () => {
+    const ready = { id: "h1", field: "status", oldValue: "confirmed", newValue: "ready", note: null, at: LATER };
+    const pushed = { ...ORDER, status: "ready", changes: [ready], updatedAt: LATER };
+    const result = await pushChanges(racing(ownerEditsTotal), SHOP_ID, staff({ prepare: true }), [change({ entity: "order", id: "o1", data: pushed, baseSeq: seeded })], STAFF_ID);
+
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))!.data).toEqual({ ...ORDER, totalMinor: 12000, status: "ready", changes: [ready], updatedAt: LATER });
+    // Reported like any other conflict: the seq of the version this push was applied on top of.
+    expect(result).toEqual({ conflicts: [{ entity: "order", id: "o1", seq: otherSeq }], rejected: [] });
+    expect(otherSeq).toBeGreaterThan(seeded);
+  });
+
+  it("money only: the payment lands on the owner's new total, and the push reports the conflict", async () => {
+    const payment = { id: "pay1", amountMinor: 12000, method: "cash", note: null, paidAt: LATER };
+    const paid = { id: "h2", field: "paymentStatus", oldValue: "unpaid", newValue: "paid", note: null, at: LATER };
+    const pushed = { ...ORDER, payments: [payment], paymentStatus: "paid", changes: [paid], updatedAt: LATER };
+    const result = await pushChanges(racing(ownerEditsTotal), SHOP_ID, staff({ money: true }), [change({ entity: "order", id: "o1", data: pushed, baseSeq: seeded })], STAFF_ID);
+
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))!.data).toEqual({ ...ORDER, totalMinor: 12000, payments: [payment], paymentStatus: "paid", changes: [paid], updatedAt: LATER });
+    expect(result).toEqual({ conflicts: [{ entity: "order", id: "o1", seq: otherSeq }], rejected: [] });
+  });
+
+  it("a status change and a payment racing each other: both land, and the later push reports the conflict", async () => {
+    const paidMeanwhile = otherDevice(staff({ money: true }), { entity: "order", id: "o1", data: { ...ORDER, paymentStatus: "paid" } });
+    const result = await pushChanges(racing(paidMeanwhile), SHOP_ID, staff({ prepare: true }), [change({ entity: "order", id: "o1", data: { ...ORDER, status: "ready" }, baseSeq: seeded })], STAFF_ID);
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))!.data).toEqual({ ...ORDER, status: "ready", paymentStatus: "paid" });
+    expect(result).toEqual({ conflicts: [{ entity: "order", id: "o1", seq: otherSeq }], rejected: [] });
+  });
+
+  it("the same pushes with no write in between report no conflict", async () => {
+    const prepare = await pushChanges(sql, SHOP_ID, staff({ prepare: true }), [change({ entity: "order", id: "o1", data: { ...ORDER, status: "ready" }, baseSeq: seeded })], STAFF_ID);
+    expect(prepare).toEqual({ conflicts: [], rejected: [] });
+    const afterPrepare = (await findRecord(sql, SHOP_ID, "order", "o1"))!.seq;
+    const money = await pushChanges(sql, SHOP_ID, staff({ money: true }), [change({ entity: "order", id: "o1", data: { ...ORDER, status: "ready", paymentStatus: "paid" }, baseSeq: afterPrepare })], STAFF_ID);
+    expect(money).toEqual({ conflicts: [], rejected: [] });
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))!.data).toEqual({ ...ORDER, status: "ready", paymentStatus: "paid" });
+  });
+
+  it("two owner phones: the last writer still wins the whole record, and now hears about the conflict", async () => {
+    const otherPhone = otherDevice(owner, { entity: "order", id: "o1", data: { ...ORDER, totalMinor: 12000 } });
+    const result = await pushChanges(racing(otherPhone), SHOP_ID, owner, [change({ entity: "order", id: "o1", data: { ...ORDER, status: "ready" }, baseSeq: seeded })], OWNER_ID);
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))!.data).toEqual({ ...ORDER, status: "ready" });
+    expect(result).toEqual({ conflicts: [{ entity: "order", id: "o1", seq: otherSeq }], rejected: [] });
+  });
+
+  it("an order the owner deletes in between is refused to prepare-only staff, with the tombstone as the server's copy", async () => {
+    const ownerDeletes = otherDevice(owner, { entity: "order", id: "o1", data: ORDER, deleted: true });
+    const result = await pushChanges(racing(ownerDeletes), SHOP_ID, staff({ prepare: true }), [change({ entity: "order", id: "o1", data: { ...ORDER, status: "ready" }, baseSeq: seeded })], STAFF_ID);
+    const stored = (await findRecord(sql, SHOP_ID, "order", "o1"))!;
+    expect(stored).toMatchObject({ deleted: true, data: ORDER, seq: otherSeq });
+    expect(result).toEqual({ conflicts: [], rejected: [{ entity: "order", id: "o1", reason: "forbidden", record: { data: ORDER, deleted: true, seq: otherSeq, updatedAt: stored.updatedAt } }] });
+  });
+
+  it("a record another phone creates in between is not overwritten blind: the push lands on top and is reported", async () => {
+    const otherPhoneCreates = otherDevice(owner, { entity: "customer", id: "c9", data: { name: "Noora", phone: "+97333000001" }, baseSeq: 0 });
+    const result = await pushChanges(racing(otherPhoneCreates), SHOP_ID, owner, [change({ entity: "customer", id: "c9", data: { name: "Noora A." } })], OWNER_ID);
+    expect((await findRecord(sql, SHOP_ID, "customer", "c9"))!.data).toEqual({ name: "Noora A." });
+    expect(result).toEqual({ conflicts: [{ entity: "customer", id: "c9", seq: otherSeq }], rejected: [] });
+  });
+
+  it("gives up with an error, writing nothing stale, when the record changes under every attempt", async () => {
+    let total = 12000;
+    const keepsEditing = async () => {
+      total += 1;
+      await pushChanges(sql, SHOP_ID, owner, [change({ entity: "order", id: "o1", data: { ...ORDER, totalMinor: total } })], OWNER_ID);
+    };
+    const push = pushChanges(racing(keepsEditing, 100), SHOP_ID, staff({ prepare: true }), [change({ entity: "order", id: "o1", data: { ...ORDER, status: "ready" }, baseSeq: seeded })], STAFF_ID);
+    await expect(push).rejects.toThrow(/kept changing/);
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))!.data).toEqual({ ...ORDER, totalMinor: total });
+  });
+});
+
 describe("pullForMember / pagination", () => {
   it("reports more: true and a cursor at the page boundary when more records remain", async () => {
     const changes: ChangeInput[] = Array.from({ length: 3 }, (_, i) => change({ id: `order-${i}` }));

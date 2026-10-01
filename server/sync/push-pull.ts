@@ -6,7 +6,7 @@
 import type { SqlClient } from "../agent/postgres-store.ts";
 import type { Member } from "./permissions.ts";
 import { canPull, decidePush, type Entity } from "./record-access.ts";
-import { findRecord, pullRecords, upsertRecord, type RecordRow } from "./store.ts";
+import { findRecord, pullRecords, writeRecordIfUnchanged, type RecordRow } from "./store.ts";
 import type { ChangeInput } from "./validate.ts";
 
 export interface Conflict {
@@ -32,22 +32,48 @@ export interface PushResult {
 
 const PULL_PAGE_SIZE = 500;
 
+/** How many times one change is read, decided and written before the push gives up (throws, so the
+ * sync answers 500 and the phone retries it later). Each further attempt means yet another write to
+ * this very record landed between this one's read and its write; with a handful of devices per shop,
+ * even a second attempt is rare. */
+const MAX_WRITE_ATTEMPTS = 5;
+
 /**
- * Applies every change in `changes`, in order, each as its own permission check + upsert — not
- * wrapped in one all-or-nothing SQL transaction, because the spec's own unit of atomicity is a single
- * record ("the server applies each change in a transaction" reads, in context, as "each accepted
- * change is applied atomically", matching the per-record primary key every change targets); one
- * change rejected by permissions never blocks the rest of the batch from applying.
+ * Applies every change in `changes`, in order, each one atomically on its own record — not wrapped in
+ * one all-or-nothing SQL transaction, because the spec's own unit of atomicity is a single record
+ * ("the server applies each change in a transaction" reads, in context, as "each accepted change is
+ * applied atomically", matching the per-record primary key every change targets); one change rejected
+ * by permissions never blocks the rest of the batch from applying.
  *
- * A change whose `baseSeq` is behind the record's *previous* seq (or, for a brand-new record, any
- * positive baseSeq at all — that can only mean the client thinks a server copy exists that doesn't)
- * is still applied (last writer wins) and reported in `conflicts`.
+ * Atomic per record (security retest 1 Oct 2026, R01): a change is read, checked (record-access.ts's
+ * decidePush) and written as one unit. The write is a compare-and-swap on the seq that was read
+ * (store.ts's writeRecordIfUnchanged), so it only lands on the very version it was decided on; when
+ * another write got in between, the record is read and decided again. A `prepare` or `money` push
+ * therefore merges its few fields onto the order as it is now — an owner's new total stays — and a push
+ * onto a record that was deleted meanwhile is decided against the tombstone.
+ *
+ * A change whose `baseSeq` is behind the seq of the version it replaced (or, for a brand-new record,
+ * any positive baseSeq at all — that can only mean the client thinks a server copy exists that doesn't)
+ * is still applied (last writer wins) and reported in `conflicts` with that version's seq — also when
+ * that version only appeared while this change was being applied.
  */
 export async function pushChanges(sql: SqlClient, shopId: string, member: Member, changes: ChangeInput[], updatedBy: string): Promise<PushResult> {
   const conflicts: Conflict[] = [];
   const rejected: Rejected[] = [];
 
   for (const change of changes) {
+    const outcome = await applyChange(sql, shopId, member, change, updatedBy);
+    if (outcome.rejected) rejected.push(outcome.rejected);
+    if (outcome.conflict) conflicts.push(outcome.conflict);
+  }
+
+  return { conflicts, rejected };
+}
+
+/** One change of pushChanges: read, decide and write, again from the read whenever the write finds the
+ * record changed since. */
+async function applyChange(sql: SqlClient, shopId: string, member: Member, change: ChangeInput, updatedBy: string): Promise<{ conflict?: Conflict; rejected?: Rejected }> {
+  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
     const existing = await findRecord(sql, shopId, change.entity, change.id);
     const stored = existing ? { data: existing.data, deleted: existing.deleted } : undefined;
     const decision = decidePush(member, change.entity, change.id, change.data, change.deleted, stored);
@@ -55,24 +81,23 @@ export async function pushChanges(sql: SqlClient, shopId: string, member: Member
       // The server's copy goes back only to a member allowed to pull it; for anyone else, the phone
       // drops its local copy (docs/sme-phase-2-cloud.md "Sync").
       const visible = existing && canPull(member, change.entity, change.id);
-      rejected.push({
-        entity: change.entity,
-        id: change.id,
-        reason: decision.reason,
-        ...(visible ? { record: { data: existing.data, deleted: existing.deleted, seq: existing.seq, updatedAt: existing.updatedAt } } : {}),
-      });
-      continue;
+      return {
+        rejected: {
+          entity: change.entity,
+          id: change.id,
+          reason: decision.reason,
+          ...(visible ? { record: { data: existing.data, deleted: existing.deleted, seq: existing.seq, updatedAt: existing.updatedAt } } : {}),
+        },
+      };
     }
 
-    await upsertRecord(sql, shopId, change.entity, change.id, decision.data, change.deleted, updatedBy);
+    const written = await writeRecordIfUnchanged(sql, shopId, change.entity, change.id, decision.data, change.deleted, updatedBy, existing?.seq);
+    if (!written) continue; // Another write landed since the read: decide again on the record as it is now.
 
     const previousSeq = existing?.seq ?? 0;
-    if (previousSeq > (change.baseSeq ?? 0)) {
-      conflicts.push({ entity: change.entity, id: change.id, seq: previousSeq });
-    }
+    return previousSeq > (change.baseSeq ?? 0) ? { conflict: { entity: change.entity, id: change.id, seq: previousSeq } } : {};
   }
-
-  return { conflicts, rejected };
+  throw new Error(`sync push: a ${change.entity} record kept changing while it was written (${MAX_WRITE_ATTEMPTS} attempts)`);
 }
 
 export interface PullResult {

@@ -236,6 +236,8 @@ export interface RecordRow {
   updatedAt: string;
 }
 
+const RECORD_COLUMNS = "entity, id, data, deleted, seq, updated_at";
+
 function toRecordRow(row: Record<string, unknown>): RecordRow {
   return {
     entity: row.entity as Entity,
@@ -249,7 +251,7 @@ function toRecordRow(row: Record<string, unknown>): RecordRow {
 
 export async function findRecord(sql: SqlClient, shopId: string, entity: Entity, id: string): Promise<RecordRow | undefined> {
   const rows = await sql.query<Record<string, unknown>>(
-    `select entity, id, data, deleted, seq, updated_at from orderat.records where shop_id = $1 and entity = $2 and id = $3`,
+    `select ${RECORD_COLUMNS} from orderat.records where shop_id = $1 and entity = $2 and id = $3`,
     [shopId, entity, id],
   );
   return rows[0] ? toRecordRow(rows[0]) : undefined;
@@ -260,7 +262,8 @@ export async function findRecord(sql: SqlClient, shopId: string, entity: Entity,
  * — "last writer wins" (docs/sme-phase-2-cloud.md) is decided purely by which write's `seq` ends up
  * highest, so the UPDATE branch re-draws from the bigserial's own sequence explicitly
  * (`nextval(pg_get_serial_sequence(...))`) rather than relying on its DEFAULT, which Postgres only
- * ever applies on INSERT.
+ * ever applies on INSERT. A blind write, whatever the record holds by then: the sync push writes
+ * through writeRecordIfUnchanged below instead (security retest 1 Oct 2026, R01).
  */
 export async function upsertRecord(
   sql: SqlClient,
@@ -280,10 +283,55 @@ export async function upsertRecord(
            updated_by = excluded.updated_by,
            updated_at = now(),
            seq = nextval(pg_get_serial_sequence('orderat.records', 'seq'))
-     returning entity, id, data, deleted, seq, updated_at`,
+     returning ${RECORD_COLUMNS}`,
     [shopId, entity, id, JSON.stringify(data), deleted, updatedBy],
   );
   return toRecordRow(rows[0]!);
+}
+
+/**
+ * Writes one record only if it is still the version the caller read (security retest 1 Oct 2026, R01):
+ * a compare-and-swap on `seq`, which every write to a record re-draws, so a seq that still matches
+ * means no other write landed in between. `expectedSeq` is the seq the caller read, or undefined when
+ * it read no row at all: the write then only inserts, and only while the record still does not exist.
+ * One statement either way, so it is atomic without a transaction (the transaction pooler and both SQL
+ * drivers run it as is): under READ COMMITTED, an UPDATE that has to wait for a concurrent write to the
+ * same row re-checks `seq` on the row that write left, and an INSERT that meets a row inserted
+ * meanwhile does nothing.
+ *
+ * Returns the row as stored, with a fresh seq, or undefined when another write got there first and
+ * nothing was written: the caller reads the record again and decides afresh (server/sync/push-pull.ts).
+ */
+export async function writeRecordIfUnchanged(
+  sql: SqlClient,
+  shopId: string,
+  entity: Entity,
+  id: string,
+  data: Record<string, unknown>,
+  deleted: boolean,
+  updatedBy: string,
+  expectedSeq: number | undefined,
+): Promise<RecordRow | undefined> {
+  const rows = expectedSeq === undefined
+    ? await sql.query<Record<string, unknown>>(
+        `insert into orderat.records (shop_id, entity, id, data, deleted, updated_by, updated_at)
+         values ($1, $2, $3, $4::text::jsonb, $5, $6, now())
+         on conflict (shop_id, entity, id) do nothing
+         returning ${RECORD_COLUMNS}`,
+        [shopId, entity, id, JSON.stringify(data), deleted, updatedBy],
+      )
+    : await sql.query<Record<string, unknown>>(
+        `update orderat.records
+            set data = $4::text::jsonb,
+                deleted = $5,
+                updated_by = $6,
+                updated_at = now(),
+                seq = nextval(pg_get_serial_sequence('orderat.records', 'seq'))
+          where shop_id = $1 and entity = $2 and id = $3 and seq = $7
+          returning ${RECORD_COLUMNS}`,
+        [shopId, entity, id, JSON.stringify(data), deleted, updatedBy, expectedSeq],
+      );
+  return rows[0] ? toRecordRow(rows[0]) : undefined;
 }
 
 /**
@@ -310,7 +358,7 @@ export async function resequenceRecords(sql: SqlClient, shopId: string, entity: 
  * server/sync/push-pull.ts filters it by the caller's own permissions. */
 export async function pullRecords(sql: SqlClient, shopId: string, cursor: number, limit: number): Promise<RecordRow[]> {
   const rows = await sql.query<Record<string, unknown>>(
-    `select entity, id, data, deleted, seq, updated_at from orderat.records where shop_id = $1 and seq > $2 order by seq asc limit $3`,
+    `select ${RECORD_COLUMNS} from orderat.records where shop_id = $1 and seq > $2 order by seq asc limit $3`,
     [shopId, cursor, limit],
   );
   return rows.map(toRecordRow);

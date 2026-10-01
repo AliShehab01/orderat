@@ -26,6 +26,7 @@ import {
   resequenceRecords,
   updateMembershipPermissions,
   upsertRecord,
+  writeRecordIfUnchanged,
 } from "./store.ts";
 
 let sql: SqlClient;
@@ -214,6 +215,39 @@ describe("records", () => {
     expect((await findRecord(sql, SHOP_ID, "customer", "c1"))?.seq).toBe(customer.seq);
     expect((await findRecord(sql, otherShopId, "order", "order-1"))?.seq).toBe(elsewhere.seq);
     expect(await resequenceRecords(sql, SHOP_ID, "expense")).toBe(0);
+  });
+
+  // Security retest 1 Oct 2026, R01: the sync push writes a record only if it is still the version the
+  // push was decided on — a compare-and-swap on seq.
+  it("writeRecordIfUnchanged writes when the stored seq is the one read, with a fresh seq", async () => {
+    const read = await upsertRecord(sql, SHOP_ID, "order", "order-1", { status: "new", totalMinor: 100 }, false, OWNER_ID);
+    const written = await writeRecordIfUnchanged(sql, SHOP_ID, "order", "order-1", { status: "ready", totalMinor: 100 }, false, STAFF_ID, read.seq);
+    expect(written).toMatchObject({ entity: "order", id: "order-1", data: { status: "ready", totalMinor: 100 }, deleted: false });
+    expect(written!.seq).toBeGreaterThan(read.seq);
+    expect(await findRecord(sql, SHOP_ID, "order", "order-1")).toEqual(written);
+  });
+
+  it("writeRecordIfUnchanged writes nothing, and says so, once another write has changed the record", async () => {
+    const read = await upsertRecord(sql, SHOP_ID, "order", "order-1", { status: "new", totalMinor: 100 }, false, OWNER_ID);
+    const other = await upsertRecord(sql, SHOP_ID, "order", "order-1", { status: "new", totalMinor: 250 }, false, OWNER_ID);
+    expect(await writeRecordIfUnchanged(sql, SHOP_ID, "order", "order-1", { status: "ready", totalMinor: 100 }, false, STAFF_ID, read.seq)).toBeUndefined();
+    expect(await findRecord(sql, SHOP_ID, "order", "order-1")).toEqual(other);
+  });
+
+  it("writeRecordIfUnchanged with no seq creates the record only while it does not exist", async () => {
+    const created = await writeRecordIfUnchanged(sql, SHOP_ID, "order", "order-1", { status: "new" }, false, OWNER_ID, undefined);
+    expect(created).toMatchObject({ id: "order-1", data: { status: "new" } });
+    expect(await writeRecordIfUnchanged(sql, SHOP_ID, "order", "order-1", { status: "other" }, false, STAFF_ID, undefined)).toBeUndefined();
+    expect(await findRecord(sql, SHOP_ID, "order", "order-1")).toEqual(created);
+  });
+
+  it("writeRecordIfUnchanged leaves the same id in another shop alone", async () => {
+    const otherShopId = "55555555-5555-5555-5555-555555555555";
+    await insertShopCloud(sql, { id: otherShopId, ownerUserId: OWNER_ID, name: "Other shop" });
+    const mine = await upsertRecord(sql, SHOP_ID, "order", "order-1", { status: "new" }, false, OWNER_ID);
+    const theirs = await upsertRecord(sql, otherShopId, "order", "order-1", { status: "new" }, false, OWNER_ID);
+    expect(await writeRecordIfUnchanged(sql, otherShopId, "order", "order-1", { status: "ready" }, false, OWNER_ID, mine.seq)).toBeUndefined();
+    expect(await findRecord(sql, otherShopId, "order", "order-1")).toEqual(theirs);
   });
 });
 
