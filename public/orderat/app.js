@@ -720,6 +720,8 @@ const rerenderItems = p => (p === 'd' ? render() : renderEditItems());
 const qtyNum = v => Math.max(0, parseInt(v, 10) || 0);
 const itemsTotal = items => sum(items, it => qtyNum(it.qty) * (parseFloat(it.price) || 0));
 const lineName = it => (it.pid === 'custom' ? it.name : pName(productOf(it.pid) || { nameAr: it.name, nameEn: it.name }));
+// The line's name for a screen reader, "Custom item" while a custom line has none yet.
+const lineLabel = it => String(lineName(it) || '').trim() || t('neworder.customItem');
 // Adds a picked product: one more on the line that already has it (merged here only, never when an
 // order is cleaned or saved: a phone order may hold two lines of one product at different prices).
 function addProduct(list, pid) {
@@ -762,14 +764,17 @@ function itemsEditor(items, p) {
     const q = qtyNum(it.qty);
     const gone = it.pid !== 'custom' && !products.some(x => x.id === it.pid);
     const missing = gone ? `<option value="${esc(it.pid)}" selected>${esc(lineName(it))} ${esc(t('items.inactive'))}</option>` : '';
+    // The − and + say what they do and to which line ("Increase quantity of Cheesecake"), not just "+"
+    // (accessibility retest, 1 Oct 2026); the icons stay what is seen.
+    const name = lineLabel(it);
     const minus = q <= 1
-      ? `<button type="button" data-act="item-qty" ${attrs(i)} data-d="-1" aria-label="${esc(t('neworder.removeItem'))}">${icon('trash')}</button>`
-      : `<button type="button" data-act="item-qty" ${attrs(i)} data-d="-1" aria-label="−">${icon('minus')}</button>`;
+      ? `<button type="button" data-act="item-qty" ${attrs(i)} data-d="-1" aria-label="${esc(t('neworder.removeNamed', name))}">${icon('trash')}</button>`
+      : `<button type="button" data-act="item-qty" ${attrs(i)} data-d="-1" aria-label="${esc(t('neworder.decreaseQty', name))}">${icon('minus')}</button>`;
     return `<div class="item-row">
     <select data-live="item" ${attrs(i)} data-f="pid" aria-label="${esc(t('neworder.menuItem'))}">${missing}${products.map(x => `<option value="${esc(x.id)}"${x.id === it.pid ? ' selected' : ''}>${esc(pName(x))}</option>`).join('')}<option value="custom"${it.pid === 'custom' ? ' selected' : ''}>${esc(t('neworder.customItem'))}</option></select>
     ${it.pid === 'custom' ? `<input data-live="item" ${attrs(i)} data-f="name" value="${esc(it.name)}" placeholder="${esc(t('neworder.itemName'))}" aria-label="${esc(t('neworder.itemName'))}"${hint}>` : ''}
     <div class="item-controls">
-      <div class="stepper">${minus}<input class="qty" type="number" inputmode="numeric" min="1" max="99" step="1" data-live="item" ${attrs(i)} data-f="qty" value="${q}" aria-label="${esc(t('neworder.quantity'))}"${hint}><button type="button" data-act="item-qty" ${attrs(i)} data-d="1" aria-label="+">${icon('plus')}</button></div>
+      <div class="stepper">${minus}<input class="qty" type="number" inputmode="numeric" min="1" max="99" step="1" data-live="item" ${attrs(i)} data-f="qty" value="${q}" aria-label="${esc(t('neworder.quantity'))}"${hint}><button type="button" data-act="item-qty" ${attrs(i)} data-d="1" aria-label="${esc(t('neworder.increaseQty', name))}">${icon('plus')}</button></div>
       <input class="price" type="number" inputmode="decimal" step="any" min="0" data-live="item" ${attrs(i)} data-f="price" value="${esc(it.price)}" aria-label="${esc(t('neworder.price'))}"${hint}>
       <button type="button" class="icon-btn" data-act="item-del" ${attrs(i)} aria-label="${esc(t('neworder.removeItem'))}" title="${esc(t('neworder.removeItem'))}">${icon('trash')}</button>
     </div>
@@ -1417,7 +1422,7 @@ function viewShopLink() {
     <label class="field"><span>${esc(t('shoplink.slug'))}</span><span class="slug" dir="ltr"><span class="muted">/s/?</span><input name="slug" dir="ltr" data-live="slug" value="${esc(SLUG.value)}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sweetstudio"></span></label>
     <p class="small slug-status ${esc(SLUG.status)}" id="slug-status">${esc(slugStatusText())}</p>
     ${field(t('shoplink.bio'), `<textarea name="bio" rows="2" data-live="link-field">${esc(L.bio)}</textarea>`)}
-    <div class="split"><span>${esc(t('shoplink.leadTimeDays', L.leadDays))}</span><span class="stepper"><button type="button" data-act="lead" data-d="-1" aria-label="−">${icon('minus')}</button><b>${L.leadDays}</b><button type="button" data-act="lead" data-d="1" aria-label="+">${icon('plus')}</button></span></div>
+    <div class="split"><span>${esc(t('shoplink.leadTimeDays', L.leadDays))}</span><span class="stepper"><button type="button" data-act="lead" data-d="-1" aria-label="${esc(t('shoplink.leadTimeLess'))}">${icon('minus')}</button><b>${L.leadDays}</b><button type="button" data-act="lead" data-d="1" aria-label="${esc(t('shoplink.leadTimeMore'))}">${icon('plus')}</button></span></div>
     ${field(t('shoplink.delivery'), `<select name="delivery" data-live="link-field">${options(['both', 'pickup', 'delivery'], L.delivery, k => (k === 'both' ? t('shoplink.delivery.both') : t('fulfillment.' + k)))}</select>`)}
     ${toggle('acceptsWebOrders', t('shoplink.acceptsWebOrders'), L.acceptsWebOrders, 'link-field')}
     <h4 class="card-title">${esc(t('shoplink.products'))}</h4>
