@@ -528,6 +528,12 @@ describe("createSyncHandler / photos", () => {
     expect(body.url).toContain(shopId);
   });
 
+  it("money alone can fetch the receipt photos it uploads", async () => {
+    const { handler, staffSession, shopId } = await setUpShop({ money: true });
+    const { photoId } = await (await handler(post({ action: "photo_upload", shopId, mimeType: "image/jpeg", data: JPEG_BYTES.toString("base64") }, staffSession))).json();
+    expect((await handler(post({ action: "photo_url", shopId, photoId }, staffSession))).status).toBe(200);
+  });
+
   it("a member with every flag off pulls no photo ids and gets no photo_url (security review F01)", async () => {
     const { handler, staffSession, shopId } = await setUpShop();
     const res = await handler(post({ action: "photo_url", shopId, photoId: "a".repeat(64) }, staffSession));
