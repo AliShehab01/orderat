@@ -16,9 +16,13 @@ const COPY = {
     metaTitle: "اوردرات | نظّم طلبات واتساب وإنستغرام لمشروعك",
     metaDescription:
       "اوردرات تطبيق لأصحاب الأعمال الصغيرة: طلبات واتساب وإنستغرام في مكان واحد، عملاء، أرباح، فاتورة ضريبية اختيارية، مخزون اختياري، وأدوات ذكاء اصطناعي. قريباً على App Store و Google Play.",
+    eyebrow: "لأصحاب الأعمال الصغيرة في الخليج",
     h1: "طلبات واضحة. يوم أهدأ.",
     heroLead:
       "اوردرات يجمع طلبات واتساب وإنستغرام في مكان واحد بموعدها وحالتها، ويحسب لك ربحك الحقيقي — لكل مشروع منزلي، متجر، خدمة، مطعم، أو عربة طعام.",
+    ctaDemo: "جرّب الديمو",
+    ctaShop: "شوف رابط متجر تجريبي",
+    ctaNote: "بدون تسجيل: الديمو يشتغل من المتصفح ببيانات تجريبية.",
     problemLead:
       "طلب في محادثة، تعديل في رسالة صوتية، ودفعة نصف مسدّدة تنسى تتابعها. مع كل طلب جديد تكبر الفوضى، ويصعب عليك تعرف وش المفروض تسوي اليوم بالضبط.",
     problemPoints: [
@@ -33,9 +37,13 @@ const COPY = {
     metaTitle: "Orderat | Organize WhatsApp & Instagram orders for your business",
     metaDescription:
       "Orderat is an app for small businesses: WhatsApp and Instagram orders in one place, customers, profit, optional tax invoices, optional stock, and AI tools. Launching soon on the App Store and Google Play.",
+    eyebrow: "For small businesses across the Gulf",
     h1: "Orders clear. Day calm.",
     heroLead:
       "Orderat brings your WhatsApp and Instagram orders into one place with their date and status, and works out your real profit — for home businesses, shops, services, restaurants, and food trucks alike.",
+    ctaDemo: "Try the demo",
+    ctaShop: "See a demo shop link",
+    ctaNote: "No sign-up: the demo runs in your browser with sample data.",
     problemLead:
       "An order in one chat, a change in a voice note, and a partial payment you forget to follow up on. With every new order the chaos grows, and it gets hard to know exactly what today needs from you.",
     problemPoints: [
@@ -52,15 +60,21 @@ export function renderHome(lang) {
   const t = UI[lang];
   const c = COPY[lang];
 
+  // The web app's demo (its start screen offers "Try the demo" next to sign-in), in the page's language.
+  const demoAppHref = lang === "en" ? "/app/?lang=en" : "/app/";
+
   const body = `
 <section class="hero">
   <div class="wrap hero__inner">
+    <p class="hero__eyebrow">${esc(c.eyebrow)}</p>
     <h1>${esc(c.h1)}</h1>
     <p class="hero__lead">${esc(c.heroLead)}</p>
     <div class="hero__actions">
-      ${storeBadges(lang)}
-      <a class="btn btn--ghost" href="${escAttr(BRAND.demoShopUrl)}">${esc(t.tryDemo)}</a>
+      <a class="btn btn--primary btn--lg" href="${escAttr(demoAppHref)}">${esc(c.ctaDemo)}</a>
+      <a class="btn btn--ghost btn--lg" href="${escAttr(BRAND.demoShopUrl)}">${esc(c.ctaShop)}</a>
     </div>
+    <p class="hero__note">${esc(c.ctaNote)}</p>
+    ${storeBadges(lang, { compact: true })}
   </div>
 </section>
 

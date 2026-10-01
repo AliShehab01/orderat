@@ -36,6 +36,9 @@ html[lang="en"] body { font-family: var(--font-en); }
 img { max-width: 100%; display: block; }
 a { color: var(--brand-end); text-decoration: none; }
 a:hover { text-decoration: underline; }
+/* One clear keyboard focus ring everywhere (white on the blue CTA band). */
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid var(--brand-start); outline-offset: 2px; }
+.cta-band a:focus-visible { outline-color: #fff; }
 
 .wrap {
   max-width: var(--max-width);
@@ -122,6 +125,7 @@ p { margin: 0 0 1em; }
 .btn--ghost:hover { text-decoration: none; background: #eef0ff; }
 .btn--ghost-light { background: rgba(255,255,255,0.15); color: #fff; border: 1.5px solid rgba(255,255,255,0.6); }
 .btn--ghost-light:hover { text-decoration: none; background: rgba(255,255,255,0.25); }
+.btn--lg { padding: 0.9rem 1.9rem; font-size: 1.05rem; }
 
 .store-badges { display: flex; flex-wrap: wrap; gap: 0.6rem; }
 .store-badge {
@@ -132,10 +136,20 @@ p { margin: 0 0 1em; }
 .store-badges--compact .store-badge { padding: 0.45rem 0.9rem; font-size: 0.85rem; box-shadow: none; }
 
 /* Hero */
-.hero { padding-block: 3.5rem 3rem; }
+.hero { padding-block: 3.5rem 2rem; }
 .hero__inner { text-align: center; display: flex; flex-direction: column; align-items: center; }
+.hero__eyebrow {
+  margin-bottom: 1rem; padding: 0.3rem 1rem; border-radius: 999px;
+  background: #e6e9ff; color: var(--brand-end); font-weight: 600; font-size: 0.9rem;
+}
 .hero__lead { font-size: 1.2rem; color: var(--text-muted); max-width: 56ch; }
 .hero__actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.8rem; margin-top: 0.5rem; }
+.hero__note { color: var(--text-muted); font-size: 0.9rem; margin: 0.9rem 0 1rem; }
+.hero .store-badges { justify-content: center; }
+@media (max-width: 480px) {
+  /* Full-width, stacked CTAs on a phone: the demo first. */
+  .hero__actions { flex-direction: column; align-items: stretch; width: 100%; max-width: 22rem; }
+}
 
 /* Screenshots */
 .screenshots { padding-block: 0.5rem 2.5rem; }
