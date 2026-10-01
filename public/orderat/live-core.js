@@ -13,6 +13,8 @@
 // - stock: moves { id, delta, reason, orderId, note, at } newest first, the last 50 kept
 //   (Store.applyStockForStatusChange / applyStockDifference / adjustStock).
 // - buildAskSnapshot: AskSnapshotBuilder's JSON, same keys, first names and short refs only.
+// - AI order entry: an orderat-parse draft into the New order form, its pickup or delivery and address
+//   included (Bahrain's area to the area list, the rest as the one free-text address).
 // Web objects use major units (6.5 = 6.500 BHD); anything sent to the server is in minor units.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./cloud-map.js'));
@@ -289,6 +291,7 @@
 
   // ---------- AI order entry (orderat-parse) ----------
 
+  const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const cut = (s, n) => String(s || '').trim().slice(0, n);
   function parseProducts(products) {
     return (products || []).filter(p => p.active !== false).slice(0, 500).map(p => {
@@ -300,7 +303,19 @@
     }).filter(p => p.name && typeof p.id === 'string' && p.id.length <= 64);
   }
   const localInput = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-  function draftFields(draft, products) {
+  // The draft of an orderat-parse answer. The delivery keys (fulfillment 'pickup' | 'delivery' | null,
+  // address { area, block, road, building, flat, city, text }, deliveryNote) are read from the draft,
+  // else from the answer itself; an older server sends none of them.
+  const DELIVERY_KEYS = ['fulfillment', 'address', 'deliveryNote'];
+  function answerDraft(answer) {
+    const a = isObj(answer) ? answer : {};
+    const d = Object.assign({}, isObj(a.draft) ? a.draft : {});
+    DELIVERY_KEYS.forEach(k => { if (d[k] == null && a[k] != null) d[k] = a[k]; });
+    return d;
+  }
+  // `place` says how the shop writes an address: { bahrain, areaCode(name) → the form's area code or '',
+  // labels: { block, road, building, flat }, sep }. Without it the draft's address is left out.
+  function draftFields(draft, products, place) {
     const d = draft || {}, out = {};
     out.items = (d.items || []).map(it => {
       const p = (products || []).find(x => x.id === it.productId), qty = it.quantity > 0 ? it.quantity : 1;
@@ -309,7 +324,42 @@
     if (d.customerName) out.name = d.customerName;
     if (isFinite(time(d.collectionAt))) out.due = localInput(time(d.collectionAt));
     if (d.notes) out.notes = d.notes;
+    if (d.fulfillment === 'pickup' || d.fulfillment === 'delivery') out.fulfillment = d.fulfillment;
+    if (place) {
+      const a = deliveryAddress(d.address, d.deliveryNote, place);
+      if (a.area) out.area = a.area;
+      if (a.address) out.address = a.address;
+      // An address with no pickup or delivery said is a delivery: on pickup the form would hide it.
+      if (!out.fulfillment && (a.area || a.address)) out.fulfillment = 'delivery';
+    }
     return out;
+  }
+
+  // The order form's delivery address from the parts the AI (or the demo reader) found. A Bahrain shop
+  // picks its area from a list, so a known area (or city) goes there and everything else into the one
+  // free-text address: the other places, then "Block 935, Road 3510, Building 12, Flat 4" (a bare number
+  // gets its label), then the address as written, then the delivery note, one per line. Any other shop
+  // has the single address field, so it all goes into the text.
+  const ADDRESS_PARTS = ['block', 'road', 'building', 'flat'];
+  const LEADING_DIGIT = /^[0-9٠-٩۰-۹]/;
+  const piece = v => (typeof v === 'string' ? v.trim() : typeof v === 'number' && isFinite(v) ? String(v) : '');
+  const sameName = (a, b) => a.toLowerCase().replace(/\s+/g, ' ') === b.toLowerCase().replace(/\s+/g, ' ');
+  function deliveryAddress(address, note, place) {
+    const p = place || {}, labels = isObj(p.labels) ? p.labels : {}, sep = p.sep || ', ';
+    const a = isObj(address) ? address : { text: address };
+    const code = name => (name && p.bahrain && typeof p.areaCode === 'function' ? piece(p.areaCode(name)) : '');
+    const areaName = piece(a.area), city = piece(a.city);
+    const areaCode = code(areaName), cityCode = areaCode ? '' : code(city);
+    const parts = [];
+    if (areaName && !areaCode) parts.push(areaName);
+    if (city && !cityCode && !(areaName && sameName(city, areaName))) parts.push(city);
+    ADDRESS_PARTS.forEach(k => {
+      const v = piece(a[k]);
+      if (v) parts.push(LEADING_DIGIT.test(v) && piece(labels[k]) ? `${piece(labels[k])} ${v}` : v);
+    });
+    const line = parts.join(sep), text = piece(a.text), extra = piece(note);
+    const lines = [line, text === line ? '' : text, extra].filter(Boolean);
+    return { area: areaCode || cityCode, address: lines.join('\n').slice(0, 500) };
   }
 
   // ---------- Ask Orderat snapshot (AskSnapshot.swift) ----------
@@ -421,6 +471,7 @@
   return {
     subscriptionAllowed, subscriptionActive, aiDemo, callingCode, localDigits, normalizePhone, access, formatInvoice, nextInvoice, invoiceLabel,
     vatMinor, defaultRateBps, applyVat, orderMinor, stockForStatus, stockForEdit, orderNumbers, historyLabel,
-    cleanItems, parseProducts, draftFields, buildAskSnapshot, canMoveOrderStock, flushBeforeLeaving, createPermissionEditor,
+    cleanItems, parseProducts, answerDraft, draftFields, deliveryAddress, buildAskSnapshot, canMoveOrderStock, flushBeforeLeaving,
+    createPermissionEditor,
   };
 });

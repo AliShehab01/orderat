@@ -620,6 +620,11 @@ const I18N = {
   'err.amount': ['Enter an amount above 0', 'اكتب مبلغاً أكبر من 0', 'اكتبي مبلغاً أكبر من 0'],
   'err.productName': ['Add a name', 'أضف اسماً', 'أضيفي اسماً'],
   'order.address': ['Address', 'العنوان'],
+  // An address the AI read, written out as one line: "Block 935, Road 3510, Building 12, Flat 4".
+  'address.block': ['Block', 'مجمع'],
+  'address.road': ['Road', 'طريق'],
+  'address.building': ['Building', 'مبنى'],
+  'address.flat': ['Flat', 'شقة'],
   'order.copyAddress': ['Copy', 'نسخ'],
   'order.openMaps': ['Open in Maps', 'افتح في الخرائط', 'افتحي في الخرائط'],
   'orders.reopen': ['Reopen', 'إعادة فتح'],
