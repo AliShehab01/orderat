@@ -14,6 +14,9 @@ changed, what is left, and the steps the founder takes to deploy.
 | F06 | | iOS Keychain items can move to another device | To do: iOS app |
 | F07 | | HSTS | Handled by the site agent |
 
+A retest on 1 October 2026 found two more server issues (R01, and F05's session class), settled the
+client IP question and brought F04's Next.js upgrade: see "Retest 1 Oct" at the end.
+
 ## F01 (high): staff permissions on sync
 
 **Finding.** A staff member with every flag off (`orders`, `prepare`, `money` and `products` all
@@ -284,3 +287,163 @@ The site agent handles this in `site/`. Nothing on this branch.
    - iOS: the Keychain change (F06).
    - F03 once the store credentials exist.
    - The F04 dependency upgrade.
+
+## Retest 1 Oct
+
+An external retest of `main` at `41fc4b5` on 1 October 2026 found two more server issues, answered the
+open question about the client IP header, and flagged one accessibility issue in the web app. The fixes
+are on the branch `fix/retest-oct1` (not merged to `main`), one commit per item, with F04's dependency
+upgrade.
+
+| | Severity | Finding | Status |
+|---|---|---|---|
+| R01 | Medium | A restricted staff push could put an owner's edit back | Fixed (server: `orderat-sync`) |
+| F05 | Medium | The caller chose whether its session was a phone's | Fixed (server: `orderat-auth`) |
+| IP | | Can a caller choose its client IP? (F02, "What remains") | Checked on the live gateway: no |
+| A11y | | New order quantity buttons were announced as "+" and "−" | Fixed (web app) |
+| F04 | | Next.js advisory | Fixed: `next` 16.3.8; Vitest left as is |
+
+### R01 (medium): a staff push could undo an owner's edit
+
+**Finding.** A staff push with `prepare` or `money` (and not `orders`) read the order, merged the fields
+its flag covers onto that copy, and wrote the whole record back (`server/sync/push-pull.ts`,
+`record-access.ts`, `store.ts`). When the owner changed the order between that read and that write (a
+new `totalMinor`, say), the staff write put the old total back. Its `baseSeq` matched the copy it had
+read, so no conflict was reported either.
+
+**What changed.** Each change is now read, checked and written as one unit per record:
+- The write is a compare-and-swap on the record's `seq`, which every write re-draws
+  (`store.ts` `writeRecordIfUnchanged`): `UPDATE ... WHERE seq = <the seq read>`, or, for a record
+  that did not exist, `INSERT ... ON CONFLICT DO NOTHING`. Each is a single statement, so it needs no
+  transaction and works through the transaction pooler.
+- When another write landed in between, nothing is written; the record is read again and the change
+  decided again on the record as it is now (`push-pull.ts`). A `prepare` or `money` push therefore only
+  changes its own fields on the current stored order, and a push onto an order deleted meanwhile is
+  decided against the tombstone (refused for these staff, with the tombstone as the server's copy).
+- A conflict is reported as before, `{ entity, id, seq }`, with the seq of the version the push actually
+  replaced, also when that version only appeared while the push was running. Two owner phones still get
+  last-writer-wins on the whole record, and now hear about the conflict too.
+- After 5 attempts in a row lose to other writes, the sync answers 500 and the phone retries later. With
+  a handful of devices per shop, even a second attempt is rare.
+- **Clients:** no change. The merged record has a fresh `seq`, so the same sync's pull already brings it
+  back to the phone that pushed.
+
+**Tests:** `server/sync/push-pull.test.ts` ("R01"), against PGlite, with each push interleaved
+deterministically with another device's write between its read and its write: the owner's total edit
+racing a prepare-only status change and a money-only payment, a status change racing a payment, two
+owner phones, a delete in between, a record created in between, and a record that keeps changing.
+`server/sync/store.test.ts` covers the compare-and-swap itself.
+
+### F05 (medium): the caller chose its session class
+
+**Finding.** `signin`'s body field `client` decided the session class. `client: "app"` with a token for
+the website (the Sign in with Apple Services ID, or the Google web client) got a phone's session: no
+fixed end, and allowed to approve website pairings, which mint further sessions.
+
+**What changed** (`server/auth/providers.ts` `sessionClientFor`, `handler.ts`, `verify-token.ts`,
+`supabase/functions/orderat-auth/index.ts`). The verified token decides:
+
+| Token | Session |
+|---|---|
+| Apple, `aud` `com.ams.orderat` (the iPhone app) | phone ("app") |
+| Google, `aud` the iOS client (the iPhone app) | phone ("app") |
+| Google, `aud` the web client, `azp` another client of the project (the Android app) | phone ("app") |
+| Apple, `aud` `com.ams.orderat.web` (the website's Services ID) | browser ("web"), 30 days |
+| Google, `aud` the web client, `azp` the same or none (the website) | browser ("web"), 30 days |
+| Any other audience that verifies | browser ("web"), 30 days |
+
+- **Why `azp`.** The Android app asks Google for tokens addressed to the web client (`serverClientId`),
+  so `aud` alone cannot tell Android from the website. Google puts the Android client's own id in
+  `azp`, and issues such a cross-client token only to a native app of the same Google Cloud project.
+  `verify-token.ts` now reports `azp`.
+- **`client`** is still validated (`"web"`, `"app"` or absent; anything else is 400) and otherwise
+  ignored. A value the token overruled is logged as `requestedClient`. The `auth_signin` log line now
+  says which kind of session it started (`client`).
+- **Pairing approval** stays phone-only: only a session with no fixed end approves (unchanged check).
+- **Sessions started before the deploy** keep their kind; nothing records which token started them.
+  The website has always sent `client: "web"`, so only a hand-made request could have got a phone's
+  session from a website token. The 180-day idle limit applies to those too.
+- **Configuration.** `orderat-auth` passes the apps' audiences: `com.ams.orderat` and the Google iOS
+  client (plus `ORDERAT_GOOGLE_IOS_CLIENT_ID` when set). No new secrets.
+
+**Tests:** `server/auth/handler.test.ts` ("F05"): five tokens (Apple iPhone, Apple website, Google
+website, Google Android, Google iPhone) times three `client` values (none, `"app"`, `"web"`), checking
+the stored expiry and whether `pair_approve` is allowed; plus the log line. `providers.test.ts` covers
+`sessionClientFor` alone and `verify-token.test.ts` the `azp` claim.
+
+### The client IP header: checked on the live gateway
+
+F02 left open whether a caller could choose its client IP for the per-IP limits (the AI calls,
+`pair_start`, shop orders), which key on the first `X-Forwarded-For` entry (`server/shared/crypto.ts`
+`hashClientIp`). The live gateway was tested on 1 Oct 2026:
+- A client-sent `X-Forwarded-For: 1.2.3.4` does not reach the function.
+- The gateway rewrites `X-Forwarded-For`, and its first entry equals `cf-connecting-ip`, the address
+  Cloudflare saw the call come from.
+
+So a script cannot rotate its per-IP bucket by sending the header, and no code change is needed.
+`hashClientIp` now records this in its comment. Should the hosting ever change (another proxy in front,
+or a gateway that appends instead of rewriting), switch it to `cf-connecting-ip`.
+
+### Web app: the quantity buttons say what they do
+
+The New order and Edit items quantity buttons were announced as just "−" and "+". They now read
+"Decrease quantity of Cheesecake" / "Increase quantity of Cheesecake" ("تقليل كمية …" / "زيادة كمية …"),
+and the minus with one left, which removes the line, "Remove Cheesecake" (`public/orderat/app.js`,
+`i18n.js`). A custom line without a name yet reads "Custom item". The shop link's lead-time buttons
+had the same bare symbols and now read "Decrease lead time" / "Increase lead time". The icons seen are
+unchanged. **Tests:** `web/a11y-steppers.test.js` runs the items editor with the real labels, in English
+and Arabic, and checks that no button in `app.js` or `live.js` is labelled with a bare symbol.
+
+### F04: dependencies
+
+- **Next.js:** `next` and `eslint-config-next` 16.3.5 → 16.3.8, the newest 16.3.x; the critical `next/og`
+  advisory affects 16.2.0 to 16.3.5. Only the `next` packages moved in the lockfile, and `npm audit` reports
+  nothing for `next` now. Checked: `npx vitest run`, eslint (0 errors), `npm run site:check`,
+  `npx next build --webpack` and `npm run build`. Nothing to redeploy for it: the site (`site/`) and the
+  Edge Functions do not run Next.js; the Next.js app is the local `npm run dev` frame.
+- **Vitest: not upgraded, on purpose.** Its moderate advisory (`@vitest/mocker` before 4.1.11) is
+  dev-only: Vitest runs tests on a developer's machine and ships nowhere. The fix is Vitest 4.1.11, a
+  major upgrade: do it separately and check `vitest.config.mts` and `server/test-setup.ts` with it.
+
+### Deploy
+
+1. **Review the branch.** Review `fix/retest-oct1` and merge it when ready.
+2. **No migration and no new secrets.**
+3. **Redeploy two functions:**
+   ```
+   npm run hosting:deploy -- orderat-sync orderat-auth
+   ```
+   - `orderat-sync`: R01.
+   - `orderat-auth`: F05.
+   - The other functions need nothing; `server/shared/crypto.ts` only gained a comment.
+4. **Web app:** the quantity labels ship with the next site deploy (`site/build.mjs` copies
+   `public/orderat` into the site).
+5. **Smoke checks:**
+   - **Sync:** on one phone the owner changes an order's total while a prepare-only staff phone marks the
+     same order ready. After both sync, the order has the new total and the new status.
+   - **Sign-in:** a website sign-in logs `auth_signin` with `client: "web"`; iPhone and Android sign-ins
+     log `client: "app"`, and "Open on computer" still approves from both phones. If an Android Google
+     sign-in logs `"web"`, its tokens carry no separate `azp`: redeploy the previous `orderat-auth` and
+     report it, since Android would then be unable to approve pairings.
+
+### What remains
+
+- **F03:** server-verified purchases (the design above); it needs the store credentials.
+- **Field minimization for staff without `money`:** product cost and other money fields still reach
+  every staff member who may pull products or orders (F01, "No field-level read redaction"). Redacting
+  them needs the phones to stop writing whole records back, or a redacted field would overwrite the
+  owner's value.
+- **Android: a rejected-sync notice.** A refused push is reverted silently to the server's copy (or the
+  local copy is dropped). The seller should be told, and the rejection-without-copy paths in F01's
+  "What remains" fixed.
+- **iOS: Keychain save results.** `KeychainStore.set` returns whether the save worked, but its three
+  callers (`AuthManager`, `CloudAccountManager`, `ShopClient`) ignore it, so a failed save of a session
+  or an edit token goes unnoticed until the next launch.
+- **Backups:** confirm the database backups on the Supabase plan in use (daily backups or point-in-time
+  recovery) and run one restore test. Nothing in this repository covers it.
+- **Canonical host redirects:** `orderat-app.pages.dev` and `www.orderatweb.com` reach
+  `https://orderatweb.com` only through a script in the page. A server-side 301 needs a Cloudflare
+  redirect rule, since Pages' `_redirects` cannot redirect one hostname to another: a Single Redirect
+  for `www.orderatweb.com` and Bulk Redirects for the `pages.dev` address, set up by the founder in the
+  Cloudflare dashboard.
+- **Vitest 4** (see F04).

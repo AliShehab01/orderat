@@ -34,7 +34,15 @@ export function sha256HexOfString(value: string): Promise<string> {
 /** A request's client IP as a per-IP rate limit keys it: `x-forwarded-for`'s first entry (Supabase
  * sets this) — the original client, before any proxy — hashed with the server's salt before ever
  * touching a row, never the raw IP. Falls back to a fixed bucket, "unknown", when the header is absent
- * (local testing, or a direct call) so rate limiting still applies, just coarsely. */
+ * (local testing, or a direct call) so rate limiting still applies, just coarsely.
+ *
+ * Trusted because the gateway writes the header itself, which the security review of 1 Oct 2026 left
+ * to check (docs/security-review-2026-10-01.md, "Retest 1 Oct"). Checked against the live gateway on
+ * 1 Oct 2026: a client-sent `X-Forwarded-For: 1.2.3.4` never reaches the function; the gateway
+ * rewrites X-Forwarded-For, and its first entry equals `cf-connecting-ip`, the address Cloudflare saw
+ * the call come from. So a caller cannot pick its own bucket by sending the header. Should that ever
+ * change (another proxy in front, a gateway that appends instead), read `cf-connecting-ip` here
+ * instead. */
 export function hashClientIp(req: Request, ipSalt: string): Promise<string> {
   const forwardedFor = req.headers.get("x-forwarded-for");
   const ip = forwardedFor?.split(",")[0]?.trim() || "unknown";
