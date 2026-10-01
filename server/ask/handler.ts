@@ -4,14 +4,16 @@
 // runs the same under Deno, Node or a test.
 //
 // Order of work, matching the spec: validate the body (never counted against a limit if invalid) ->
-// check the Gemini key is configured -> check + record the per-install and global limits (before
-// calling Gemini, so a rejected request never pays for a model call) -> build the prompt -> call
-// Gemini -> validate its actions against the snapshot -> respond. Every response is JSON; every
-// error path returns the exact shape docs/ask-orderat.md specifies.
+// check the Gemini key is configured -> check + record the caller's own limits (per account with a
+// valid X-Orderat-Session, else per client IP and install — server/usage/trusted-limits.ts) and the
+// global one (before calling Gemini, so a rejected request never pays for a model call) -> build the
+// prompt -> call Gemini -> validate its actions against the snapshot -> respond. Every response is
+// JSON; every error path returns the exact shape docs/ask-orderat.md specifies.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { askGemini, GeminiAskError } from "../ai/ask.ts";
 import type { GeminiConfig } from "../ai/gemini.ts";
+import { identifyAiCaller } from "../usage/trusted-limits.ts";
 import { collectSnapshotRefs, validateActions } from "./actions.ts";
 import { checkAndRecordUsage, DEFAULT_LIMITS, type AskLimits } from "./limits.ts";
 import { buildAskPrompt } from "./prompt.ts";
@@ -19,6 +21,9 @@ import { validateAskBody } from "./validate.ts";
 
 export interface AskHandlerDeps {
   sql: SqlClient;
+  /** The salt a client IP is hashed with before it keys a per-IP limit (server/usage/trusted-limits.ts)
+   * — the same ORDERAT_AUTH_IP_SALT orderat-auth uses. */
+  ipSalt: string;
   /** Undefined when ORDERAT_GEMINI_API_KEY isn't set — every request then gets 502 ai_unavailable. */
   gemini?: GeminiConfig;
   limits?: Partial<AskLimits>;
@@ -56,9 +61,11 @@ export function createAskHandler(deps: AskHandlerDeps): (req: Request) => Promis
       return aiUnavailableResponse();
     }
 
-    const usage = await checkAndRecordUsage(deps.sql, { installId: body.installId, demo: body.demo, now: now(), limits });
+    const at = now();
+    const caller = await identifyAiCaller(deps.sql, req, { ipSalt: deps.ipSalt, now: at });
+    const usage = await checkAndRecordUsage(deps.sql, { caller, installId: body.installId, demo: body.demo, now: at, limits });
     if (!usage.ok) {
-      log({ event: "ask", status: 429, reason: usage.reason });
+      log({ event: "ask", status: 429, caller: caller.kind, reason: usage.reason });
       return jsonResponse({ error: usage.reason }, 429);
     }
 
@@ -68,7 +75,7 @@ export function createAskHandler(deps: AskHandlerDeps): (req: Request) => Promis
       const { answer, model } = await askGemini(deps.gemini, prompt, deps.fetchImpl);
       const refs = collectSnapshotRefs(body.snapshot);
       const actions = validateActions(answer.actions, refs);
-      log({ event: "ask", status: 200, model, latencyMs: Date.now() - started, actionCount: actions.length });
+      log({ event: "ask", status: 200, caller: caller.kind, model, latencyMs: Date.now() - started, actionCount: actions.length });
       return jsonResponse({ answer: answer.answer, actions, remainingToday: usage.remainingToday }, 200);
     } catch (err) {
       log({ event: "ask", status: 502, latencyMs: Date.now() - started, reason: err instanceof GeminiAskError ? "gemini_error" : "unexpected_error" });

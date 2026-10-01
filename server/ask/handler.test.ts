@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SqlClient } from "../agent/postgres-store.ts";
+import { createSession, newSessionToken, upsertUser } from "../auth/store.ts";
 import { createAskHandler, type AskHandlerDeps } from "./handler.ts";
 import { createAskUsageTestSql } from "./pglite-test-support.ts";
 
@@ -11,8 +12,8 @@ beforeEach(async () => {
 
 /** createAskHandler with a silent log by default, like server/whatsapp/webhook.test.ts's own
  * `log: () => {}` convention — tests that care about log output pass their own. */
-function makeHandler(deps: Omit<AskHandlerDeps, "sql">): (req: Request) => Promise<Response> {
-  return createAskHandler({ sql, log: () => {}, ...deps });
+function makeHandler(deps: Omit<AskHandlerDeps, "sql" | "ipSalt">): (req: Request) => Promise<Response> {
+  return createAskHandler({ sql, ipSalt: "test-ip-salt", log: () => {}, ...deps });
 }
 
 function req(body: unknown, init: RequestInit = {}): Request {
@@ -154,13 +155,47 @@ describe("createAskHandler", () => {
     expect(tried).toEqual(["busy-model", "good-model"]);
   });
 
-  it("never logs the question, history, or snapshot — only status/model/latency/counts", async () => {
+  it("never logs the question, history, snapshot or client IP — only status/model/latency/counts and the kind of caller", async () => {
     const logs: Record<string, unknown>[] = [];
     const handler = makeHandler({ gemini: { apiKey: "k" }, fetchImpl: fetchReturning({ answer: "ok", actions: [] }), log: (entry) => logs.push(entry) });
-    await handler(req(validBody({ question: "SECRET-QUESTION-TEXT", snapshot: { currency: "BHD", secretField: "SECRET-SNAPSHOT-VALUE" } })));
+    await handler(req(validBody({ question: "SECRET-QUESTION-TEXT", snapshot: { currency: "BHD", secretField: "SECRET-SNAPSHOT-VALUE" } }), { headers: { "x-forwarded-for": "203.0.113.77" } }));
     const serialized = JSON.stringify(logs);
     expect(serialized).not.toContain("SECRET-QUESTION-TEXT");
     expect(serialized).not.toContain("SECRET-SNAPSHOT-VALUE");
-    expect(logs).toEqual([{ event: "ask", status: 200, model: expect.any(String), latencyMs: expect.any(Number), actionCount: 0 }]);
+    expect(serialized).not.toContain("203.0.113.77");
+    expect(logs).toEqual([{ event: "ask", status: 200, caller: "anonymous", model: expect.any(String), latencyMs: expect.any(Number), actionCount: 0 }]);
+  });
+});
+
+// Security review 1 Oct 2026, F02: limits a client cannot reset by changing installId or claiming demo=false.
+describe("createAskHandler / limits a client cannot reset", () => {
+  const from = (ip: string, extra: Record<string, string> = {}): RequestInit => ({ headers: { "x-forwarded-for": ip, ...extra } });
+
+  it("a new installId on every question stops at the client IP's cap", async () => {
+    const handler = makeHandler({ gemini: { apiKey: "k" }, limits: { perIp: 3 }, fetchImpl: fetchReturning({ answer: "ok" }) });
+    for (let i = 0; i < 3; i++) expect((await handler(req(validBody({ installId: `fresh-${i}`, demo: true }), from("203.0.113.7")))).status).toBe(200);
+    const blocked = await handler(req(validBody({ installId: "fresh-new", demo: true }), from("203.0.113.7")));
+    expect(blocked.status).toBe(429);
+    expect(await blocked.json()).toEqual({ error: "daily_limit" });
+  });
+
+  it("claiming demo=false without a session: at most 30 questions a day from one IP", async () => {
+    const handler = makeHandler({ gemini: { apiKey: "k" }, fetchImpl: fetchReturning({ answer: "ok" }) });
+    for (let i = 0; i < 30; i++) expect((await handler(req(validBody({ installId: `paid-${i}` }), from("203.0.113.7")))).status).toBe(200);
+    expect((await handler(req(validBody({ installId: "paid-new" }), from("203.0.113.7")))).status).toBe(429);
+  });
+
+  it("signed in, the account's own quota: a new installId does not reset it, and the log says account", async () => {
+    const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "apple", providerSub: "apple-sub-1" });
+    const { token, tokenHash } = await newSessionToken();
+    await createSession(sql, { tokenHash, userId: user.id, now: new Date() });
+    const logs: Record<string, unknown>[] = [];
+    const handler = makeHandler({ gemini: { apiKey: "k" }, limits: { perInstall: 1 }, fetchImpl: fetchReturning({ answer: "ok" }), log: (entry) => logs.push(entry) });
+    const first = await handler(req(validBody({ installId: "phone" }), from("203.0.113.7", { "x-orderat-session": token })));
+    expect(first.status).toBe(200);
+    expect((await first.json()).remainingToday).toBe(0);
+    expect((await handler(req(validBody({ installId: "browser" }), from("198.51.100.9", { "x-orderat-session": token })))).status).toBe(429);
+    expect(logs.map((l) => [l.status, l.caller])).toEqual([[200, "account"], [429, "account"]]);
+    expect(JSON.stringify(logs)).not.toContain(user.id);
   });
 });

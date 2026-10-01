@@ -15,6 +15,11 @@ import type { SqlClient } from "../agent/postgres-store.ts";
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "db", "migrations");
 const MIGRATION_0001 = readFileSync(join(MIGRATIONS_DIR, "0001_orderat_isolation.sql"), "utf8");
 const MIGRATION_0002 = readFileSync(join(MIGRATIONS_DIR, "0002_ai_usage.sql"), "utf8");
+// The trusted limits (server/usage/trusted-limits.ts): 0009's per-IP and per-account counters, and
+// 0004/0005's users and sessions, which a signed-in call's account quota resolves its session against.
+const MIGRATION_0004 = readFileSync(join(MIGRATIONS_DIR, "0004_cloud.sql"), "utf8");
+const MIGRATION_0005 = readFileSync(join(MIGRATIONS_DIR, "0005_web_sessions.sql"), "utf8");
+const MIGRATION_0009 = readFileSync(join(MIGRATIONS_DIR, "0009_ai_trusted_limits.sql"), "utf8");
 
 let dbPromise: Promise<InstanceType<typeof PGlite>> | undefined;
 
@@ -23,16 +28,20 @@ function getDb() {
     const db = new PGlite();
     await db.exec(MIGRATION_0001);
     await db.exec(MIGRATION_0002);
+    await db.exec(MIGRATION_0004);
+    await db.exec(MIGRATION_0005);
+    await db.exec(MIGRATION_0009);
     return db;
   })();
   return dbPromise;
 }
 
-/** A fresh-looking SqlClient backed by the shared PGlite instance, with `orderat.ai_usage` and
- * `orderat.ai_usage_daily` truncated so each test starts with no rows. */
+/** A fresh-looking SqlClient backed by the shared PGlite instance, with `orderat.ai_usage`,
+ * `orderat.ai_usage_daily`, the trusted counters and the accounts truncated so each test starts with no
+ * rows. */
 export async function createAskUsageTestSql(): Promise<SqlClient> {
   const db = await getDb();
-  await db.exec("truncate table orderat.ai_usage, orderat.ai_usage_daily;");
+  await db.exec("truncate table orderat.ai_usage, orderat.ai_usage_daily, orderat.ai_ip_usage, orderat.ai_account_usage, orderat.sessions, orderat.users cascade;");
   return {
     async query<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
       const result = await db.query<T>(text, params);

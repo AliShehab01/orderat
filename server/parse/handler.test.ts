@@ -7,6 +7,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SqlClient } from "../agent/postgres-store.ts";
+import { createSession, newSessionToken, upsertUser } from "../auth/store.ts";
 import { createMarketingTestSql } from "../marketing-pglite-test-support.ts";
 import { createParseHandler } from "./handler.ts";
 
@@ -27,11 +28,11 @@ function failingGemini(status = 500) {
 }
 
 function makeHandler(fetchImpl: typeof fetch, overrides: Record<string, unknown> = {}) {
-  return createParseHandler({ sql, gemini: { apiKey: "test-key" }, now: () => NOW, log: () => {}, fetchImpl, ...overrides });
+  return createParseHandler({ sql, ipSalt: "test-ip-salt", gemini: { apiKey: "test-key" }, now: () => NOW, log: () => {}, fetchImpl, ...overrides });
 }
 
-function post(body: unknown): Request {
-  return new Request("https://example.test/orderat-parse", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+function post(body: unknown, headers: Record<string, string> = {}): Request {
+  return new Request("https://example.test/orderat-parse", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 }
 
 function baseBody(overrides: Record<string, unknown> = {}) {
@@ -105,7 +106,7 @@ describe("createParseHandler / image validation", () => {
 
 describe("createParseHandler / limits", () => {
   it("returns ai_unavailable when Gemini isn't configured", async () => {
-    const handler = createParseHandler({ sql, now: () => NOW, log: () => {}, fetchImpl: fakeGemini({}) });
+    const handler = createParseHandler({ sql, ipSalt: "test-ip-salt", now: () => NOW, log: () => {}, fetchImpl: fakeGemini({}) });
     const res = await handler(post(baseBody()));
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: "ai_unavailable" });
@@ -146,6 +147,40 @@ describe("createParseHandler / limits", () => {
     await handler(post({ installId: "install-1", platform: "ios", appVersion: "1.0.0", products: [] })); // No text/image: invalid_body.
     const res = await handler(post(baseBody()));
     expect((await res.json()).remainingToday).toBe(49); // Still the first real request of the day.
+  });
+});
+
+// Security review 1 Oct 2026, F02: limits a client cannot reset by changing installId or claiming demo=false.
+describe("createParseHandler / limits a client cannot reset", () => {
+  const empty = () => fakeGemini({ isOrder: true, language: "en", items: [] });
+
+  it("a new installId on every request stops at the client IP's cap (demo or not)", async () => {
+    const handler = makeHandler(empty(), { limits: { perIp: 4 } });
+    for (let i = 0; i < 4; i++) expect((await handler(post(baseBody({ installId: `fresh-${i}`, demo: i % 2 === 0 }), { "x-forwarded-for": "203.0.113.7" }))).status).toBe(200);
+    const res = await handler(post(baseBody({ installId: "fresh-new", demo: true }), { "x-forwarded-for": "203.0.113.7" }));
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: "daily_limit" });
+  });
+
+  it("demo=false without a session gets the stricter per-IP cap, and remainingToday shows it", async () => {
+    const handler = makeHandler(empty(), { limits: { perIpPaidClaim: 2 } });
+    const first = await handler(post(baseBody({ installId: "paid-1" }), { "x-forwarded-for": "203.0.113.7" }));
+    expect((await first.json()).remainingToday).toBe(1);
+    expect((await handler(post(baseBody({ installId: "paid-2" }), { "x-forwarded-for": "203.0.113.7" }))).status).toBe(200);
+    expect((await handler(post(baseBody({ installId: "paid-3" }), { "x-forwarded-for": "203.0.113.7" }))).status).toBe(429);
+    // A demo request from the same IP still has the IP's wider budget.
+    expect((await handler(post(baseBody({ installId: "demo-1", demo: true }), { "x-forwarded-for": "203.0.113.7" }))).status).toBe(200);
+  });
+
+  it("signed in, the quota is the account's own: new installIds and IPs share it", async () => {
+    const user = await upsertUser(sql, { id: "11111111-1111-1111-1111-111111111111", provider: "google", providerSub: "google-sub-1" });
+    const { token, tokenHash } = await newSessionToken();
+    await createSession(sql, { tokenHash, userId: user.id, now: NOW });
+    const handler = makeHandler(empty(), { limits: { perInstallDemo: 2 } });
+    const headers = (ip: string) => ({ "x-forwarded-for": ip, "x-orderat-session": token });
+    expect((await handler(post(baseBody({ installId: "a", demo: true }), headers("203.0.113.7")))).status).toBe(200);
+    expect((await handler(post(baseBody({ installId: "b", demo: true }), headers("198.51.100.9")))).status).toBe(200);
+    expect((await handler(post(baseBody({ installId: "c", demo: true }), headers("192.0.2.1")))).status).toBe(429);
   });
 });
 

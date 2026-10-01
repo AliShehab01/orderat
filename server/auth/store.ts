@@ -201,7 +201,7 @@ export interface ResolvedSession {
  * authentication). Refreshes `last_seen_at` on a successful resolution once the stored one is at least
  * LAST_SEEN_REFRESH_MS old (never moving it backwards), per docs/sme-phase-2-cloud.md. Every other
  * caller that authenticates by session (server/sync/handler.ts, server/auth/handler.ts itself, and the
- * AI functions' account quotas, server/usage/ai-caller.ts) goes through this, never
+ * AI functions' account quotas, server/usage/trusted-limits.ts) goes through this, never
  * findSessionByTokenHash directly.
  */
 export async function resolveSession(sql: SqlClient, token: string, now: Date): Promise<ResolvedSession | undefined> {

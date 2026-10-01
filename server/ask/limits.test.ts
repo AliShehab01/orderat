@@ -5,8 +5,13 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SqlClient } from "../agent/postgres-store.ts";
-import { checkAndRecordUsage, dayKey, incrementDailyUsage, incrementInstallUsage } from "./limits.ts";
+import { upsertUser } from "../auth/store.ts";
+import type { AiCaller } from "../usage/trusted-limits.ts";
+import { checkAndRecordUsage, dayKey, DEFAULT_LIMITS, incrementDailyUsage, incrementInstallUsage } from "./limits.ts";
 import { createAskUsageTestSql } from "./pglite-test-support.ts";
+
+/** A question without a signed-in session, from one client IP (its salted hash). */
+const ANON: AiCaller = { kind: "anonymous", ipHash: "ip-hash-a" };
 
 let sql: SqlClient;
 
@@ -65,49 +70,73 @@ describe("checkAndRecordUsage", () => {
   it("allows a request within the per-install limit and reports what's left", async () => {
     const limits = { perInstall: 30, perInstallDemo: 3, globalCap: 3000 };
     for (let i = 1; i <= 5; i++) {
-      const result = await checkAndRecordUsage(sql, { installId: "install-a", demo: false, now, limits });
+      const result = await checkAndRecordUsage(sql, { caller: ANON, installId: "install-a", demo: false, now, limits });
       expect(result).toEqual({ ok: true, remainingToday: 30 - i });
     }
   });
 
   it("blocks the 31st question of the day for a non-demo install with daily_limit", async () => {
     const limits = { perInstall: 30, perInstallDemo: 3, globalCap: 3000 };
-    for (let i = 0; i < 30; i++) expect((await checkAndRecordUsage(sql, { installId: "install-a", demo: false, now, limits })).ok).toBe(true);
-    expect(await checkAndRecordUsage(sql, { installId: "install-a", demo: false, now, limits })).toEqual({ ok: false, reason: "daily_limit" });
+    for (let i = 0; i < 30; i++) expect((await checkAndRecordUsage(sql, { caller: ANON, installId: "install-a", demo: false, now, limits })).ok).toBe(true);
+    expect(await checkAndRecordUsage(sql, { caller: ANON, installId: "install-a", demo: false, now, limits })).toEqual({ ok: false, reason: "daily_limit" });
   });
 
   it("blocks the 4th question of the day for a demo install with daily_limit", async () => {
     const limits = { perInstall: 30, perInstallDemo: 3, globalCap: 3000 };
-    for (let i = 0; i < 3; i++) expect((await checkAndRecordUsage(sql, { installId: "install-demo", demo: true, now, limits })).ok).toBe(true);
-    expect(await checkAndRecordUsage(sql, { installId: "install-demo", demo: true, now, limits })).toEqual({ ok: false, reason: "daily_limit" });
+    for (let i = 0; i < 3; i++) expect((await checkAndRecordUsage(sql, { caller: ANON, installId: "install-demo", demo: true, now, limits })).ok).toBe(true);
+    expect(await checkAndRecordUsage(sql, { caller: ANON, installId: "install-demo", demo: true, now, limits })).toEqual({ ok: false, reason: "daily_limit" });
   });
 
   it("keeps demo and non-demo limits independent even for the same install id", async () => {
     const limits = { perInstall: 30, perInstallDemo: 3, globalCap: 3000 };
     // Three demo questions use up the demo allowance...
-    for (let i = 0; i < 3; i++) expect((await checkAndRecordUsage(sql, { installId: "shared-install", demo: true, now, limits })).ok).toBe(true);
-    expect(await checkAndRecordUsage(sql, { installId: "shared-install", demo: true, now, limits })).toEqual({ ok: false, reason: "daily_limit" });
+    for (let i = 0; i < 3; i++) expect((await checkAndRecordUsage(sql, { caller: ANON, installId: "shared-install", demo: true, now, limits })).ok).toBe(true);
+    expect(await checkAndRecordUsage(sql, { caller: ANON, installId: "shared-install", demo: true, now, limits })).toEqual({ ok: false, reason: "daily_limit" });
     // ...but the same install id in non-demo mode is a separate counter entirely (still fresh).
-    expect((await checkAndRecordUsage(sql, { installId: "shared-install", demo: false, now, limits })).ok).toBe(true);
+    expect((await checkAndRecordUsage(sql, { caller: ANON, installId: "shared-install", demo: false, now, limits })).ok).toBe(true);
   });
 
   it("blocks with busy once the global cap is reached, even for installs under their own limit", async () => {
     const limits = { perInstall: 30, perInstallDemo: 3, globalCap: 2 };
-    expect((await checkAndRecordUsage(sql, { installId: "install-a", demo: false, now, limits })).ok).toBe(true);
-    expect((await checkAndRecordUsage(sql, { installId: "install-b", demo: false, now, limits })).ok).toBe(true);
-    expect(await checkAndRecordUsage(sql, { installId: "install-c", demo: false, now, limits })).toEqual({ ok: false, reason: "busy" });
+    expect((await checkAndRecordUsage(sql, { caller: ANON, installId: "install-a", demo: false, now, limits })).ok).toBe(true);
+    expect((await checkAndRecordUsage(sql, { caller: ANON, installId: "install-b", demo: false, now, limits })).ok).toBe(true);
+    expect(await checkAndRecordUsage(sql, { caller: ANON, installId: "install-c", demo: false, now, limits })).toEqual({ ok: false, reason: "busy" });
   });
 
   it("checks the per-install limit before the global cap, so an over-limit install never spends the global budget", async () => {
     const limits = { perInstall: 1, perInstallDemo: 1, globalCap: 3000 };
-    expect((await checkAndRecordUsage(sql, { installId: "install-a", demo: false, now, limits })).ok).toBe(true);
-    expect(await checkAndRecordUsage(sql, { installId: "install-a", demo: false, now, limits })).toEqual({ ok: false, reason: "daily_limit" });
+    expect((await checkAndRecordUsage(sql, { caller: ANON, installId: "install-a", demo: false, now, limits })).ok).toBe(true);
+    expect(await checkAndRecordUsage(sql, { caller: ANON, installId: "install-a", demo: false, now, limits })).toEqual({ ok: false, reason: "daily_limit" });
     // The global counter should have recorded only the first (allowed) request, not the blocked one.
     expect(await incrementDailyUsage(sql, dayKey(now))).toBe(2);
   });
 
   it("uses DEFAULT_LIMITS (30/3/3000) when no limits override is given", async () => {
-    const result = await checkAndRecordUsage(sql, { installId: "install-defaults", demo: false, now });
+    const result = await checkAndRecordUsage(sql, { caller: ANON, installId: "install-defaults", demo: false, now });
     expect(result).toEqual({ ok: true, remainingToday: 29 });
+  });
+
+  // Security review F02 (docs/security-review-2026-10-01.md): limits the client cannot reset.
+  it("defaults: 60 questions a day per IP without a session, 30 of them claiming demo=false", () => {
+    expect(DEFAULT_LIMITS).toEqual({ perInstall: 30, perInstallDemo: 3, globalCap: 3000, perIp: 60, perIpPaidClaim: 30 });
+  });
+
+  it("a new installId on every question stops at the client IP's cap", async () => {
+    const limits = { perIp: 5 };
+    for (let i = 0; i < 5; i++) expect((await checkAndRecordUsage(sql, { caller: ANON, installId: `install-${i}`, demo: true, now, limits })).ok).toBe(true);
+    expect(await checkAndRecordUsage(sql, { caller: ANON, installId: "install-new", demo: true, now, limits })).toEqual({ ok: false, reason: "daily_limit" });
+  });
+
+  it("demo=false without a session: at most perIpPaidClaim a day from one IP, whatever the installIds", async () => {
+    for (let i = 0; i < 30; i++) expect((await checkAndRecordUsage(sql, { caller: ANON, installId: `paid-${i}`, demo: false, now })).ok).toBe(true);
+    expect(await checkAndRecordUsage(sql, { caller: ANON, installId: "paid-new", demo: false, now })).toEqual({ ok: false, reason: "daily_limit" });
+  });
+
+  it("a signed-in account is counted on the account: a new installId does not reset it", async () => {
+    const userId = "11111111-1111-1111-1111-111111111111";
+    await upsertUser(sql, { id: userId, provider: "google", providerSub: "google-sub-1" });
+    const account: AiCaller = { kind: "account", userId };
+    for (let i = 0; i < 3; i++) expect((await checkAndRecordUsage(sql, { caller: account, installId: `install-${i}`, demo: true, now })).ok).toBe(true);
+    expect(await checkAndRecordUsage(sql, { caller: account, installId: "install-new", demo: true, now })).toEqual({ ok: false, reason: "daily_limit" });
   });
 });

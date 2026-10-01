@@ -7,23 +7,32 @@
 // already passed (server/ask/validate.ts) and are never uncounted afterwards, even if the request
 // then turns out to be over a limit or Gemini fails — see 0002_ai_usage.sql's comment on
 // orderat.ai_usage_daily for why.
+//
+// Since the security review of 1 Oct 2026 (F02), the per-install counter is no longer the only one: the
+// limits a client cannot reset (server/usage/trusted-limits.ts — per account for a signed-in call, per
+// client IP otherwise) are checked first, so a new installId no longer starts a fresh quota.
 
 import type { SqlClient } from "../agent/postgres-store.ts";
+import { checkCallerQuota, type AiCaller, type CallerLimits } from "../usage/trusted-limits.ts";
 
-export interface AskLimits {
-  /** Questions/day for a single install. */
+export interface AskLimits extends CallerLimits {
+  /** Questions/day for a single install (or, signed in, a single account). */
   perInstall: number;
-  /** Questions/day for a single install while the request's `demo` flag is true. */
+  /** Questions/day for a single install (or account) while the request's `demo` flag is true. */
   perInstallDemo: number;
   /** Shared budget across every install, per day (env ORDERAT_ASK_DAILY_CAP). */
   globalCap: number;
 }
 
-/** docs/ask-orderat.md: 30/day per install, 3/day in demo mode, global cap default 3000. */
+/** docs/ask-orderat.md: 30/day per install, 3/day in demo mode, global cap default 3000. Without a
+ * signed-in session, 60/day per client IP, of which 30 may claim demo=false
+ * (docs/security-review-2026-10-01.md). */
 export const DEFAULT_LIMITS: AskLimits = {
   perInstall: 30,
   perInstallDemo: 3,
   globalCap: 3000,
+  perIp: 60,
+  perIpPaidClaim: 30,
 };
 
 /** `date`-typed columns take a plain "YYYY-MM-DD" string from both the Node and Deno postgres
@@ -60,36 +69,46 @@ export async function incrementDailyUsage(sql: SqlClient, day: string): Promise<
 
 export interface UsageAllowed {
   ok: true;
-  /** Questions left today for this install, after this one — docs/ask-orderat.md's `remainingToday`. */
+  /** Questions left today for this caller, after this one, on the tightest of its own limits —
+   * docs/ask-orderat.md's `remainingToday`. */
   remainingToday: number;
 }
 
 export interface UsageBlocked {
   ok: false;
-  /** `daily_limit`: this install is over its own per-day limit. `busy`: the global daily budget is spent. */
+  /** `daily_limit`: this caller is over one of its own per-day limits (its install's, its client IP's
+   * or its account's). `busy`: the global daily budget is spent. */
   reason: "daily_limit" | "busy";
 }
 
 export type UsageResult = UsageAllowed | UsageBlocked;
 
 /**
- * Records this request against both counters and reports whether it's within the limits —
- * per-install first (so an install that's already over its own limit never eats into the global
- * budget), then global. Call this once per request, before calling Gemini, after body validation.
+ * Records this request against the caller's own counters (server/usage/trusted-limits.ts: its account
+ * when signed in, else its client IP and then its install) and then the global one, and reports whether
+ * it's within the limits — the caller's first, so one already over its own limit never eats into the
+ * global budget. Call this once per request, before calling Gemini, after body validation. `limits` is
+ * laid over DEFAULT_LIMITS.
  */
 export async function checkAndRecordUsage(
   sql: SqlClient,
-  opts: { installId: string; demo: boolean; now: Date; limits?: AskLimits },
+  opts: { caller: AiCaller; installId: string; demo: boolean; now: Date; limits?: Partial<AskLimits> },
 ): Promise<UsageResult> {
-  const limits = opts.limits ?? DEFAULT_LIMITS;
+  const limits: AskLimits = { ...DEFAULT_LIMITS, ...opts.limits };
   const day = dayKey(opts.now);
-  const perInstallLimit = opts.demo ? limits.perInstallDemo : limits.perInstall;
 
-  const installCount = await incrementInstallUsage(sql, opts.installId, day);
-  if (installCount > perInstallLimit) return { ok: false, reason: "daily_limit" };
+  const own = await checkCallerQuota(sql, {
+    feature: "ask",
+    caller: opts.caller,
+    demo: opts.demo,
+    day,
+    limits,
+    incrementInstall: () => incrementInstallUsage(sql, opts.installId, day),
+  });
+  if (!own.ok) return { ok: false, reason: "daily_limit" };
 
   const globalCount = await incrementDailyUsage(sql, day);
   if (globalCount > limits.globalCap) return { ok: false, reason: "busy" };
 
-  return { ok: true, remainingToday: Math.max(0, perInstallLimit - installCount) };
+  return { ok: true, remainingToday: Math.max(0, own.remaining) };
 }
