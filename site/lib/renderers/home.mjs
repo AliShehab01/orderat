@@ -2,13 +2,13 @@ import { renderPage, storeBadges } from "../layout.mjs";
 import { UI } from "../../data/strings.mjs";
 import { FEATURES } from "../../data/features.mjs";
 import { BUSINESS_TYPES } from "../../data/business-types.mjs";
-import { STEPS } from "../../data/steps.mjs";
+import { STEPS, START_STATS } from "../../data/steps.mjs";
 import { FAQS } from "../../data/faq.mjs";
 import { SCREENSHOTS } from "../../data/screenshots.mjs";
 import { BRAND, PRICING } from "../../config.mjs";
 import { esc, escAttr } from "../html.mjs";
 import { path } from "../urls.mjs";
-import { featureCardGrid, businessCardGrid, stepsList, faqTeaser, ctaSection, sectionHeading, trustStrip } from "../components.mjs";
+import { featureCardGrid, businessCardGrid, stepsList, statsRow, faqTeaser, ctaSection, sectionHeading, trustStrip } from "../components.mjs";
 import { softwareApplicationLd } from "../seo.mjs";
 
 const COPY = {
@@ -107,10 +107,11 @@ ${trustStrip(lang)}
   </div>
 </section>
 
-<section class="section section--tinted">
+<section class="section section--tinted quick-start" id="start">
   <div class="wrap">
-    ${sectionHeading(null, t.stepsTitle)}
+    ${sectionHeading(t.stepsKicker, t.stepsTitle, t.stepsLead)}
     ${stepsList(lang, STEPS)}
+    ${statsRow(lang, START_STATS)}
   </div>
 </section>
 

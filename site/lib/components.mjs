@@ -90,17 +90,27 @@ export function faqTeaser(lang, faqs) {
 </section>`;
 }
 
+/** Numbered step cards (data/steps.mjs), each with a time chip; the number is part of the heading. */
 export function stepsList(lang, steps) {
-  return `<ol class="steps">${steps
+  const timeLabel = lang === "ar" ? "المدة: " : "Time: ";
+  return `<ol class="steps" role="list">${steps
     .map(
       (s, i) => `
-    <li class="steps__item">
-      <span class="steps__num">${i + 1}</span>
-      <h3>${esc(s[lang].title)}</h3>
+    <li class="step">
+      <h3 class="step__title"><span class="step__num">${i + 1}</span> <span>${esc(s[lang].title)}</span></h3>
       <p>${esc(s[lang].body)}</p>
+      ${s.showStoreBadges ? storeBadges(lang, { compact: true }) : ""}
+      <p class="step__time">${icon("clock")}<span class="sr-only">${timeLabel}</span>${esc(s.time[lang])}</p>
     </li>`
     )
     .join("")}</ol>`;
+}
+
+/** A row of short facts: a big value over a small label each (data/steps.mjs START_STATS). */
+export function statsRow(lang, stats) {
+  return `<ul class="stats" role="list">${stats
+    .map((s) => `<li class="stats__item"><strong class="stats__value">${esc(s.value[lang])}</strong> <span class="stats__label">${esc(s.label[lang])}</span></li>`)
+    .join("")}</ul>`;
 }
 
 /** Card grid linking to feature pages. `items` are entries from data/features.mjs. */
