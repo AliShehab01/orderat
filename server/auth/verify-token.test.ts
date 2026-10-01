@@ -95,6 +95,21 @@ describe("verifyIdToken", () => {
     expect(result).toEqual({ ok: false, error: "bad_aud" });
   });
 
+  // Security retest 1 Oct 2026, F05: the Android app's Google tokens name the web client as `aud` and
+  // the Android client as `azp`; server/auth/providers.ts's sessionClientFor needs both.
+  it("reports the token's azp (the client that asked for it) next to the matched aud, only when there is one", async () => {
+    const keyPair = await generateTestKeyPair();
+    const issuers = ["https://accounts.google.com"];
+    const android = await signTestToken(keyPair, await basePayload({ iss: issuers[0], aud: "web-client", azp: "android-client" }));
+    expect(await verifyIdToken(android, { issuers, audiences: ["web-client"], jwks: await cacheFor([keyPair]), now: NOW })).toEqual({ ok: true, token: { sub: "user-sub-123", aud: "web-client", azp: "android-client" } });
+    for (const azp of [undefined, "", 42]) {
+      const token = await signTestToken(keyPair, await basePayload({ iss: issuers[0], aud: "web-client", azp }));
+      const result = await verifyIdToken(token, { issuers, audiences: ["web-client"], jwks: await cacheFor([keyPair]), now: NOW });
+      expect(result.ok).toBe(true);
+      expect(result.ok ? result.token.azp : "not ok").toBeUndefined();
+    }
+  });
+
   it("accepts an aud claim given as an array containing an allowed value", async () => {
     const keyPair = await generateTestKeyPair();
     const token = await signTestToken(keyPair, await basePayload({ aud: ["some-other-app", AUD] }));

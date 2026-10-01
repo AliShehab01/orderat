@@ -9,15 +9,18 @@
 // and server/parse/handler.ts follow the same header convention for the actions that need a signed-in
 // caller.
 //
-// A `signin` body may say `client: "web"` (the browser app): that session then expires
-// WEB_SESSION_DAYS after signin (server/auth/store.ts). Without it, or with `client: "app"` (the
-// phones), the session has no fixed end. Any session ends after SESSION_IDLE_DAYS without a call
-// (sliding; security review 1 Oct 2026, F05).
+// The verified token decides what kind of session a `signin` starts (server/auth/providers.ts
+// sessionClientFor; security retest 1 Oct 2026, F05): a token one of the apps asked for starts a
+// phone's session, with no fixed end; any other token, such as the website's, a browser's session,
+// which expires WEB_SESSION_DAYS after signin (server/auth/store.ts). The body's `client` ("web" from
+// the browser app, "app" or nothing from the phones) is checked for shape and otherwise not followed,
+// so a website token sent with `client: "app"` still gets a browser's session. Any session ends after
+// SESSION_IDLE_DAYS without a call (sliding; security review 1 Oct 2026, F05).
 //
 // Phone-to-web login ("Open on computer"): the website calls `pair_start` (no session: getting one is
 // the point) and shows the pairing's code as a QR code and as 6 digits; the seller's signed-in phone
 // scans or types it and calls `pair_approve`, which creates a web session for the phone's account
-// exactly as a `client: "web"` signin would; the website's `pair_poll` then collects that session, once.
+// exactly as a website signin would; the website's `pair_poll` then collects that session, once.
 // The pairing lives five minutes (db/migrations/0006_web_pairing.sql). pair_start is open to anyone,
 // so it is limited per client IP and refused while MAX_PENDING_PAIRINGS are pending.
 //
@@ -31,7 +34,7 @@ import type { SqlClient } from "../agent/postgres-store.ts";
 import { hashClientIp } from "../shared/crypto.ts";
 import type { AppleTokenClient } from "./apple-tokens.ts";
 import type { JwksCache } from "./jwks.ts";
-import { appleConfig, googleConfig } from "./providers.ts";
+import { appleConfig, googleConfig, sessionClientFor, type SessionClient } from "./providers.ts";
 import { bumpPairApproveRateLimit, bumpPairStartRateLimit, MAX_PAIR_APPROVES_PER_MINUTE, MAX_PAIR_STARTS_PER_MINUTE } from "./rate-limit.ts";
 import {
   approvePairing,
@@ -63,6 +66,10 @@ export interface AuthHandlerDeps {
   googleJwks: JwksCache;
   appleAudiences: string[];
   googleAudiences: string[];
+  /** The apps' own audiences among those (the iPhone app's bundle id, its Google iOS client): a token
+   * for one of them, or a Google token the Android app asked for, starts a phone's session; every
+   * other token a browser's (providers.ts sessionClientFor). */
+  appAudiences: string[];
   /** Salt for hashing a client IP (pair_start's per-IP rate limit) before it is written to a row —
    * never the raw IP. */
   ipSalt: string;
@@ -157,11 +164,11 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
   }
 
   /** Starts a session for `userId` and returns its raw token, of which only the SHA-256 hex is stored.
-   * Only a browser's session ends, WEB_SESSION_DAYS from now: a `client: "web"` signin's and every
-   * session a pairing starts. A phone's, whose signin says `client: "app"` or nothing at all, has no
-   * fixed end. Either one ends after SESSION_IDLE_DAYS without a call (server/auth/store.ts), counted
-   * from this signin's own clock. */
-  async function startSession(userId: string, deviceName: string | undefined, client: "web" | "app" | undefined): Promise<string> {
+   * Only a browser's session ends, WEB_SESSION_DAYS from now: a signin's whose token was not one of
+   * the apps' (sessionClientFor), and every session a pairing starts. A phone's has no fixed end.
+   * Either one ends after SESSION_IDLE_DAYS without a call (server/auth/store.ts), counted from this
+   * signin's own clock. */
+  async function startSession(userId: string, deviceName: string | undefined, client: SessionClient): Promise<string> {
     const { token, tokenHash } = await newSessionToken();
     const at = now();
     const expiresAt = client === "web" ? new Date(at.getTime() + WEB_SESSION_MS) : undefined;
@@ -196,10 +203,13 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
     // index); a brand-new random id here is only ever actually used the first time this identity
     // signs in — store.ts's upsertUser keeps the original id on every signin after that.
     const user = await upsertUser(deps.sql, { id: crypto.randomUUID(), provider: body.provider, providerSub: verified.token.sub, email: verified.token.email, name: verified.token.name });
-    const session = await startSession(user.id, body.deviceName, body.client);
+    // The token, not the body, says whether this is a phone's session (security retest 1 Oct 2026, F05).
+    const client = sessionClientFor(body.provider, verified.token, deps.appAudiences);
+    const session = await startSession(user.id, body.deviceName, client);
     if (body.provider === "apple" && body.authorizationCode) await keepAppleRefreshToken(user.id, verified.token.aud, body.authorizationCode);
 
-    log({ event: "auth_signin", status: 200, provider: body.provider });
+    // A `client` the token overruled is logged, so a mismatch (an old build, or someone probing) shows.
+    log({ event: "auth_signin", status: 200, provider: body.provider, client, ...(body.client && body.client !== client ? { requestedClient: body.client } : {}) });
     return jsonResponse({ session, user: userJson(user) }, 200);
   }
 
@@ -233,8 +243,9 @@ export function createAuthHandler(deps: AuthHandlerDeps): (req: Request) => Prom
   }
 
   async function handlePairApprove(body: PairApproveBody, resolved: ResolvedSession): Promise<Response> {
-    // Only a phone's session, which never expires, approves. A browser's (a web signin's, or one a
-    // pairing started) could otherwise keep pairing fresh browsers and never run out its 30 days.
+    // Only a phone's session, which never expires, approves: one whose signin token came from one of
+    // the apps (sessionClientFor). A browser's (a website signin's, or one a pairing started) could
+    // otherwise keep pairing fresh browsers and never run out its 30 days.
     if (resolved.session.expiresAt) {
       log({ event: "auth_pair_approve", status: 403, reason: "web_session" });
       return forbiddenResponse();

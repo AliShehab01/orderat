@@ -14,6 +14,11 @@ export interface VerifiedIdToken {
   /** The token audience that matched one of VerifyOptions.audiences — for Apple, the client id the
    * token was issued to (the iPhone app's bundle id or the website's Services ID). */
   aud: string;
+  /** The token's authorized party (`azp`, the client that asked for it), when it names one. Google's
+   * tokens for the Android app carry the web client id as `aud` and the Android client's own id here
+   * (server/auth/providers.ts sessionClientFor). Signed like every other claim, so a caller cannot
+   * choose it. */
+  azp?: string;
   email?: string;
   name?: string;
 }
@@ -126,6 +131,7 @@ export async function verifyIdToken(idToken: string, opts: VerifyOptions): Promi
     token: {
       sub: payload.sub,
       aud: matchedAud,
+      ...(typeof payload.azp === "string" && payload.azp ? { azp: payload.azp } : {}),
       email: typeof payload.email === "string" ? payload.email : undefined,
       name: typeof payload.name === "string" ? payload.name : undefined,
     },

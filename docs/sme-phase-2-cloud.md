@@ -31,7 +31,11 @@ Cloud sync stays **optional**: a seller can keep using the app offline-only, as 
      `orderat.sessions (token_hash, user_id, device_name, created_at, last_seen_at, revoked_at)`.
      A phone's session has no fixed end; signing out revokes it. Any session unused for 180 days is
      revoked on its next use (sliding: `last_seen_at` is refreshed on use, at most hourly), so a phone
-     in use never signs out (security review 1 Oct 2026, F05; server/auth/store.ts).
+     in use never signs out (security review 1 Oct 2026, F05; server/auth/store.ts). Whether a session
+     is a phone's comes from the verified token, never from the body's `client`: a token for one of the
+     apps' audiences (or a Google token the Android app asked for, `azp` ≠ `aud`) starts a phone's
+     session; the website's tokens start a browser session that ends after 30 days and cannot approve
+     a pairing (security retest 1 Oct 2026; server/auth/providers.ts `sessionClientFor`).
 - Every other call sends `Authorization: Bearer <anon key>` (Supabase gateway) plus
   `X-Orderat-Session: <session token>`.
 - "Delete my account" removes the user, their sessions, and every shop they own with its data.

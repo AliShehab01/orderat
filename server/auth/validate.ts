@@ -24,9 +24,11 @@ export interface SigninBody {
    * provider-specific expected claim value from it (Apple hashes it, Google doesn't). */
   nonce?: string;
   deviceName?: string;
-  /** "web" for the browser web app, whose session then expires after WEB_SESSION_DAYS (see
-   * server/auth/store.ts); "app", or nothing at all (every phone build so far), for the phones, whose
-   * sessions never expire. */
+  /** What the caller says it is: "web" from the browser web app; "app", or nothing at all (every phone
+   * build so far), from the phones. Checked for shape only: the verified token, not this, decides
+   * whether the session is a browser's (expires after WEB_SESSION_DAYS) or a phone's (security retest
+   * 1 Oct 2026, F05; server/auth/providers.ts sessionClientFor). server/auth/handler.ts logs a value
+   * the token overruled. */
   client?: "web" | "app";
   /** Sign in with Apple only, optional: Apple's one-time authorization code from the same signin, which
    * server/auth/handler.ts exchanges for a refresh token so account deletion can revoke it

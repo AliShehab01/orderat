@@ -9,8 +9,14 @@ import { fakeJwksFetch, generateTestKeyPair, signTestToken, type TestKeyPair } f
 
 const NOW = new Date("2026-09-27T12:00:00Z");
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** The iPhone app's bundle id: its Sign in with Apple tokens' audience. */
 const APPLE_AUD = "com.ams.orderat";
+/** The website's Sign in with Apple Services ID. */
+const APPLE_WEB_AUD = "com.ams.orderat.web";
+/** The website's Google web client, which the Android app also asks its tokens for. */
 const GOOGLE_AUD = "google-client-id";
+/** The iPhone app's own Google iOS client. */
+const GOOGLE_IOS_AUD = "ios-client.apps.googleusercontent.com";
 
 let sql: SqlClient;
 let appleKeyPair: TestKeyPair;
@@ -21,8 +27,9 @@ function makeHandler(now: () => Date = () => NOW, overrides: Partial<AuthHandler
     sql,
     appleJwks: createJwksCache("https://appleid.apple.com/auth/keys", { fetchImpl: fakeJwksFetch([appleKeyPair]) }),
     googleJwks: createJwksCache("https://www.googleapis.com/oauth2/v3/certs", { fetchImpl: fakeJwksFetch([googleKeyPair]) }),
-    appleAudiences: [APPLE_AUD],
+    appleAudiences: [APPLE_AUD, APPLE_WEB_AUD],
     googleAudiences: [GOOGLE_AUD],
+    appAudiences: [APPLE_AUD, GOOGLE_IOS_AUD],
     ipSalt: "test-ip-salt",
     now,
     log: () => {},
@@ -121,6 +128,7 @@ describe("createAuthHandler / signin", () => {
       googleJwks: createJwksCache("https://www.googleapis.com/oauth2/v3/certs", { fetchImpl: fakeJwksFetch([googleKeyPair]) }),
       appleAudiences: [APPLE_AUD],
       googleAudiences: [GOOGLE_AUD],
+      appAudiences: [APPLE_AUD],
       ipSalt: "test-ip-salt",
       now: () => NOW,
       log: () => {},
@@ -184,7 +192,7 @@ describe("createAuthHandler / session-authenticated actions", () => {
 // Google sign-in from the iPhone (ORDERAT_GOOGLE_IOS_CLIENT_ID): the token's aud is the iOS OAuth client,
 // and Google copies the nonce it was given verbatim, so the signin body's nonce must be that same value.
 describe("createAuthHandler / Google sign-in from the iPhone's own client", () => {
-  const IOS_AUD = "ios-client.apps.googleusercontent.com";
+  const IOS_AUD = GOOGLE_IOS_AUD;
   const googleToken = async (claims: Record<string, unknown>) =>
     signTestToken(googleKeyPair, { iss: "https://accounts.google.com", sub: "g-ios", exp: Math.floor(NOW.getTime() / 1000) + 3600, ...claims });
 
@@ -305,11 +313,12 @@ ${b64}
   });
 });
 
-// A browser signs in with client: "web" and its session lasts 30 days; the phones send no client (or
-// "app") and their sessions never expire (docs/superpowers/specs/2026-09-29-orderat-web-design.md).
+// A browser's session (its signin token is for the website's own client id) lasts 30 days; a phone's (a
+// token for one of the apps) never expires (docs/superpowers/specs/2026-09-29-orderat-web-design.md).
+// The web app also says client: "web"; since the security retest of 1 Oct 2026 (F05) the token decides.
 describe("createAuthHandler / session lifetime", () => {
-  async function signInAs(handler: (req: Request) => Promise<Response>, extra: Record<string, unknown>): Promise<string> {
-    const res = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken(), ...extra }));
+  async function signInAs(handler: (req: Request) => Promise<Response>, extra: Record<string, unknown>, aud = APPLE_AUD): Promise<string> {
+    const res = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken({ aud }), ...extra }));
     expect(res.status).toBe(200);
     return (await res.json()).session as string;
   }
@@ -319,7 +328,7 @@ describe("createAuthHandler / session lifetime", () => {
   it("a web session works now and after 29 days, but is unauthorized 31 days after signin", async () => {
     let clock = NOW;
     const handler = makeHandler(() => clock);
-    const session = await signInAs(handler, { client: "web" });
+    const session = await signInAs(handler, { client: "web" }, APPLE_WEB_AUD);
 
     expect((await me(handler, session)).status).toBe(200);
     clock = new Date(NOW.getTime() + 29 * DAY_MS);
@@ -332,7 +341,7 @@ describe("createAuthHandler / session lifetime", () => {
 
   it("stores a web session's expiry as exactly 30 days after signin", async () => {
     const handler = makeHandler();
-    await signInAs(handler, { client: "web" });
+    await signInAs(handler, { client: "web" }, APPLE_WEB_AUD);
     const rows = await sql.query<{ expires_at: Date }>(`select expires_at from orderat.sessions`);
     expect(new Date(rows[0]!.expires_at).toISOString()).toBe(new Date(NOW.getTime() + 30 * DAY_MS).toISOString());
   });
@@ -340,7 +349,7 @@ describe("createAuthHandler / session lifetime", () => {
   it("an expired web session cannot sign out or delete the account either", async () => {
     let clock = NOW;
     const handler = makeHandler(() => clock);
-    const session = await signInAs(handler, { client: "web" });
+    const session = await signInAs(handler, { client: "web" }, APPLE_WEB_AUD);
     clock = new Date(NOW.getTime() + 31 * DAY_MS);
 
     expect((await handler(post({ action: "signout" }, { "x-orderat-session": session }))).status).toBe(401);
@@ -361,7 +370,7 @@ describe("createAuthHandler / session lifetime", () => {
     expect(rows[0]!.expires_at).toBeNull();
   });
 
-  it("client: \"app\" is a phone too: no fixed end", async () => {
+  it("a phone's token with client: \"app\" is a phone's session too: no fixed end", async () => {
     let clock = NOW;
     const handler = makeHandler(() => clock);
     const session = await signInAs(handler, { client: "app", deviceName: "iPhone" });
@@ -399,7 +408,7 @@ describe("createAuthHandler / session lifetime", () => {
     let clock = NOW;
     const handler = makeHandler(() => clock);
     const phone = await signInAs(handler, {});
-    const web = await signInAs(handler, { client: "web" });
+    const web = await signInAs(handler, { client: "web" }, APPLE_WEB_AUD);
 
     clock = new Date(NOW.getTime() + 31 * DAY_MS);
     expect((await me(handler, web)).status).toBe(401);
@@ -412,6 +421,58 @@ describe("createAuthHandler / session lifetime", () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "invalid_body" });
     expect((await sql.query(`select 1 from orderat.sessions`)).length).toBe(0);
+  });
+});
+
+// Security retest 1 Oct 2026, F05: a signin saying client: "app" with a token for the website used to get
+// a phone's session (no fixed end, may approve pairings). Now the token decides: its audience, and for
+// Google its azp (the Android app asks for tokens addressed to the web client, under its own client id).
+// The body's `client` is only checked for shape. Every audience, with every `client` a body can send.
+describe("createAuthHandler / F05: the token decides the kind of session, never the body", () => {
+  const GOOGLE_ANDROID_AZP = "android-client.apps.googleusercontent.com";
+  type Kind = "web" | "app";
+  const tokens: Record<string, { provider: "apple" | "google"; claims: Record<string, unknown>; kind: Kind }> = {
+    "Apple, iPhone app (bundle id)": { provider: "apple", claims: { iss: "https://appleid.apple.com", aud: APPLE_AUD }, kind: "app" },
+    "Apple, website (Services ID)": { provider: "apple", claims: { iss: "https://appleid.apple.com", aud: APPLE_WEB_AUD }, kind: "web" },
+    "Google, website (web client)": { provider: "google", claims: { iss: "https://accounts.google.com", aud: GOOGLE_AUD, azp: GOOGLE_AUD }, kind: "web" },
+    "Google, Android app (web client aud, Android azp)": { provider: "google", claims: { iss: "https://accounts.google.com", aud: GOOGLE_AUD, azp: GOOGLE_ANDROID_AZP }, kind: "app" },
+    "Google, iPhone app (iOS client)": { provider: "google", claims: { iss: "https://accounts.google.com", aud: GOOGLE_IOS_AUD, azp: GOOGLE_IOS_AUD }, kind: "app" },
+  };
+  const cases = Object.keys(tokens).flatMap((name) => ([undefined, "app", "web"] as const).map((client) => [name, client ?? "none", client] as const));
+
+  async function signIn(handler: (req: Request) => Promise<Response>, name: string, client: "app" | "web" | undefined) {
+    const t = tokens[name]!;
+    const idToken = await signTestToken(t.provider === "apple" ? appleKeyPair : googleKeyPair, { sub: `sub-${name}`, exp: Math.floor(NOW.getTime() / 1000) + 3600, ...t.claims });
+    return handler(post({ action: "signin", provider: t.provider, idToken, ...(client ? { client } : {}) }));
+  }
+
+  it.each(cases)("%s, client %s", async (name, _label, client) => {
+    const handler = makeHandler(() => NOW, { googleAudiences: [GOOGLE_AUD, GOOGLE_IOS_AUD] });
+    const res = await signIn(handler, name, client);
+    expect(res.status).toBe(200);
+    const session = (await res.json()).session as string;
+
+    const [row] = await sql.query<{ expires_at: Date | null }>(`select expires_at from orderat.sessions`);
+    if (tokens[name]!.kind === "web") expect(new Date(row!.expires_at!).toISOString()).toBe(new Date(NOW.getTime() + 30 * DAY_MS).toISOString());
+    else expect(row!.expires_at).toBeNull();
+
+    // Approving a website's pairing stays a phone's: only an app session may.
+    const pairing = (await (await handler(post({ action: "pair_start" }))).json()) as { code: string };
+    const approve = await handler(post({ action: "pair_approve", code: pairing.code }, { "x-orderat-session": session }));
+    expect(approve.status).toBe(tokens[name]!.kind === "app" ? 200 : 403);
+  });
+
+  it("logs the kind of session it started, and a client it did not follow, never a token", async () => {
+    const entries: Record<string, unknown>[] = [];
+    const handler = makeHandler(() => NOW, { log: (entry) => entries.push(entry) });
+    await signIn(handler, "Apple, website (Services ID)", "app");
+    await signIn(handler, "Apple, iPhone app (bundle id)", undefined);
+    await signIn(handler, "Google, website (web client)", "web");
+    expect(entries).toEqual([
+      { event: "auth_signin", status: 200, provider: "apple", client: "web", requestedClient: "app" },
+      { event: "auth_signin", status: 200, provider: "apple", client: "app" },
+      { event: "auth_signin", status: 200, provider: "google", client: "web" },
+    ]);
   });
 });
 
@@ -568,7 +629,7 @@ describe("createAuthHandler / phone-to-web pairing", () => {
 
   it("a browser's session, signed in or paired, cannot approve (403), so a web session never mints another", async () => {
     const handler = makeHandler();
-    const signin = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken(), client: "web" }));
+    const signin = await handler(post({ action: "signin", provider: "apple", idToken: await appleSigninToken({ aud: APPLE_WEB_AUD }), client: "web" }));
     const webSession = (await signin.json()).session as string;
     const phone = await signInPhone(handler);
     const first = await start(handler);

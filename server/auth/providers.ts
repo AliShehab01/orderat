@@ -45,3 +45,27 @@ export function withExtraAudience(audiences: string[], extra: string | undefined
   const id = extra?.trim();
   return id && !audiences.includes(id) ? [...audiences, id] : audiences;
 }
+
+/** A phone's session ("app": no fixed end, and the only kind that may approve a website's pairing) or
+ * a browser's ("web": ends WEB_SESSION_DAYS after signin), server/auth/store.ts. */
+export type SessionClient = "web" | "app";
+
+/**
+ * The kind of session a verified ID token starts (security retest 1 Oct 2026, F05; until then the
+ * signin body's `client` chose, so a website token sent with `client: "app"` got a phone's session).
+ * Decided from the token alone. "app" only for a token one of the apps asked for:
+ * - its audience is one of the apps' own client ids, `appAudiences` (orderat-auth: the iPhone app's
+ *   bundle id com.ams.orderat for Sign in with Apple, and its Google iOS client); or
+ * - a Google token whose authorized party (`azp`) is a client other than its audience. Google issues
+ *   such a cross-client token only to a native app of the same Google project that names the audience
+ *   as its server client: the Android app, which asks for tokens addressed to the web client
+ *   (google_sign_in's serverClientId), so they carry the web client id as `aud` and the Android
+ *   client's own id as `azp`. A browser's Google token names the web client as both.
+ * Every other token starts a web session: the website's (its Sign in with Apple Services ID
+ * com.ams.orderat.web, its Google web client), and any audience not known to be an app's.
+ */
+export function sessionClientFor(provider: Provider, token: { aud: string; azp?: string }, appAudiences: readonly string[]): SessionClient {
+  if (appAudiences.includes(token.aud)) return "app";
+  if (provider === "google" && token.azp !== undefined && token.azp !== token.aud) return "app";
+  return "web";
+}

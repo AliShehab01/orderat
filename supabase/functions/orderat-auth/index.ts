@@ -50,6 +50,14 @@ const googleAudiences = withExtraAudience(
   env("GOOGLE_IOS_CLIENT_ID"),
 );
 
+// The apps' own audiences (security retest 1 Oct 2026, F05): the iPhone app's bundle id (its Sign in with
+// Apple tokens) and its Google iOS client(s). A token for one of them starts a phone's session (no fixed
+// end; the only kind that may approve a website's pairing), and so does a Google token the Android app
+// asked for (addressed to the web client, under the Android client's own azp; server/auth/providers.ts
+// sessionClientFor). Every other token, the website's Services ID com.ams.orderat.web and Google web
+// client included, starts a 30-day browser session, whatever the signin body's `client` says.
+const appAudiences = withExtraAudience(["com.ams.orderat", GOOGLE_IOS_CLIENT_ID], env("GOOGLE_IOS_CLIENT_ID"));
+
 // The salt pair_start's per-IP rate limit hashes a client IP with, so no row ever holds the IP (the
 // same approach as orderat-shop's ORDERAT_SHOP_IP_SALT): ORDERAT_AUTH_IP_SALT, or one derived from the
 // database URL (supabase/functions/_shared/ip-salt.ts, shared with the AI functions' per-IP caps).
@@ -63,6 +71,6 @@ const appleKeyConfig = appleKeyConfigFromEnv(env);
 // orderatweb.com), which Apple wants back when the website's codes are exchanged.
 const appleTokens = appleKeyConfig ? createAppleTokenClient(appleKeyConfig, { redirectUris: { "com.ams.orderat.web": "https://orderatweb.com/app/" } }) : undefined;
 
-const handler = withAppCors(createAuthHandler({ sql, appleJwks, googleJwks, appleAudiences, googleAudiences, ipSalt, appleTokens }));
+const handler = withAppCors(createAuthHandler({ sql, appleJwks, googleJwks, appleAudiences, googleAudiences, appAudiences, ipSalt, appleTokens }));
 
 Deno.serve((req) => handler(req));
