@@ -16,8 +16,15 @@
 //
 // Order of work, matching server/studio/handler.ts's photo task: validate the body -> decode/size/
 // magic-check the image, if any -> check the Gemini key is configured -> check + record the
-// per-install/global "parse" limit (before calling Gemini, so a rejected request never pays for a
-// model call) -> strip phone numbers from the text -> call the extractor -> respond.
+// caller's own and the global "parse" limits (before calling Gemini, so a rejected request never pays
+// for a model call) -> strip phone numbers from the text -> call the extractor -> respond.
+//
+// The response is `{ draft, lang, remainingToday, fulfillment, address, deliveryNote }`: the last three
+// (tester feedback, 1 Oct 2026, section 1; server/ai/delivery.ts) say whether the customer wants
+// delivery or pickup ("delivery" | "pickup" | null), the delivery address ({ area?, block?, road?,
+// building?, flat?, city?, text? } | null — Bahrain parts when given, else the free-text line in
+// `text`) and the driver's directions (string | null). The address and directions are never left in
+// draft.notes. Older apps ignore the three keys.
 
 import type { Product } from "../../src/lib/types.ts";
 import type { SqlClient } from "../agent/postgres-store.ts";
@@ -120,9 +127,12 @@ export function createParseHandler(deps: ParseHandlerDeps): (req: Request) => Pr
 
     const started = Date.now();
     try {
-      const result = await extract({ text, media, products, now: at });
-      log({ event: "parse", status: 200, caller: caller.kind, latencyMs: Date.now() - started, hasImage: !!media, itemCount: result.draft.items.length });
-      return jsonResponse({ draft: result.draft, lang: result.lang, remainingToday: usage.remainingToday }, 200);
+      const result = await extract({ text, media, products, now: at, withDelivery: true });
+      const delivery = result.delivery ?? { fulfillment: null, address: null, deliveryNote: null };
+      log({ event: "parse", status: 200, caller: caller.kind, latencyMs: Date.now() - started, hasImage: !!media, itemCount: result.draft.items.length, fulfillment: delivery.fulfillment, hasAddress: !!delivery.address });
+      // `fulfillment`, `address` and `deliveryNote` are new keys (tester feedback 1 Oct 2026, section 1),
+      // always present and null when the message says nothing about them; older apps ignore them.
+      return jsonResponse({ draft: result.draft, lang: result.lang, remainingToday: usage.remainingToday, ...delivery }, 200);
     } catch (err) {
       log({ event: "parse", status: 502, latencyMs: Date.now() - started, reason: "gemini_error", detail: err instanceof Error ? err.message : String(err) });
       return aiUnavailableResponse();

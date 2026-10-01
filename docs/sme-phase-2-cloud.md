@@ -102,6 +102,7 @@ Cloud sync stays **optional**: a seller can keep using the app offline-only, as 
 - **Input:** pasted text (a WhatsApp message) or one screenshot image (JPEG/PNG, at most 2 MB), plus the shop's product list (id, name, aliases) and `lang`/`addressAs`.
 - **Processing:** reuses `server/ai/gemini.ts` `createGeminiExtractor`, the same order reader the web version uses.
 - **Output:** a draft with the customer name, lines matched to product ids or free text, quantities, date, time and notes, each with a confidence.
+- **Delivery (tester feedback, 1 Oct 2026):** the response also carries `fulfillment` (`"delivery"` | `"pickup"` | `null`), `address` (`{ area?, block?, road?, building?, flat?, city?, text? }` | `null`: Bahrain parts when the customer gives them, with Western digits; otherwise the free-text line in `text`, and the city; `text` is the whole address as written) and `deliveryNote` (directions for the driver, or `null`). An address, a location or words like توصيل / delivery mean delivery; استلام / pickup mean pickup; an address with nothing said means delivery. The address and directions are never left in the draft's `notes` (server/ai/delivery.ts). Older apps ignore these keys.
 - **The app:**
   - A "Paste order" button on New Order (and a share-sheet target on Android: share a message to Orderat).
   - Shows the draft in the existing review form. The seller confirms or edits, then saves.

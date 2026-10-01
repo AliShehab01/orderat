@@ -150,6 +150,105 @@ describe("createParseHandler / limits", () => {
   });
 });
 
+// Tester feedback 1 Oct 2026, section 1: the response's new keys `fulfillment`, `address` and
+// `deliveryNote` (old apps ignore them; every older key is unchanged), and the address never stays in
+// draft.notes. The model is a fake here, so these prove what the server asks for and what it does with
+// the answer, for Arabic and English messages, a screenshot, and Saudi and UAE free-text addresses.
+describe("createParseHandler / delivery and address", () => {
+  const products = [{ id: "p1", name: "Chocolate cake", nameAr: "كيكة شوكولاتة", aliases: ["كيك"] }];
+
+  it("asks the model for delivery, the address and the driver's directions", async () => {
+    const capture: { init?: RequestInit } = {};
+    await makeHandler(fakeGemini({ isOrder: true, language: "ar", items: [] }, capture))(post(baseBody({ products })));
+    const body = JSON.parse(String(capture.init!.body));
+    expect(Object.keys(body.generationConfig.responseSchema.properties)).toEqual(expect.arrayContaining(["fulfillment", "address", "deliveryNote"]));
+    expect(body.contents[0].parts[0].text).toContain("Never put the address");
+  });
+
+  it("Arabic, Bahrain address: delivery, the address in its parts, directions apart, and notes without the address", async () => {
+    const text = "مرحبا، ابي ٢ كيكة شوكولاتة باچر الساعة ٤ العصر توصيل للرفاع مجمع ٩٣٥ طريق ٣٥٢٤ منزل ١٢، اتصلوا لما توصلون. بدون مكسرات";
+    const handler = makeHandler(fakeGemini({
+      isOrder: true,
+      language: "ar",
+      items: [{ productId: "p1", rawText: "٢ كيكة شوكولاتة", quantity: 2 }],
+      collectionDate: "2026-09-28",
+      collectionTime: "16:00",
+      notes: "بدون مكسرات. العنوان: الرفاع مجمع ٩٣٥ طريق ٣٥٢٤ منزل ١٢",
+      fulfillment: "delivery",
+      address: { area: "الرفاع", block: "٩٣٥", road: "٣٥٢٤", building: "١٢", text: "الرفاع مجمع ٩٣٥ طريق ٣٥٢٤ منزل ١٢" },
+      deliveryNote: "اتصلوا لما توصلون",
+    }));
+    const res = await handler(post(baseBody({ text, products })));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.fulfillment).toBe("delivery");
+    expect(body.address).toEqual({ area: "الرفاع", block: "935", road: "3524", building: "12", text: "الرفاع مجمع ٩٣٥ طريق ٣٥٢٤ منزل ١٢" });
+    expect(body.deliveryNote).toBe("اتصلوا لما توصلون");
+    expect(body.draft.notes).toBe("بدون مكسرات.");
+    expect(body.draft.items).toEqual([{ productId: "p1", rawText: "٢ كيكة شوكولاتة", quantity: 2, confidence: "high" }]);
+    expect(body.lang).toBe("ar");
+  });
+
+  it("English, Bahrain address with a flat, the gate as a direction", async () => {
+    const handler = makeHandler(fakeGemini({
+      isOrder: true,
+      language: "en",
+      items: [{ productId: "p1", rawText: "1 chocolate cake", quantity: 1 }],
+      notes: "Write Happy Birthday Sara",
+      fulfillment: "delivery",
+      address: { area: "Juffair", block: "340", road: "4033", building: "1450", flat: "21", text: "Flat 21, Building 1450, Road 4033, Block 340, Juffair" },
+      deliveryNote: "Black gate",
+    }));
+    const body = await (await handler(post(baseBody({ text: "1 chocolate cake, write Happy Birthday Sara. Deliver to Flat 21, Building 1450, Road 4033, Block 340, Juffair. Black gate", products })))).json();
+    expect(body).toMatchObject({ fulfillment: "delivery", deliveryNote: "Black gate", address: { area: "Juffair", block: "340", road: "4033", building: "1450", flat: "21" } });
+    expect(body.draft.notes).toBe("Write Happy Birthday Sara");
+  });
+
+  it("English, pickup: fulfillment pickup and no address", async () => {
+    const handler = makeHandler(fakeGemini({ isOrder: true, language: "en", items: [{ productId: "p1", rawText: "2 cakes", quantity: 2 }], fulfillment: "pickup", address: null, deliveryNote: null }));
+    const body = await (await handler(post(baseBody({ text: "2 cakes please, I'll pick them up tomorrow at 6", products })))).json();
+    expect(body).toMatchObject({ fulfillment: "pickup", address: null, deliveryNote: null });
+  });
+
+  it("a screenshot: the address read off the image", async () => {
+    const handler = makeHandler(fakeGemini({
+      isOrder: true,
+      language: "ar",
+      items: [{ productId: "p1", rawText: "كيكة", quantity: 1 }],
+      transcript: "ابي كيكة وحدة\nالعنوان: سند مجمع 743 طريق 4321 بيت 55",
+      fulfillment: "delivery",
+      address: { area: "سند", block: "743", road: "4321", building: "55", text: "سند مجمع 743 طريق 4321 بيت 55" },
+    }));
+    const body = await (await handler(post(baseBody({ text: undefined, image: { mimeType: "image/jpeg", data: JPEG_BYTES.toString("base64") }, products })))).json();
+    expect(body).toMatchObject({ fulfillment: "delivery", address: { area: "سند", block: "743", road: "4321", building: "55" }, deliveryNote: null });
+  });
+
+  it("Saudi address with only a free-text line, and a UAE one in English", async () => {
+    const saudi = makeHandler(fakeGemini({ isOrder: true, language: "ar", items: [], fulfillment: "delivery", address: { city: "الرياض", text: "حي العليا، شارع الملك فهد، الرياض" } }));
+    const saudiBody = await (await saudi(post(baseBody({ text: "ابي كيكة توصيل الرياض حي العليا شارع الملك فهد", products })))).json();
+    expect(saudiBody).toMatchObject({ fulfillment: "delivery", address: { city: "الرياض", text: "حي العليا، شارع الملك فهد، الرياض" } });
+    expect(saudiBody.address.block).toBeUndefined();
+
+    const uae = makeHandler(fakeGemini({ isOrder: true, language: "en", items: [], fulfillment: null, address: { city: "Dubai", text: "Dubai Marina, Marina Gate 2, apt 1203" }, notes: "Send to Dubai Marina, Marina Gate 2, apt 1203" }));
+    const uaeBody = await (await uae(post(baseBody({ text: "Send to Dubai Marina, Marina Gate 2, apt 1203 please", products })))).json();
+    expect(uaeBody).toMatchObject({ fulfillment: "delivery", address: { city: "Dubai", text: "Dubai Marina, Marina Gate 2, apt 1203" } });
+    expect(uaeBody.draft.notes).toBeUndefined();
+  });
+
+  it("an answer with no delivery details: the new keys are null, every older key as before", async () => {
+    const handler = makeHandler(fakeGemini({ isOrder: true, language: "en", items: [{ productId: "p1", rawText: "2 cakes", quantity: 2 }], notes: "Less sugar" }));
+    const body = await (await handler(post(baseBody({ products })))).json();
+    expect(body).toEqual({
+      draft: { customerConfidence: "low", items: [{ productId: "p1", rawText: "2 cakes", quantity: 2, confidence: "high" }], collectionConfidence: "low", notes: "Less sugar", oldQuantities: [] },
+      lang: "en",
+      remainingToday: 49,
+      fulfillment: null,
+      address: null,
+      deliveryNote: null,
+    });
+  });
+});
+
 // Security review 1 Oct 2026, F02: limits a client cannot reset by changing installId or claiming demo=false.
 describe("createParseHandler / limits a client cannot reset", () => {
   const empty = () => fakeGemini({ isOrder: true, language: "en", items: [] });
