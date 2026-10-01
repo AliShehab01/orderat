@@ -794,7 +794,8 @@ function newDraft() {
   if (!['whatsapp', 'instagram', 'manual'].includes(source)) source = now ? 'manual' : 'whatsapp';
   return {
     text: '', name: '', phone: '', source, items: [], due: inputDateTime(now ? new Date() : due), when: now ? 'now' : '', fulfillment: 'pickup', area: '', address: '', fee: '', feeAuto: false, feeTouched: false,
-    deposit: '', paidFull: now, method: now ? 'cash' : 'benefit', notes: '', note: '', reading: false,
+    // Pays on pickup/delivery (unpaid) unless the business sells on the spot; a deposit only when asked for.
+    pay: now ? 'full' : 'later', depositOpen: false, deposit: '', method: now ? 'cash' : 'benefit', notes: '', note: '', reading: false,
   };
 }
 // The one shared "Walk-in" customer of paid-in-full orders without a name, found by name, made once.
@@ -851,7 +852,7 @@ function viewNew() {
   <form data-form="new-order" class="stack" novalidate>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.customerTitle'))}</h3>
       <div class="grid2">
-        ${errField(t('neworder.customerName'), `<input name="name" data-live="draft" enterkeyhint="next" value="${esc(D.name)}" list="customer-names" autocomplete="off"${D.paidFull ? ` placeholder="${esc(t('customers.walkIn'))}"` : ''}${D.errors?.name ? ' aria-invalid="true"' : ''}>`, D.errors?.name)}
+        ${errField(t('neworder.customerName'), `<input name="name" data-live="draft" enterkeyhint="next" value="${esc(D.name)}" list="customer-names" autocomplete="off"${D.pay === 'full' ? ` placeholder="${esc(t('customers.walkIn'))}"` : ''}${D.errors?.name ? ' aria-invalid="true"' : ''}>`, D.errors?.name)}
         ${field(t('neworder.customerPhone'), `<input name="phone" data-live="draft" enterkeyhint="next" value="${esc(D.phone)}" dir="ltr" inputmode="tel" autocomplete="off">`)}
       </div>
       <datalist id="customer-names">${S.customers.map(c => `<option value="${esc(cName(c))}">`).join('')}</datalist>
@@ -869,18 +870,25 @@ function viewNew() {
       <div class="field"><span>${esc(t('neworder.fulfillment'))}</span>${seg('fulfillment', ['pickup', 'delivery'], D.fulfillment, k => t('fulfillment.' + k), 'draft')}</div>
       ${D.fulfillment === 'delivery' ? `<div class="grid2">${bahrain() ? field(t('shop.area'), `<select name="area" data-live="draft"><option value="">${esc(t('shop.areaNone'))}</option>${options(AREAS, D.area, a => t('area.' + a))}</select>`) : ''}${field(t('orders.deliveryFee'), `<input name="fee" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.fee)}" placeholder="0">${D.feeAuto ? `<small class="muted small" id="d-fee-hint">${esc(t('neworder.feeDefault'))}</small>` : ''}`)}</div>${field(t('order.address'), `<textarea name="address" rows="${addressRows(D.address)}" maxlength="200" data-live="draft" autocomplete="street-address">${esc(D.address || '')}</textarea>`)}` : ''}
     </section>
-    <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.paymentTitle'))}</h3>
-      ${toggle('paidFull', t('neworder.paidInFull'), D.paidFull, 'draft-paid')}
-      <div class="grid2">
-        ${D.paidFull ? '' : field(t('neworder.depositOptional'), `<input name="deposit" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.deposit)}">`)}
-        ${field(t('payment.method'), `<select name="method" data-live="draft">${options(METHODS, D.method, m => t('payment.method.' + m))}</select>`)}
-      </div>
-    </section>
+    <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.paymentTitle'))}</h3>${paymentChoice()}</section>
     <section class="card stack-sm"><h3 class="card-title">${esc(t('neworder.notesTitle'))}</h3><textarea name="notes" rows="2" data-live="draft" aria-label="${esc(t('neworder.notesTitle'))}">${esc(D.notes)}</textarea></section>
     <div class="save-bar"><span>${esc(t('orders.total'))} <b id="d-total">${esc(money(draftTotal()))}</b></span><button class="btn primary big" id="d-save"${draftEmpty() ? ' disabled' : ''}>${esc(t('neworder.save'))}</button></div>
   </form></div>`;
   const actions = `<button class="btn ghost small" data-act="clear-draft">${esc(t('neworder.clear'))}</button>`;
   return { title: t('tab.new'), back: 'today', actions, body };
+}
+
+// New order's payment: pays on pickup/delivery (unpaid, the default) or paid in full, and under the first
+// a small "Partial payment (deposit)" that opens the amount. The order is saved as before: no payment,
+// one payment of the total, or one of the deposit.
+function paymentChoice() {
+  const later = t(D.fulfillment === 'delivery' ? 'pay.onDelivery' : 'pay.onPickup');
+  const method = field(t('payment.method'), `<select name="method" data-live="draft">${options(METHODS, D.method, m => t('payment.method.' + m))}</select>`);
+  const choice = `<div>${seg('pay', ['later', 'full'], D.pay, k => (k === 'full' ? t('neworder.paidInFull') : later), 'draft-pay')}</div>`;
+  if (D.pay === 'full') return `${choice}<div class="grid2">${method}</div>`;
+  if (!D.depositOpen) return `${choice}<button type="button" class="link-btn pay-more" data-act="pay-deposit" data-v="1">${icon('plus')} ${esc(t('pay.partial'))}</button>`;
+  return `${choice}<div class="grid2">${field(t('pay.depositAmount'), `<input name="deposit" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.deposit)}">`)}${method}</div>
+    <button type="button" class="link-btn pay-more" data-act="pay-deposit" data-v="0">${icon('x')} ${esc(t('pay.noDeposit'))}</button>`;
 }
 
 // A small on-device reader standing in for the apps' AI order entry (orderat-parse): matches menu
@@ -1724,6 +1732,12 @@ const ACTIONS = {
     render();
   },
   'due-time'(el) { D.due = `${D.due.slice(0, 10)}T${el.dataset.v}`; render(); },
+  'pay-deposit'(el) {
+    D.depositOpen = el.dataset.v === '1';
+    if (!D.depositOpen) D.deposit = '';
+    render();
+    if (D.depositOpen) $('form[data-form="new-order"] input[name="deposit"]')?.focus();
+  },
   'clear-draft'() {
     const typed = D && (D.text.trim() || D.name.trim() || D.phone.trim() || D.items.length || D.notes.trim());
     if (!typed || confirm(t('neworder.clearConfirm'))) { D = null; render(); }
@@ -1809,7 +1823,7 @@ const ACTIONS = {
 };
 
 const LIVE = {
-  'draft-paid'(el) { D.paidFull = el.checked; if (D.errors?.name && D.paidFull) delete D.errors.name; render(); },
+  'draft-pay'(el) { D.pay = el.value === 'full' ? 'full' : 'later'; if (D.errors?.name && D.pay === 'full') delete D.errors.name; render(); },
   'edit-order-fulfillment'(el) {
     const box = $('#eo-delivery');
     if (box) box.hidden = el.value !== 'delivery';
@@ -1932,7 +1946,7 @@ const FORMS = {
     if (D.items.some(it => it.pid === 'custom' && qtyNum(it.qty) > 0 && !String(it.name || '').trim())) errors.items = t('items.nameCustom');
     else if (!items.length) errors.items = t('neworder.needItem');
     // Unpaid orders need a real name, so Who owes me never lumps strangers together.
-    if (!name && !D.paidFull) errors.name = t('err.name');
+    if (!name && D.pay !== 'full') errors.name = t('err.name');
     if (Object.keys(errors).length) { showDraftErrors(errors); return; }
     D.errors = null;
     const c = name ? draftCustomer(name) : walkIn();
@@ -1950,8 +1964,9 @@ const FORMS = {
       order.createdAt = now;
       Live.applyOrderVat(order); // the VAT snapshot and invoice number, like the phones
     }
-    // Paid in full: the total with its VAT, known only once the snapshot above is taken.
-    const deposit = D.paidFull ? totals(order).total : parseFloat(D.deposit);
+    // Paid in full: the total with its VAT, known only once the snapshot above is taken. A deposit only
+    // when its field is open.
+    const deposit = D.pay === 'full' ? totals(order).total : D.depositOpen ? parseFloat(D.deposit) : 0;
     if (deposit > 0) {
       order.payments.push({ amount: round(deposit), method: D.method, note: '', at: now });
       order.changes.push({ kind: 'payment', value: round(deposit), at: now });

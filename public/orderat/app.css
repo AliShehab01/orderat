@@ -371,6 +371,9 @@ textarea { resize: vertical; line-height: 1.6; }
   .item-row > select, .item-row > input { flex: 1; }
 }
 .examples { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.75rem; }
+/* New order's payment: the deposit is a small secondary link under the two main choices. */
+.pay-more { display: inline-flex; align-items: center; gap: 0.3rem; align-self: flex-start; min-height: 44px; font-size: 0.85rem; font-weight: 500; }
+.pay-more .ic { width: 16px; height: 16px; }
 .save-bar {
   position: sticky; bottom: 1rem; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem 1rem;
   border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow);
