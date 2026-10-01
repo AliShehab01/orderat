@@ -161,8 +161,9 @@ main{max-width:28rem;text-align:center}h1{font-size:1.5rem;margin:.2em 0}p{color
 const SUPABASE_ORIGIN = "https://ckjmbdbvlbxfofjgqiuj.supabase.co";
 
 /** sha256 CSP sources for every inline, executable <script> in the built HTML (today only the
- * orderat-app.pages.dev forwarding snippet), so script-src needs no 'unsafe-inline'. JSON-LD blocks are
- * data, never executed, so CSP does not apply to them. */
+ * forwarding snippets that send orderat-app.pages.dev, and on the marketing pages www.orderatweb.com,
+ * to orderatweb.com), so script-src needs no 'unsafe-inline'. JSON-LD blocks are data, never executed,
+ * so CSP does not apply to them. check.mjs verifies every inline script is covered. */
 function inlineScriptHashes() {
   const hashes = new Set();
   const walk = (dir) => {
@@ -185,6 +186,7 @@ function inlineScriptHashes() {
 
 /** Cloudflare Pages' _headers: security headers for every page, and no-cache for the web app so a new
  * deploy reaches sellers on their next load (the service worker still serves the shell offline).
+ * HSTS is a year on this host only: no includeSubDomains or preload until every subdomain is on HTTPS.
  * CSP sources: Google Identity Services (accounts.google.com/gsi) and Sign in with Apple JS
  * (appleid.cdn-apple.com, appleid.apple.com) for the web app's sign-in, Google Fonts, the Supabase
  * origin, the campaign feed on raw.githubusercontent.com, and Cloudflare Web Analytics if it is on. */
@@ -206,6 +208,7 @@ function buildHeaders() {
   ].join("; ");
   return `/*
   Content-Security-Policy: ${csp}
+  Strict-Transport-Security: max-age=31536000
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin

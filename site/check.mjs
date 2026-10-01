@@ -11,7 +11,9 @@
 //   - sitemap.xml lists every page that was built, with no stale entries
 //   - robots.txt references the sitemap, and site.webmanifest is valid JSON with icons
 //   - dist/app/ (the web app) and 404.html exist
+//   - _headers sends HSTS (a year or more), and its CSP script-src allows every inline <script> by hash
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -189,6 +191,26 @@ function checkManifest() {
   }
 }
 
+function checkHeaders() {
+  const file = path.join(DIST, "_headers");
+  if (!fs.existsSync(file)) return fail("_headers", "file missing");
+  const txt = fs.readFileSync(file, "utf8");
+  const hsts = txt.match(/^\s+Strict-Transport-Security: max-age=(\d+)/m);
+  if (!hsts || Number(hsts[1]) < 31536000) fail("_headers", "missing Strict-Transport-Security with a max-age of at least a year");
+  const csp = txt.match(/^\s+Content-Security-Policy: (.+)$/m);
+  if (!csp) return fail("_headers", "missing Content-Security-Policy");
+  const scriptSrc = (csp[1].split(";").map((d) => d.trim()).find((d) => d.startsWith("script-src ")) || "").split(/\s+/);
+  // Same rule as build.mjs's inlineScriptHashes(): every inline, executable <script> in any HTML file.
+  for (const htmlFile of walk(DIST).filter((f) => f.endsWith(".html"))) {
+    for (const m of fs.readFileSync(htmlFile, "utf8").matchAll(/<script(\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
+      const attrs = m[1] || "";
+      if (/\bsrc=/.test(attrs) || /type="application\/ld\+json"/.test(attrs) || !m[2]) continue;
+      const hash = `'sha256-${crypto.createHash("sha256").update(m[2], "utf8").digest("base64")}'`;
+      if (!scriptSrc.includes(hash)) fail(toUrlPath(htmlFile), `inline <script> is not in the CSP script-src (${hash})`);
+    }
+  }
+}
+
 function main() {
   if (!fs.existsSync(DIST)) {
     console.error("site/dist does not exist. Run `node site/build.mjs` first.");
@@ -209,6 +231,7 @@ function main() {
   checkSitemap(allPageUrls);
   checkRobots();
   checkManifest();
+  checkHeaders();
 
   if (errors.length) {
     console.error(`FAILED — ${errors.length} problem(s) across ${pagesChecked} page(s):\n`);
@@ -216,7 +239,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`OK — ${pagesChecked} pages checked, sitemap/robots/manifest valid, 0 problems.`);
+  console.log(`OK — ${pagesChecked} pages checked, sitemap/robots/manifest/_headers valid, 0 problems.`);
 }
 
 main();

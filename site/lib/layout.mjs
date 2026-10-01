@@ -112,11 +112,13 @@ export function renderPage({ lang, slug, title, description, bodyHtml, jsonLd: e
   const dir = lang === "ar" ? "rtl" : "ltr";
   const ld = [organizationLd(), websiteLd(lang), ...extraLd].map(jsonLd).join("\n");
 
+  // The first <script> forwards the old Cloudflare address and the www form to https://orderatweb.com,
+  // keeping the path, query and hash. build.mjs hashes it into the CSP, so it can change freely.
   return `<!doctype html>
 <html lang="${lang}" dir="${dir}">
 <head>
 <meta charset="utf-8">
-<script>if(location.hostname==='orderat-app.pages.dev')location.replace('https://orderatweb.com'+location.pathname+location.search+location.hash)</script>
+<script>if(location.hostname==='orderat-app.pages.dev'||location.hostname==='www.orderatweb.com')location.replace('https://orderatweb.com'+location.pathname+location.search+location.hash)</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="${escAttr(BRAND.themeColor)}">
 ${headTags({ lang, slug, title, description, ogImage, noEnglish })}
