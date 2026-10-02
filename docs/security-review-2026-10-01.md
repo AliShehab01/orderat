@@ -426,6 +426,19 @@ and Arabic, and checks that no button in `app.js` or `live.js` is labelled with 
      sign-in logs `"web"`, its tokens carry no separate `azp`: redeploy the previous `orderat-auth` and
      report it, since Android would then be unable to approve pairings.
 
+### Done since (2 Oct 2026)
+
+- **Staff screens gated on both phones.** iOS (`orderat-ios` `feat/today-glance-back`, in 1.0.1 build 23):
+  shop details, shop settings (business type, currency, VAT, stock), occasions and the shop link are not
+  offered to staff who cannot change them; each gate is tested against the server's rule for all flag
+  combinations. Android (`orderat-app` `feat/round-oct2`, in 1.5.5): order status without `prepare`,
+  customers and occasions without `orders`, the product active switch and typed items without
+  `products`, and the shop details and templates for any staff member.
+- **Refused changes are announced.** Both phones show one calm notice per sync when the server refused a
+  change and the phone put the server's copy back. Android also stops re-sending a refused edit whose
+  server copy it could not apply yet. The F01 rejection-without-copy paths were fixed earlier (`9667831`).
+- **iOS Keychain:** secrets are kept on this iPhone only and a failed save keeps the old value (1.0.1).
+
 ### What remains
 
 - **F03:** server-verified purchases (the design above); it needs the store credentials.
@@ -433,12 +446,6 @@ and Arabic, and checks that no button in `app.js` or `live.js` is labelled with 
   every staff member who may pull products or orders (F01, "No field-level read redaction"). Redacting
   them needs the phones to stop writing whole records back, or a redacted field would overwrite the
   owner's value.
-- **Android: a rejected-sync notice.** A refused push is reverted silently to the server's copy (or the
-  local copy is dropped). The seller should be told, and the rejection-without-copy paths in F01's
-  "What remains" fixed.
-- **iOS: Keychain save results.** `KeychainStore.set` returns whether the save worked, but its three
-  callers (`AuthManager`, `CloudAccountManager`, `ShopClient`) ignore it, so a failed save of a session
-  or an edit token goes unnoticed until the next launch.
 - **Backups:** confirm the database backups on the Supabase plan in use (daily backups or point-in-time
   recovery) and run one restore test. Nothing in this repository covers it.
 - **Canonical host redirects:** `orderat-app.pages.dev` and `www.orderatweb.com` reach
