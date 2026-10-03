@@ -65,7 +65,8 @@ export function movesOf(value: unknown): Json[] {
  * What identifies a move, and the `op_id` of stock_ops: `id:` and its id with the ASCII capitals folded (iOS sends uppercase
  * UUIDs, Android and the web lowercase; non-ASCII letters are left alone so no database locale can decide what a key is), or,
  * for a move with no id (a legacy Android row), `f:` and its own fields `[at, delta, reason, orderId]` as JSON, where a field
- * that is not a string or a finite number counts as null.
+ * that is not a string or a number counts as null (and so does a number JavaScript and PostgreSQL would print differently: below
+ * 1e-6 in size, or from 1e21 up; no stock move has one).
  *
  * Fourth review, R4: this rule is written once per language and the two must agree on every move. SQL:
  * orderat.stock_move_key (db/migrations/0010_order_stock.sql), which backfills stock_ops, lists the moves of a stored list
@@ -78,7 +79,12 @@ export function moveKey(move: Json): string {
 }
 
 const foldAsciiCase = (text: string): string => text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
-const keyToken = (value: unknown): string => (typeof value === "string" || (typeof value === "number" && Number.isFinite(value)) ? JSON.stringify(value) : "null");
+const keyToken = (value: unknown): string => {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value !== "number" || !Number.isFinite(value)) return "null";
+  const size = Math.abs(value);
+  return size === 0 || (size >= 1e-6 && size < 1e21) ? JSON.stringify(value) : "null";
+};
 
 /** The stock_ops key of an order and product pair in the maps below. */
 export const pairKey = (orderId: string, productId: string): string => `${orderId}\u0000${productId}`;

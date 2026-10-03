@@ -67,7 +67,8 @@ alter table orderat.stock_ops enable row level security;
 -- server/sync/stock-ops-keys.test.ts runs both on the same fixtures). An id is a string of at least one character; its
 -- ASCII capitals are folded with translate() so the key never depends on the database's locale (lower() would
 -- change non-ASCII letters in some locales, JavaScript's toLowerCase() in others). A move with no id is
--- identified by [at, delta, reason, orderId] as JSON, a field that is not a string or a number counting as null.
+-- identified by [at, delta, reason, orderId] as JSON, a field that is not a string or a number counting as null, and so
+-- does a number JavaScript and PostgreSQL would print differently (below 1e-6 in size, or from 1e21 up).
 create or replace function orderat.stock_move_key_token(v jsonb)
 returns text
 language sql
@@ -75,7 +76,8 @@ immutable
 as $fn$
   select case jsonb_typeof(v)
     when 'string' then to_json(v #>> '{}')::text
-    when 'number' then v::text
+    when 'number' then
+      case when v::numeric = 0 or (abs(v::numeric) >= 0.000001 and abs(v::numeric) < 1000000000000000000000) then v::text else 'null' end
     else 'null'
   end
 $fn$;

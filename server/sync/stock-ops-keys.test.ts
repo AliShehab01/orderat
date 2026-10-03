@@ -85,6 +85,7 @@ describe("R4 / one key rule, written once in SQL and once in TypeScript", () => 
     { at: true, delta: [1], reason: { a: 1 }, orderId: [] }, // other types count as missing
     { reason: "a\"b\\c\nd\te é \u0001 😀 \u007f  ", orderId: "o\u0001\u001f" }, // everything JSON writes an escape for
     { at: "الخليج العربي", reason: "تصحيح", orderId: "طلب-١" },
+    ...[1e-6, 1e-7, 1.5e-7, 5e-324, 1e20, 123456789012345680000, 1e21, 1.7976931348623157e308, -1e21, -1e-7, 0.1 + 0.2, 12345.6789, -0].map((delta) => ({ delta, reason: "received" })), // where JavaScript and PostgreSQL print a number differently, both say null
   ];
 
   it("orderat.stock_move_key and moveKey agree on every fixture: uppercase ids, ids that are not strings, moves with no id, every escape", async () => {
@@ -92,6 +93,32 @@ describe("R4 / one key rule, written once in SQL and once in TypeScript", () => 
       const rows = await sql.query<{ key: string }>(`select orderat.stock_move_key($1::text::jsonb) as key`, [JSON.stringify(move)]);
       expect(rows[0]!.key, JSON.stringify(move)).toBe(moveKey(move));
     }
+  });
+
+  it("a seeded fuzz of 3,000 moves with every awkward character agrees too (ids, fields, numbers, missing keys)", async () => {
+    let seed = 20261003;
+    const rand = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const alphabet = ["a", "Z", "0", "9", "-", "_", ".", " ", '"', "\\", "/", "\n", "\t", "\r", "\u0001", "\u001f", "\u007f", "\u0080", "é", "É", "İ", "ß", "Ω", "ı", "ﬁ", "😀", "𝒜", "ا", "\u2028", "\u00a0", "%", "'", "$", "{", "[", ":", ","];
+    const word = () => Array.from({ length: Math.floor(rand() * 12) }, () => alphabet[Math.floor(rand() * alphabet.length)]).join("");
+    const moves: Record<string, unknown>[] = [];
+    for (let i = 0; i < 3000; i++) {
+      const move: Record<string, unknown> = {};
+      if (rand() < 0.5) move.id = word();
+      if (rand() < 0.7) move.at = rand() < 0.8 ? word() : Math.floor(rand() * 1e12);
+      if (rand() < 0.7) move.delta = rand() < 0.6 ? Math.floor(rand() * 200 - 100) : rand() < 0.8 ? Math.round((rand() * 20 - 10) * 100) / 100 : (rand() - 0.5) * 10 ** Math.floor(rand() * 60 - 30);
+      if (rand() < 0.7) move.reason = word();
+      if (rand() < 0.5) move.orderId = rand() < 0.8 ? word() : null;
+      moves.push(move);
+    }
+    const rows = await sql.query<{ key: string }>(`select orderat.stock_move_key(m) as key from jsonb_array_elements($1::text::jsonb) with ordinality as t(m, ord) order by ord`, [JSON.stringify(moves)]);
+    expect(rows).toHaveLength(moves.length);
+    const different = moves.map((move, i) => ({ move, sql: rows[i]!.key, ts: moveKey(move) })).filter((r) => r.sql !== r.ts);
+    expect(different.slice(0, 3)).toEqual([]);
   });
 
   it("the rule: an id is compared without ASCII case, so the iOS and Android spellings of one move are one key; a move with no id is its fields", () => {

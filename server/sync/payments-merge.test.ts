@@ -307,3 +307,60 @@ describe("paymentStatusFor (the apps' rule)", () => {
     expect(paymentStatusFor({ items: ["junk"], payments: [] })).toBeUndefined();
   });
 });
+
+// Random interleavings of phones that record, delete, push (with the base they happen to hold) and pull, some of them older apps
+// that do not write removedPaymentIds, ids spelled in either case: whatever happens, a payment that was pushed is on the order
+// unless its id was pushed as removed, a removed id never comes back, removal ids never shrink, and the same push twice is the
+// same order.
+describe("applyPaymentRules / invariants under random interleavings", () => {
+  const mulberry32 = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  interface Phone { payments: ReturnType<typeof pay>[]; removed: string[]; writesRemovedIds: boolean }
+  const lower = (id: string) => id.toLowerCase();
+
+  it("200 seeded runs of 60 steps: no stored payment is lost except by a removal id, nothing removed returns, ids only grow, a repeated push changes nothing", () => {
+    for (let seed = 1; seed <= 200; seed++) {
+      const rand = mulberry32(seed);
+      const pick = <T,>(list: T[]): T => list[Math.floor(rand() * list.length)]!;
+      let server: Record<string, unknown> = order([]);
+      const phones: Phone[] = [0, 1, 2, 3].map((i) => ({ payments: [], removed: [], writesRemovedIds: i < 3 }));
+      const pushedIds = new Set<string>();
+      const removedIds = new Set<string>();
+      let counter = 0;
+
+      for (let step = 0; step < 60; step++) {
+        const phone = pick(phones);
+        const action = rand();
+        if (action < 0.25) {
+          const id = `P${seed}-${counter++}`;
+          phone.payments.push(pay(rand() < 0.5 ? id : id.toLowerCase(), 100 * (1 + Math.floor(rand() * 40))));
+        } else if (action < 0.4 && phone.payments.length > 0) {
+          const [gone] = phone.payments.splice(Math.floor(rand() * phone.payments.length), 1);
+          if (phone.writesRemovedIds) phone.removed.push(rand() < 0.5 ? gone!.id! : gone!.id!.toUpperCase());
+        } else if (action < 0.55) {
+          phone.payments = (server.payments as ReturnType<typeof pay>[]).map((p) => ({ ...p }));
+          phone.removed = phone.writesRemovedIds ? [...((server.removedPaymentIds as string[] | undefined) ?? [])] : [];
+        } else {
+          const before = server;
+          const extra: Record<string, unknown> = phone.writesRemovedIds && (phone.removed.length > 0 || rand() < 0.3) ? { removedPaymentIds: [...phone.removed] } : {};
+          const pushed = order(phone.payments.map((p) => ({ ...p })), { paymentStatus: pick(["unpaid", "deposit", "paid"]), notes: `step ${step}`, ...extra });
+          server = JSON.parse(JSON.stringify(applyPaymentRules(pushed, stored(before), pushed))); // stored as JSON: no array is shared with a phone
+
+          for (const p of phone.payments) pushedIds.add(lower(p.id!));
+          for (const id of phone.writesRemovedIds ? phone.removed : []) removedIds.add(lower(id));
+
+          const onOrder = new Set((server.payments as { id: string }[]).map((p) => lower(p.id)));
+          for (const id of pushedIds) expect(onOrder.has(id) || removedIds.has(id), `seed ${seed} step ${step}: ${id} was lost`).toBe(true);
+          for (const id of removedIds) expect(onOrder.has(id), `seed ${seed} step ${step}: ${id} came back`).toBe(false);
+          expect(new Set(((server.removedPaymentIds as string[] | undefined) ?? []).map(lower)), `seed ${seed} step ${step}: ids shrank`).toEqual(removedIds);
+          expect((server.payments as { id: string }[]).length, "each payment once").toBe(onOrder.size);
+          expect(JSON.parse(JSON.stringify(applyPaymentRules(pushed, stored(server), pushed))), `seed ${seed} step ${step}: a repeated push changed the order`).toEqual(server);
+        }
+      }
+    }
+  });
+});
