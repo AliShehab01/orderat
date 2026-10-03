@@ -9,9 +9,14 @@
 // - invoice numbers: a per-browser, per-shop counter in localStorage 'orderat.web.invoice.<shopId>',
 //   shown as INV-<deviceCode>-000123 (InvoiceNumberFormat), stamped once like assignInvoiceNumberIfNeeded.
 // - VAT: the order's own snapshot (vatRateBps, vatIncluded, vatMinor) like Store.applyVATSnapshot, and
-//   totals like Order.totalMinor (VAT added only when prices exclude it).
+//   totals like Order.totalMinor (VAT added only when prices exclude it). The shop's VAT settings are
+//   snapshotted onto a NEW order only (applyVat); every edit of an existing order recomputes vatMinor
+//   from the order's own rate and mode (reapplyVat), like the Android edit form.
 // - stock: moves { id, delta, reason, orderId, note, at } newest first, the last 50 kept
-//   (Store.applyStockForStatusChange / applyStockDifference / adjustStock).
+//   (Store.applyStockForStatusChange / applyStockDifference / adjustStock). Physical stock never changes
+//   only because tracking was switched on or off: each order keeps what it took out of every product in
+//   its own ledger `stockDeducted` { productId: units }, and gives back exactly that (see "Stock" below).
+// - new order deposit: checkDeposit, the "Partial payment" amount against the order's final total.
 // - buildAskSnapshot: AskSnapshotBuilder's JSON, same keys, first names and short refs only.
 // - AI order entry: an orderat-parse draft into the New order form, its pickup or delivery and address
 //   included (Bahrain's area to the area list, the rest as the one free-text address).
@@ -41,6 +46,7 @@
   const CLOUD_BUSINESS = { foodTruck: 'food_truck' };
 
   const num = (v, def) => (typeof v === 'number' && isFinite(v) ? v : def);
+  const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const time = v => {
     const t = v instanceof Date ? v.getTime() : typeof v === 'string' && v ? Date.parse(v) : NaN;
     return isFinite(t) ? t : NaN;
@@ -151,16 +157,30 @@
   const rateOf = (vat, currency) => (vat && typeof vat.rateBps === 'number' && vat.rateBps >= 0 ? vat.rateBps : defaultRateBps(currency));
   const itemsAndDeliveryMinor = (o, d) => sum(o.items, it => num(it.qty, 1) * toMinor(it.price, d)) + toMinor(o.deliveryFee || 0, d);
 
-  // Called on create and on every edit of an order's items or delivery fee, never on a settings change.
+  // Whether the order carries its own VAT snapshot (rate and mode). An order created without VAT has none.
+  const hasVatSnapshot = o => typeof o.vatRateBps === 'number' && typeof o.vatIncluded === 'boolean';
+
+  // A NEW order takes the shop's VAT as it is now: rate, whether prices include it, the amount, and (once)
+  // an invoice number. Shop VAT off: the order stays without VAT. An order that already carries a snapshot
+  // keeps it (recomputed from its own rate), so calling this on an edit can never reprice it with the
+  // shop's current settings; edits call reapplyVat.
   function applyVat(order, vat, currency, issueInvoice) {
+    if (hasVatSnapshot(order)) return reapplyVat(order, currency);
+    if (!vat || !vat.enabled) return order;
     const d = decimalsFor(currency), amount = itemsAndDeliveryMinor(order, d);
-    if (!vat || !vat.enabled) {
-      if (typeof order.vatRateBps === 'number' && typeof order.vatIncluded === 'boolean') order.vatMinor = vatMinor(amount, order.vatRateBps, order.vatIncluded);
-      return order;
-    }
     const rate = rateOf(vat, currency), included = vat.pricesInclude !== false;
     Object.assign(order, { vatRateBps: rate, vatIncluded: included, vatMinor: vatMinor(amount, rate, included) });
     if (order.invoiceNumber == null && !order.invoiceIdentifier) Object.assign(order, issueInvoice());
+    return order;
+  }
+
+  // An EXISTING order after any edit (notes, date, items, quantities, delivery fee, pickup or delivery):
+  // vatMinor again from the order's OWN vatRateBps and vatIncluded and its items and delivery now, like the
+  // Android edit form. The shop's settings never come into it, and neither does the invoice number: an
+  // order created without VAT stays without VAT and takes no invoice number from an edit.
+  function reapplyVat(order, currency) {
+    if (!hasVatSnapshot(order)) return order;
+    order.vatMinor = vatMinor(itemsAndDeliveryMinor(order, decimalsFor(currency)), order.vatRateBps, order.vatIncluded);
     return order;
   }
 
@@ -173,43 +193,170 @@
     return { itemsAndDelivery: base, vat, total, paid, cost, due: total - paid };
   }
 
+  // New order, "Partial payment (deposit)": the typed amount checked against the order's final total (items,
+  // delivery and VAT, in minor units), the way the phones do: Android refuses an empty, zero, unreadable or
+  // over-total deposit, iOS a deposit above the total. A deposit equal to the total is allowed.
+  // The amount is read as a plain number (a pasted "1e400" or "NaN" is not one) and rounded to the
+  // currency's decimals like every amount that goes to the cloud.
+  // → { ok: true, amount, minor }  amount in major units
+  //   { ok: false, error: 'amount' }                 not a finite number above 0 (or rounds to 0)
+  //   { ok: false, error: 'over', totalMinor }       more than the order's final total
+  function checkDeposit(text, totalMinor, currency) {
+    const d = decimalsFor(currency);
+    const typed = typeof text === 'number' ? text : Number(String(text == null ? '' : text).trim());
+    const minor = isFinite(typed) && typed > 0 ? toMinor(typed, d) : 0;
+    if (!(minor > 0)) return { ok: false, error: 'amount' };
+    if (minor > totalMinor) return { ok: false, error: 'over', totalMinor };
+    return { ok: true, amount: minor / Math.pow(10, d), minor };
+  }
+
   // ---------- Stock ----------
+  //
+  // Physical stock must never rise or fall only because tracking was switched on or off. Statuses and
+  // today's tracking switches do not say what an order took out of the shelves; the order does, in its
+  // own ledger `stockDeducted` { productId: whole units > 0 }, written in the same change as the stock
+  // moves. { } means "takes nothing now"; a missing ledger is a legacy order (below). The rules:
+  // - into confirmed, ready or collected: take the order's units of every product that tracks stock, only
+  //   while the shop's stock tracking is on; those units are the ledger. A product that is not tracked
+  //   (or the shop not tracking) takes nothing and is not in the ledger.
+  // - out of them (cancelled, or back to new): give back exactly the ledger, whatever the tracking
+  //   switches say now (the goods physically come back), then the ledger is { }.
+  // - items edited while it holds stock: a product in the ledger moves by the difference (even with
+  //   tracking off) and its entry follows; a new line takes its units when the shop and the product
+  //   track; an older line that never took stock stays out of it.
+  // - a legacy order's ledger is derived the first time it is needed (leaving, or an item edit while in
+  //   one) from the stock moves that carry its id, and written in the same change. Known limit: a product
+  //   keeps only its last 50 moves, so a very old order on a busy product may derive { } and give back
+  //   nothing. That under-counts instead of inventing stock.
+
+  const ORDER_MOVES = ['orderConfirmed', 'orderEdited', 'orderCancelled'];
+  const isDeducted = status => DEDUCTED.indexOf(status) >= 0;
 
   function adjust(p, delta, reason, orderId, at, newId) {
     p.qty = num(p.qty, 0) + delta;
     const moves = Array.isArray(p.stockMoves) ? p.stockMoves : [];
     p.stockMoves = [{ id: newId(), delta, reason, orderId: orderId || null, note: null, at }].concat(moves).slice(0, MAX_STOCK_MOVES);
   }
+  const productOf = (products, pid) => (pid ? (products || []).find(p => p.id === pid) : undefined);
   function tracked(products, pid) {
-    return pid ? (products || []).find(p => p.id === pid && p.track) : undefined;
+    const p = productOf(products, pid);
+    return p && p.track ? p : undefined;
   }
-  // Deducts (into confirmed or later) or restores (out of it) the tracked products of an order.
-  function stockForStatus(products, order, from, to, at, newId) {
-    const was = DEDUCTED.indexOf(from) >= 0, will = DEDUCTED.indexOf(to) >= 0;
-    if (was === will) return [];
-    const sign = will ? -1 : 1, reason = will ? 'orderConfirmed' : 'orderCancelled', changed = [];
-    (order.items || []).forEach(it => {
-      const p = tracked(products, it.pid), delta = sign * num(it.qty, 1);
-      if (!p || !delta) return;
-      adjust(p, delta, reason, order.id, at, newId);
-      if (changed.indexOf(p) < 0) changed.push(p);
+  // Whole units per product over a list of order lines (a line with no product, or a custom one, counts
+  // for none).
+  function unitsByProduct(items) {
+    const m = new Map();
+    (items || []).forEach(it => {
+      if (!it || !it.pid || it.pid === 'custom') return;
+      m.set(it.pid, (m.get(it.pid) || 0) + Math.max(0, Math.round(num(it.qty, 1))));
     });
-    return changed;
+    return m;
   }
-  // An order whose stock is already deducted was edited: move the difference per tracked product.
-  function stockForEdit(products, oldItems, newItems, orderId, at, newId) {
-    const count = items => {
-      const m = new Map();
-      (items || []).forEach(it => { if (it.pid) m.set(it.pid, (m.get(it.pid) || 0) + num(it.qty, 1)); });
-      return m;
-    };
-    const before = count(oldItems), after = count(newItems), changed = [];
-    new Set([...before.keys(), ...after.keys()]).forEach(pid => {
-      const p = tracked(products, pid), delta = (after.get(pid) || 0) - (before.get(pid) || 0);
-      if (!p || !delta) return;
-      adjust(p, -delta, 'orderEdited', orderId, at, newId);
+  // The order's own ledger as a clean { productId: whole units > 0 }, or undefined when it has none (a
+  // legacy order, or a value that is not an object).
+  function ledgerOf(order) {
+    const raw = order && order.stockDeducted;
+    if (!isObj(raw)) return undefined;
+    const out = {};
+    Object.keys(raw).forEach(pid => {
+      const n = raw[pid];
+      if (pid && pid !== '__proto__' && Number.isInteger(n) && n > 0) out[pid] = n;
+    });
+    return out;
+  }
+  // A legacy order's ledger from the products' stock moves that carry its id: per product the net units
+  // taken out (orderConfirmed, orderEdited and orderCancelled moves summed with their sign, negated), only
+  // where positive. No moves found: { }.
+  function ledgerFromMoves(products, orderId) {
+    const out = {};
+    if (!orderId) return out;
+    (products || []).forEach(p => {
+      if (!p || !p.id || p.id === '__proto__') return;
+      let moved = 0;
+      (Array.isArray(p.stockMoves) ? p.stockMoves : []).forEach(m => {
+        if (m && m.orderId === orderId && ORDER_MOVES.indexOf(m.reason) >= 0 && typeof m.delta === 'number' && isFinite(m.delta)) moved += Math.round(m.delta);
+      });
+      if (moved < 0) out[p.id] = -moved;
+    });
+    return out;
+  }
+  // The demo's legacy orders had a `stockApplied` flag and no moves: such an order took its units of the
+  // products that track stock now, which is what the demo used to put back.
+  function ledgerFromFlag(products, order) {
+    const out = {};
+    if (!order || order.stockApplied !== true) return out;
+    unitsByProduct(order.items).forEach((qty, pid) => { if (qty > 0 && tracked(products, pid)) out[pid] = qty; });
+    return out;
+  }
+  // The order's ledger: its own, else (a legacy order) derived by options.legacy(products, order), the
+  // stock moves by default.
+  function ledgerFor(products, order, options) {
+    const own = ledgerOf(order);
+    if (own) return own;
+    const derive = options && typeof options.legacy === 'function' ? options.legacy : (ps, o) => ledgerFromMoves(ps, o.id);
+    return ledgerOf({ stockDeducted: derive(products, order) }) || {};
+  }
+
+  // An order moves from status `from` to `to`: takes its stock (into confirmed or later) or gives back
+  // exactly what it took (out of it), with an orderConfirmed or orderCancelled move per product, and
+  // writes the ledger onto the order. options: { shopTracking: the shop's stock switch, legacy(products,
+  // order): a legacy order's ledger }. Returns the products whose stock moved.
+  function stockForStatus(products, order, from, to, at, newId, options) {
+    const was = isDeducted(from), will = isDeducted(to);
+    if (was === will) return [];
+    const opts = options || {}, changed = [];
+    if (will) {
+      const taken = {};
+      if (opts.shopTracking) {
+        unitsByProduct(order.items).forEach((qty, pid) => {
+          const p = tracked(products, pid);
+          if (!p || !(qty > 0)) return;
+          adjust(p, -qty, 'orderConfirmed', order.id, at, newId);
+          taken[pid] = qty;
+          changed.push(p);
+        });
+      }
+      order.stockDeducted = taken;
+      return changed;
+    }
+    const ledger = ledgerFor(products, order, opts);
+    Object.keys(ledger).forEach(pid => {
+      const p = productOf(products, pid); // a product that no longer exists is skipped
+      if (!p) return;
+      adjust(p, ledger[pid], 'orderCancelled', order.id, at, newId);
       changed.push(p);
     });
+    order.stockDeducted = {};
+    return changed;
+  }
+
+  // The items of an order are replaced (call it before `order.items = newItems`). Only an order that holds
+  // stock (confirmed, ready, collected) moves any: per product `change = new units - old units`.
+  // - in the ledger: stock moves by -change (an orderEdited move), even with tracking off, and the entry
+  //   becomes old + change, gone at 0. A reduction never gives back more than the ledger holds.
+  // - not in the ledger, a new line (no units before), shop and product tracking: takes its units.
+  // - not in the ledger, a line that was there before: nothing (it never took stock).
+  // A legacy order's ledger is derived first and written either way. Returns the products whose stock moved.
+  function stockForEdit(products, order, newItems, at, newId, options) {
+    if (!isDeducted(order.status)) return [];
+    const opts = options || {};
+    const before = unitsByProduct(order.items), after = unitsByProduct(newItems);
+    const ledger = Object.assign({}, ledgerFor(products, order, opts)), changed = [];
+    new Set([...before.keys(), ...after.keys()]).forEach(pid => {
+      const was = before.get(pid) || 0, change = (after.get(pid) || 0) - was, p = productOf(products, pid);
+      if (!change) return;
+      let delta; // units the order takes more (positive) or gives back (negative)
+      if (ledger[pid] > 0) delta = Math.max(change, -ledger[pid]);
+      else if (was === 0 && opts.shopTracking && p && p.track) delta = change;
+      else return;
+      if (p) {
+        adjust(p, -delta, 'orderEdited', order.id, at, newId);
+        changed.push(p);
+      }
+      const left = (ledger[pid] || 0) + delta;
+      if (left > 0) ledger[pid] = left; else delete ledger[pid];
+    });
+    order.stockDeducted = ledger;
     return changed;
   }
 
@@ -314,7 +461,6 @@
 
   // ---------- AI order entry (orderat-parse) ----------
 
-  const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const cut = (s, n) => String(s || '').trim().slice(0, n);
   function parseProducts(products) {
     return (products || []).filter(p => p.active !== false).slice(0, 500).map(p => {
@@ -514,7 +660,8 @@
 
   return {
     subscriptionAllowed, subscriptionActive, aiDemo, callingCode, localDigits, normalizePhone, access, formatInvoice, nextInvoice, invoiceLabel,
-    vatMinor, defaultRateBps, applyVat, orderMinor, stockForStatus, stockForEdit, orderNumbers, historyLabel,
+    vatMinor, defaultRateBps, applyVat, reapplyVat, orderMinor, checkDeposit, stockForStatus, stockForEdit, ledgerOf, ledgerFromMoves, ledgerFromFlag,
+    orderNumbers, historyLabel,
     cleanItems, parseProducts, answerDraft, draftFields, deliveryAddress, buildAskSnapshot, canMoveOrderStock, flushBeforeLeaving,
     createPermissionEditor, deliveryFeeMinor, feeForFulfillment, isOutForDelivery, nextStep,
   };
