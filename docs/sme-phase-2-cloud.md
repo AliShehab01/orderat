@@ -86,7 +86,7 @@ docs/security-review-2026-10-01.md). The owner reads and writes everything. For 
 | every member, any flags | `shop`, `setting/subscription` | nothing |
 | any one flag | also every other `setting`, `product`, `stock_move`, `occasion` | (per flag below) |
 | `orders` | also `order`, `customer` | `order`, `customer`, `occasion` (create, edit, delete) |
-| `prepare` | also `order`, `customer` | an existing order's `status`, `outForDeliveryAt`, `updatedAt` and new `changes` entries with field `status` / `outForDelivery` |
+| `prepare` | also `order`, `customer` | an existing order's `status`, `outForDeliveryAt`, `stockDeducted`, `updatedAt` and new `changes` entries with field `status` / `outForDelivery` |
 | `money` | also `order`, `customer`, `expense` | `expense`; an existing order's `payments`, `paymentStatus`, `updatedAt` and new `changes` entries with field `paymentStatus` / `payment` |
 | `products` | (nothing more) | `product`, `stock_move` |
 
@@ -167,12 +167,13 @@ model to and from it.
 | `shop` | the shop id | `nameAr, nameEn?, phone, currencyCode, pickupHours?, dailyCapacity?, businessType, vat:{enabled, trn, rateBps, pricesIncludeVat}, stock:{enabled, defaultLowStockThreshold}, createdAt` |
 | `product` | uuid | `nameAr, nameEn?, aliases[], priceMinor, costMinor, dailyCapacity?, active, photoId?, trackStock, stockQuantity, lowStockThreshold, stockMoves:[{id, delta, reason, orderId?, note?, at}] (last 50), createdAt` |
 | `customer` | uuid | `name, phone, area?, notes?, createdAt` |
-| `order` | uuid | `customerId, status, fulfillmentType, dueAt, address:{area?, block?, road?, building?, notes?}, deliveryFeeMinor, paymentStatus, items:[{id, productId?, nameSnapshot, quantity, unitPriceMinor, unitCostMinor}], payments:[{id, amountMinor, method, note?, paidAt}], changes:[{id, field, oldValue?, newValue?, note?, at}], notes?, vatRateBps?, vatIncluded?, vatMinor?, invoiceNumber?, createdAt, updatedAt` |
+| `order` | uuid | `customerId, status, fulfillmentType, dueAt, address:{area?, block?, road?, building?, notes?}, deliveryFeeMinor, paymentStatus, items:[{id, productId?, nameSnapshot, quantity, unitPriceMinor, unitCostMinor}], payments:[{id, amountMinor, method, note?, paidAt}], changes:[{id, field, oldValue?, newValue?, note?, at}], notes?, vatRateBps?, vatIncluded?, vatMinor?, invoiceNumber?, stockDeducted?:{productId: units}, createdAt, updatedAt` |
 | `expense` | uuid | `amountMinor, category, note?, receiptPhotoId?, recurring, date, createdAt` |
 | `occasion` | uuid | `kind, nameAr, nameEn?, startDate, endDate, preOrderOpensAt?, dailyCapacityOverride?, blocked, notes?` |
 | `setting` | the key | `{ value }` for shop-level settings only, e.g. `whatsappTemplates`. Per-device prefs (language, theme, address form, Ask consent) never sync. |
 
 - **Enum values** are the existing lowercase codes both apps already use (status, payment status, fulfillment, expense category, occasion kind, stock reason). A code an app does not know is shown as "other" and kept unchanged on write.
 - **Stock with several phones:** each order's stock moves are recorded on the phone that confirmed the order. `stockQuantity` is last-writer-wins like any field. This is acceptable for v1.
+- **Order stock ledger:** `stockDeducted` is what the order actually took out of each product's stock (`{}` = nothing; missing = a legacy order, derived from the stock moves that carry the order id). Confirming writes it, cancelling gives back exactly it and writes `{}`, item edits move the difference. Tracking switches never decide what comes back. Written wholesale, never merged.
 - **Invoice numbers:** with sync on, each device prefixes its sequence with a short device code taken from the session (for example `INV-A7-000123`), so two phones never issue the same number. Without sync, numbering stays as it is today.
 - **Photos:** product and receipt photos travel as `photoId` (SHA-256 of the JPEG). Upload with `photo_upload`, fetch with `photo_url`, and cache locally by photoId.

@@ -48,7 +48,7 @@ The VAT amount per order is computed in **minor units with integer math** and ro
 - If prices include VAT: `vat = total - round(total / (1 + rate))`.
 - If prices exclude VAT: `vat = round(subtotal × rate)` and `total = subtotal + vat`.
 
-When an order is created or edited, it snapshots `vatRateBps` (the rate in basis points, 1000 = 10%), `vatIncluded` and `vatMinor`. Turning VAT off later, or changing the rate, never rewrites past orders.
+When an order is created, it snapshots `vatRateBps` (the rate in basis points, 1000 = 10%), `vatIncluded` and `vatMinor`. Turning VAT off later, or changing the rate, never rewrites past orders, and editing an order recomputes its VAT from its own rate and mode, never the shop's current settings.
 
 The order detail and the receipt show:
 - Subtotal (before VAT)
