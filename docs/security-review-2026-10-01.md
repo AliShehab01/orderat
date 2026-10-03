@@ -674,16 +674,15 @@ a trimmed confirm move. No data backfill beyond listing the move ids already sto
   a ledger tells identical edits apart. Two released phones that confirm or cancel the same order are covered (the
   order's units are the cap, zero the floor).
 - **An iOS phone that edits an order while its own sync is in flight can still drop another phone's payment.**
-  iOS refreshes its recorded `seq` for a pulled record even when it skips applying it (the order was edited
-  meanwhile), so the re-push carries a current `baseSeq` and its own, older, payments list; the server cannot tell
-  that from a deliberate removal. Android and the web keep the old `baseSeq` for such a record and are merged.
-  A client fix (keep the old `baseSeq` for a record that was not applied, as Android does) closes it.
+  *Closed by the fourth review (R2, below):* the absence of a payment never removes it any more, whatever the
+  `baseSeq`; iOS also keeps the base of a record it did not apply.
 - **A payment added and removed again before the sync that carried it returns** is not removed on Android and the
-  web: the removal is based on the older copy, and a removal counts only from an up-to-date one. The payment
-  stays; the seller deletes it again. (iOS, which refreshes its `baseSeq`, removes it.)
+  web. *Closed by the fourth review (R3, below):* the removal lists the payment's id in `removedPaymentIds`, so the
+  creation that arrives later (or earlier) does not bring it back.
 - **A move trimmed off a product's list before migration 0010** and still held by a long-offline phone is
   indistinguishable from a new move and would be applied again when that phone pushes. Moves still in a list at
-  migration time, and every move applied since, are known.
+  migration time, and every move applied since, are known. (The fourth review, R4, found that the migration did
+  not list them under the keys the code looks up; fixed, below.)
 - **A product move that names an order the server never receives** is never applied (and never recorded). The
   order of a batch is handled (its orders first), a batch split across syncs by the 200-change limit is not.
 - **Deleted orders keep their allocation** (the stock stays taken). Nothing in the apps deletes orders (they
@@ -695,3 +694,118 @@ a trimmed confirm move. No data backfill beyond listing the move ids already sto
   review): no move, nothing to merge it by.
 - Two writers meeting in the database can in principle deadlock (a permission grant that re-sequences every order
   while an order write holds several rows): Postgres aborts one, the sync answers 500 and the phone retries.
+
+## Fourth review, 3 Oct 2026 (R1 to R4: payments, stock keys, the order of a pull)
+
+The fourth review of the third round's work found four problems, two of them in the clients. This repo holds the
+server side (`server/sync/`, `db/migrations/0010_order_stock.sql`). Rules: `docs/sme-phase-2-cloud.md` ("Order
+payments with several phones", "Stock with several phones", "Sync"). 0010 had not been applied to any real database,
+so it is fixed in place.
+
+### R2 and R3: payments are add-only, and a removal is an id
+
+R2: iOS refreshes its recorded `seq` for a pulled record it skipped (the order was edited mid-sync), so its next push
+looked up to date, and its old `payments` list read, under the third review's rule, as a deliberate removal of
+another phone's payment. R3: a payment deletion accepted by the server was undone by an older phone that still held
+the payment and pushed a notes or status edit (the stale copy's union put it back).
+
+- **Changed:** the absence of a payment in a pushed order **never removes it, whatever the `baseSeq`**. A payment is
+  removed only by listing its id in the order's new grow-only `removedPaymentIds`. On every accepted order write by
+  a member who may write payments (the owner, `orders` and `money` staff): `removed = stored ids + valid pushed ids +
+  legacy removals`; `payments = (stored + pushed, by id; the pushed copy wins for a payment in both) minus removed`;
+  both stored; `paymentStatus` recomputed when the result differs from the push. Valid ids: an array of at most 500
+  non-empty strings of at most 64 characters, else the whole value is ignored and not stored. `prepare`-only staff
+  cannot add ids; a member with neither permission cannot push an order. The order holds at most 1,000 ids and 500
+  payments (a grow-only list must not be a way to bloat one record); stored ones are never dropped.
+- **Legacy removals keep the released iOS 1.0 working.** It deletes by absence and logs `payment: "<amount>" ->
+  "removed"`. A new such entry for which exactly as many stored payments of that amount are missing from the push as
+  there are entries for the amount removes those payments and records their ids; a payment recorded after the entry
+  cannot be the one removed (it guards the case of a payment another phone recorded later); anything ambiguous keeps
+  the payments.
+- **Clients (not this repo):** deleting a payment, an undo of a just-recorded one included, removes it from
+  `payments` and appends its id to `removedPaymentIds`; the field syncs, is kept in backups, and is never shortened;
+  on a pull the client takes the server's `payments` and `removedPaymentIds`. iOS also keeps the base of a record it
+  did not apply (its recorded `seq` and raw snapshot stay what the local copy was built on).
+- Tests: `payments-merge.test.ts` (the rules), `record-access.test.ts` (every member kind), `payments-push.test.ts`
+  (real push path on PGlite, retries and both arrival orders): R3 for every remover and older-phone pair (with another
+  surviving payment, and a payment added concurrently), R2 with the iOS wire sequence, the iOS 1.0 shape with and
+  without its history entry, add then remove before the carrying sync returns, the third review's A (2,000) and B
+  (3,000) acceptance, money-only and prepare-only staff, a member with no permission, invalid ids, the 500-id cap, a
+  removed id that reappears in a stale push, every kind of `baseSeq`.
+
+### R4: migration 0010 listed keys nothing looks up
+
+The migration backfilled `stock_ops` with `lower(id)` while the runtime looks a move up as `id:<lower id>`, and left
+out moves with no id. A move the 50-entry display list had trimmed could then be applied a second time by an offline
+phone's old snapshot: quantity 100 with 50 moves, an order confirmation (97, the oldest move trimmed), the snapshot
+replayed: 98 or more.
+
+- **Changed:** one key rule per language, tested on the same fixtures (uppercase ids, no id, an id that is not a string,
+  every JSON escape, non-ASCII): `orderat.stock_move_key` in SQL and `moveKey` in `stock-merge.ts`. `id:` and the id
+  with its ASCII capitals folded (so no database locale decides), or `f:[at,delta,reason,orderId]` for a move with no
+  id. The backfill lists every move of every product's stored list with it (and takes out the bare ids of the first
+  draft, idempotently). `sync_apply` records every move in the stored list of a product it replaces, whether the
+  product is the primary record or the target of a stock effect, before the list can lose one; a product write with no
+  plan of its own (a deletion, a product that comes back) goes through it too, so no path trims a list unrecorded.
+- Tests: `stock-ops-keys.test.ts`: SQL and TypeScript agree on every fixture; the migration lists exactly the runtime's
+  keys (re-run, a draft's rows, only products); each path that rewrites a list records it first; and the acceptance
+  sequence against the real migration file (quantity 100 and 50 moves, the file run, an order confirmation: 97 and the
+  oldest move trimmed, the old snapshot replayed twice: still 97, a new offline move applied once, then a cancel), for
+  the owner and `products` staff, an oldest move with and without an id, confirmed by the order alone or by the
+  phone's batch. `atomic-write.test.ts` covers the function itself.
+
+### R1: the new server made "an order before its product" routine
+
+Android applies a pull in seq order and resolves references at that moment: an order whose product arrives later keeps
+a null product link, and an order whose customer arrives later is skipped. The third review's server wrote an order
+before the stock effect on its product, and the phone's own product push after the order, so a fresh join or a
+reinstall met the order first. The real fix is on Android (references kept and resolved when the record arrives, a
+pending order that survives restarts); the server's part is a mitigation for app versions already installed.
+
+- **Changed:** inside the atomic write, the products an order's stock effects move draw their seqs before the order's
+  own. And once a batch is applied, every order it wrote whose products (the one the phone pushed in the same batch,
+  written after the order so its move is judged against it, or one another order of the batch moved) now have a
+  higher seq is given a fresh seq again (the seq alone, only while it is still as the batch left it). A pull
+  therefore delivers the product first. Conflicts are decided when each change is applied, exactly as before; a phone
+  that adopts the pulled seq carries on without a conflict of its own.
+- Tests: `stock-push.test.ts` ("R1"): an order alone, the confirm batch of the owner, `orders` and `prepare` staff, a
+  second phone's confirm, a released phone's batch, two orders on one product, cancel and item edit, customers and new
+  products keeping their place, no extra write for a first upload, the seq as the only thing rewritten, another write
+  landing just before the re-seq. The older assertions that expected the order before its product now expect the
+  product first.
+
+### Deploy
+
+1. **Migration first:** `npm run hosting:migrate -- --dry-run` lists `0010_order_stock.sql` (still pending: it was not
+   applied before), then `npm run hosting:migrate`. Additive and idempotent; safe against the code deployed now. A
+   database that ran the first draft gets its bare backfilled ids taken out and the right keys inserted.
+2. **Then `npm run hosting:deploy -- orderat-sync`.**
+3. **Web and store builds:** a client that writes `removedPaymentIds` works against the old server too (it stores the
+   field on whole-order pushes and ignores it on `money` pushes, where deleting by absence still works), so the web
+   app can ship before the server; shipped after, there is a window in which a payment deleted on the old web app
+   comes back.
+
+### What remains
+
+- **Android 1.5.5 and the web app of before this change delete a payment by leaving it out**, and add no history entry
+  the server could read (Android logs only a `paymentStatus` entry). The new server does not honour an absence, so the
+  payment comes back on their next pull until they are updated. Money is never lost; a mistaken payment cannot be
+  deleted on those versions. iOS 1.0 keeps working through its history entry.
+- **A pull is still in seq order.** A product edited by a later batch has a higher seq than every older order that names
+  it, so a fresh join on an Android app without the fix can still meet an older order before its product. Only the
+  Android fix covers it (the server cannot give every older order a newer seq each time a popular product changes).
+  The same goes for an order and a customer edited later.
+- **iOS 1.0's legacy removal is a heuristic.** A payment recorded and removed on iOS 1.0 before it ever synced, while
+  another phone's payment of the same amount (recorded earlier) is stored, looks like a removal of that payment; a
+  removal entry that reaches the server before the creation it undoes names nothing, so a late creation is stored (only
+  a retry after a lost response can reorder one phone's pushes). Ambiguity otherwise keeps the payment.
+- **Grow-only lists are capped** (1,000 removal ids, 500 payments per order). A member with `orders` or `money` who
+  fills them with junk ids stops later removals on that order from being recorded; the stored ones stay. The owner can
+  remove such a member.
+- **A payment present in both takes the pushed copy,** even from a stale phone: no app edits a payment (a correction
+  is a removal and a new one), but a client that did would lose an edit to an older copy.
+- **A deleted order's payments** are not merged into a record that comes back with the same id (its removal ids
+  are). Nothing in the apps deletes orders.
+- **A move trimmed off a product's list before migration 0010 ran** is still unknown to `stock_ops` (nothing can recover
+  it); moves in a list when the migration runs, and every move since, are known.
+- **`stock_ops` is durable and uncapped,** one small row per applied or listed move for the life of the shop.
