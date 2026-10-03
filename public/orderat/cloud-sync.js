@@ -97,7 +97,32 @@
     const onChange = typeof opts.onChange === 'function' ? opts.onChange : () => {};
     const onNotice = typeof opts.onNotice === 'function' ? opts.onNotice : () => {};
     const baseCtx = isObj(opts.ctx) ? opts.ctx : {};
-    const SHOP_KEY = keyOf('shop', shopId);
+    // The shop's own record. The cloud keeps the shop id lowercase, but an iPhone writes its shop record
+    // under its own uppercase UUID (and any phone's id may differ in case), so the record is found by its
+    // id without case, else it is the shop's one live record whatever its id; with none yet, the web
+    // creates it under the cloud shop id. Never a second shop record while the phone's exists.
+    const foldId = id => String(id).toLowerCase();
+    function shopKey() {
+      const exact = keyOf('shop', shopId);
+      let best = null;
+      records.forEach((r, key) => {
+        if (r.entity !== 'shop' || r.deleted) return;
+        const rank = key === exact ? 2 : foldId(r.id) === foldId(shopId) ? 1 : 0;
+        if (!best || rank > best.rank || (rank === best.rank && r.seq > best.seq)) best = { key, rank, seq: r.seq };
+      });
+      return best ? best.key : exact;
+    }
+    const shopRecordId = key => (records.has(key) ? records.get(key).id : shopId);
+    // A shop change made before the phone's record was known goes to that record, not a second one.
+    function rekeyShop() {
+      const key = shopKey();
+      Array.from(pending.keys()).forEach(k => {
+        const p = pending.get(k);
+        if (p.entity !== 'shop' || k === key) return;
+        pending.delete(k);
+        if (!pending.has(key)) pending.set(key, Object.assign({}, p, { id: shopRecordId(key) }));
+      });
+    }
     const entityRank = e => {
       const i = map.ENTITY_ORDER.indexOf(e);
       return i < 0 ? map.ENTITY_ORDER.length : i;
@@ -128,7 +153,7 @@
     }
 
     function makeCtx() {
-      const shop = records.get(SHOP_KEY);
+      const shop = records.get(shopKey());
       const code = shop && !shop.deleted && isObj(shop.data) ? shop.data.currencyCode : undefined;
       return Object.assign({}, baseCtx, { decimals: map.decimalsFor(code), now: new Date() });
     }
@@ -176,6 +201,7 @@
           }
         }
       });
+      const SHOP_KEY = shopKey();
       const shopView = local(SHOP_KEY);
       const shop = map.shopToWeb(shopId, shopView ? shopView.data : undefined, ctx);
       Object.assign(state, shop);
@@ -240,7 +266,7 @@
         if (entity === 'shop') {
           if (!isObj(ws.shop)) return;
           const part = { shop: ws.shop, vat: ws.vat, stockEnabled: ws.stockEnabled };
-          look('shop', SHOP_KEY, shopId, part, ws.shop, part, ctx);
+          look('shop', shopKey(), shopRecordId(shopKey()), part, ws.shop, part, ctx);
         } else if (entity === 'setting') {
           Object.keys(WEB_SETTINGS).forEach(id => {
             const value = ws[WEB_SETTINGS[id]];
@@ -319,6 +345,7 @@
         }
         changed = true;
       });
+      rekeyShop();
       if (Number.isInteger(a.cursor) && a.cursor > cursor) cursor = a.cursor;
       if (isObj(a.membership)) membership = a.membership;
       if (notices && Array.isArray(a.conflicts) && a.conflicts.length) notices.push(['conflict', a.conflicts]);
@@ -469,7 +496,7 @@
       let n = 0;
       list.forEach(c => {
         if (!isObj(c) || typeof c.entity !== 'string' || typeof c.id !== 'string' || !c.id) return;
-        const known = LISTS[c.entity] ? map.safeId(c.id) : c.entity === 'shop' ? c.id === shopId : c.entity === 'setting' && !!WEB_SETTINGS[c.id];
+        const known = LISTS[c.entity] ? map.safeId(c.id) : c.entity === 'shop' ? foldId(c.id) === foldId(shopId) : c.entity === 'setting' && !!WEB_SETTINGS[c.id];
         if (!known || (!c.deleted && !isObj(c.data))) return;
         pending.set(keyOf(c.entity, c.id), { entity: c.entity, id: c.id, data: isObj(c.data) ? c.data : {}, deleted: c.deleted === true, baseSeq: seqOf(c.baseSeq), gen: 0 });
         n++;

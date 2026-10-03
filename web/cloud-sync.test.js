@@ -1285,3 +1285,67 @@ describe('payments deleted on the web (payments contract R2, R3)', () => {
     expect(app.S.orders[0]).not.toHaveProperty('removedPaymentIds');
   });
 });
+
+// An iPhone writes its shop record under its own uppercase UUID, the cloud shop id is the lowercase text
+// of the same uuid (3 Oct 2026, shop name and phone set on the iPhone never reached the web).
+describe('the phone\'s shop record under another case (iOS)', () => {
+  const IOS_ID = SHOP_ID.toUpperCase();
+  const iosServer = () => {
+    const server = fakeServer();
+    server.put('shop', IOS_ID, { ...SHOP(), nameAr: 'متجر الهاتف', phone: '+97336111222' });
+    server.put('product', CAKE_ID, CAKE());
+    return server;
+  };
+
+  it('shows the shop name and phone of the record the phone wrote', async () => {
+    const app = await started(iosServer());
+    expect(app.S.shop.nameAr).toBe('متجر الهاتف');
+    expect(app.S.shop.phone).toBe('+97336111222');
+  });
+
+  it('writes a web edit back to the phone\'s record, creating no second shop record', async () => {
+    const server = iosServer();
+    const app = await started(server);
+    app.S.shop.nameAr = 'اسم جديد';
+    await app.sync.commit(app.S);
+    const pushed = server.pushed().filter(c => c.entity === 'shop');
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0].id).toBe(IOS_ID);
+    expect(pushed[0].baseSeq).toBe(1);
+    expect(server.row('shop', SHOP_ID)).toBeUndefined();
+    expect(server.row('shop', IOS_ID).data.nameAr).toBe('اسم جديد');
+    expect(server.row('shop', IOS_ID).data.phone).toBe('+97336111222');
+    expect(app.S.shop.nameAr).toBe('اسم جديد');
+  });
+
+  it('takes the shop\'s one record whatever its id', async () => {
+    const server = fakeServer();
+    server.put('shop', 'LOCAL-SHOP-ID', { ...SHOP(), nameAr: 'مختلف' });
+    const app = await started(server);
+    expect(app.S.shop.nameAr).toBe('مختلف');
+    app.S.shop.phone = '+97300000000';
+    await app.sync.commit(app.S);
+    expect(server.row('shop', SHOP_ID)).toBeUndefined();
+    expect(server.row('shop', 'LOCAL-SHOP-ID').data.phone).toBe('+97300000000');
+  });
+
+  it('keeps a shop made on the web (id as the cloud shop id) working, and one with no record yet', async () => {
+    const seededApp = await started(seeded());
+    expect(seededApp.S.shop.nameAr).toBe('حلويات أم أحمد');
+    const server = fakeServer();
+    const app = await started(server);
+    app.S.shop.nameAr = 'جديد';
+    await app.sync.commit(app.S);
+    expect(server.row('shop', SHOP_ID).data.nameAr).toBe('جديد');
+  });
+
+  it('moves a shop edit kept across a reload onto the phone\'s record', async () => {
+    const server = iosServer();
+    const app = open(server);
+    app.sync.importPending([{ entity: 'shop', id: SHOP_ID, data: { ...SHOP(), nameAr: 'محفوظ' }, deleted: false, baseSeq: 0 }]);
+    await app.sync.start();
+    await app.sync.commit(app.S);
+    expect(server.row('shop', SHOP_ID)).toBeUndefined();
+    expect(server.row('shop', IOS_ID).data.nameAr).toBe('محفوظ');
+  });
+});

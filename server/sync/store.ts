@@ -152,7 +152,9 @@ function shopNameFromRecordData(data: unknown): string | null {
  * Every shop `userId` is a member of, owner or staff — for server/sync/handler.ts's `shops_list`
  * action, which exists so a signed-in owner (or staff member) can find and restore an existing cloud
  * shop on a new phone. `name` and `updatedAt` both come from the shop's own `shop` entity record in
- * `orderat.records` (id = the shop's id, per the entity table in docs/sme-phase-2-cloud.md), not from
+ * `orderat.records` (id = the shop's id, per the entity table in docs/sme-phase-2-cloud.md; an iPhone writes
+ * it under its own uppercase UUID, so the id is matched without case and, failing that, the shop's one live
+ * `shop` record is used whatever its id), not from
  * `shops_cloud`: that record is the seller's actual, currently-synced shop data, kept up to date by
  * every ordinary sync, while `shops_cloud.name`/`created_at` are only ever set once, at create_shop
  * time. Both are null until that record exists — e.g. between create_shop and the first real sync — or
@@ -170,8 +172,12 @@ export async function listShopsForUser(sql: SqlClient, userId: string): Promise<
     `select m.shop_id, m.role, r.data as shop_data, r.updated_at as shop_updated_at
      from orderat.shop_members m
      join orderat.shops_cloud s on s.id = m.shop_id
-     left join orderat.records r
-       on r.shop_id = m.shop_id and r.entity = 'shop' and r.id = m.shop_id::text and r.deleted = false
+     left join lateral (
+       select r2.data, r2.updated_at from orderat.records r2
+       where r2.shop_id = m.shop_id and r2.entity = 'shop' and r2.deleted = false
+       order by (r2.id = m.shop_id::text) desc, (lower(r2.id) = m.shop_id::text) desc, r2.seq desc
+       limit 1
+     ) r on true
      where m.user_id = $1
      order by r.updated_at desc nulls last, s.created_at desc`,
     [userId],

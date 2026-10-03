@@ -273,6 +273,29 @@ describe("listShopsForUser", () => {
     expect(await listShopsForUser(sql, OWNER_ID)).toEqual([{ shopId: SHOP_ID, role: "owner", name: "كيكس سارة", updatedAt: record.updatedAt }]);
   });
 
+  it("finds the shop record an iPhone wrote under its uppercase uuid, or under any id when it is the only one", async () => {
+    const UPPER = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    await insertShopCloud(sql, { id: UPPER, ownerUserId: OWNER_ID, name: "Sara's Cakes" });
+    await insertMembership(sql, { shopId: UPPER, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+    const record = await upsertRecord(sql, UPPER, "shop", UPPER.toUpperCase(), { nameAr: "كيكس سارة" }, false, OWNER_ID);
+    expect(await listShopsForUser(sql, OWNER_ID)).toEqual([{ shopId: UPPER, role: "owner", name: "كيكس سارة", updatedAt: record.updatedAt }]);
+
+    await upsertRecord(sql, UPPER, "shop", UPPER.toUpperCase(), { nameAr: "كيكس سارة" }, true, OWNER_ID);
+    const other = await upsertRecord(sql, UPPER, "shop", "LOCAL-ID", { nameAr: "اسم آخر" }, false, OWNER_ID);
+    expect(await listShopsForUser(sql, OWNER_ID)).toEqual([{ shopId: UPPER, role: "owner", name: "اسم آخر", updatedAt: other.updatedAt }]);
+  });
+
+  it("lists one row per shop even when two shop records exist, preferring the exact id", async () => {
+    const UPPER = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    await insertShopCloud(sql, { id: UPPER, ownerUserId: OWNER_ID, name: "Sara's Cakes" });
+    await insertMembership(sql, { shopId: UPPER, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
+    await upsertRecord(sql, UPPER, "shop", UPPER, { nameAr: "الدقيق" }, false, OWNER_ID);
+    await upsertRecord(sql, UPPER, "shop", UPPER.toUpperCase(), { nameAr: "المتأخر" }, false, OWNER_ID);
+    const shops = await listShopsForUser(sql, OWNER_ID);
+    expect(shops).toHaveLength(1);
+    expect(shops[0]?.name).toBe("الدقيق");
+  });
+
   it("falls back to nameEn when the shop record has no nameAr", async () => {
     await insertShopCloud(sql, { id: SHOP_ID, ownerUserId: OWNER_ID, name: "Sara's Cakes" });
     await insertMembership(sql, { shopId: SHOP_ID, userId: OWNER_ID, role: "owner", permissions: OWNER_PERMISSIONS });
