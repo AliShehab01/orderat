@@ -176,7 +176,8 @@ function makeDemoData(businessType, now = new Date()) {
       else if (isPast && i % 7 === 0) { amount = Math.round(total * 500) / 1000; note = 'Deposit only'; }
       else if (isPast) amount = total;
       else if (i % 4 === 0) { amount = Math.round(total * 300) / 1000; note = 'Deposit to confirm'; }
-      if (amount > 0) order.payments.push({ amount, method, note, at: (isPast ? due : now).toISOString() });
+      // Payments have ids, like the phones', so deleting one can remember its id (removedPaymentIds).
+      if (amount > 0) order.payments.push({ id: demoId(), amount, method, note, at: (isPast ? due : now).toISOString() });
     }
     orders.push(order);
   }

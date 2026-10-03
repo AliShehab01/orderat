@@ -1788,9 +1788,9 @@ const ACTIONS = {
     const o = orderById(el.dataset.id);
     if (!o || !can('orders') || !confirm(t('pay.delete') + '?')) return;
     const { pay, at } = el.dataset;
-    const i = o.payments.findIndex(p => (pay ? p.id === pay : p.at === at));
-    if (i < 0) return;
-    o.payments = o.payments.filter((_, k) => k !== i);
+    // Payments are add-only on the wire: the payment's id goes into the order's removedPaymentIds too, or a
+    // stale copy (another phone's, an older tab's) would bring it back (live-core removePayment).
+    if (!OrderatLiveCore.removePayment(o, pay ? { id: pay } : { at })) return;
     save(); render(); toast(t('common.saved'));
   },
   'edit-expense'(el) { const x = S.expenses.find(e => e.id === el.dataset.id); if (x && can('money')) openExpense(x); },
@@ -2069,7 +2069,7 @@ const FORMS = {
     // Paid in full: the total with its VAT, known only once the snapshot above is taken.
     const paid = D.pay === 'full' ? totals(order).total : deposit;
     if (paid > 0) {
-      order.payments.push({ amount: round(paid), method: D.method, note: '', at: now });
+      order.payments.push({ id: nid(), amount: round(paid), method: D.method, note: '', at: now });
       order.changes.push({ kind: 'payment', value: round(paid), at: now });
     }
     S.orders.push(order);
@@ -2085,13 +2085,15 @@ const FORMS = {
     const due = totals(o).due;
     if (amount > due + 1e-9 && !confirm(t('pay.overpay', money(due)))) return;
     const at = new Date().toISOString(), value = round(amount);
-    o.payments.push({ amount: value, method: fd.get('method') || 'cash', note: String(fd.get('note') || ''), at });
+    // The payment has its id from the start (the cloud keeps it), so the Undo, or a delete later, can always
+    // remember it in removedPaymentIds, even before the first sync carried the payment.
+    const pay = { id: nid(), amount: value, method: fd.get('method') || 'cash', note: String(fd.get('note') || ''), at };
+    o.payments.push(pay);
     o.changes.push({ kind: 'payment', value, at });
     save(); closeModal(); render();
     undoToast(t('common.saved'), () => {
       const now = orderById(id);
-      if (!now) return;
-      now.payments = now.payments.filter(p => !(p.at === at && p.amount === value));
+      if (!now || !OrderatLiveCore.removePayment(now, { id: pay.id, at, amount: value })) return;
       save(); render();
     });
   },
