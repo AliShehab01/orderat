@@ -1,8 +1,11 @@
 // Integrity review (3 Oct 2026): the call sites in app.js and live.js. The rules themselves are tested in
 // live-core.test.js; these keep the screens wired to them.
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
+const core = createRequire(import.meta.url)('../public/orderat/live-core.js');
 const src = f => readFileSync(new URL(`../public/orderat/${f}`, import.meta.url), 'utf8');
 const app = src('app.js'), live = src('live.js'), demo = src('demo.js');
 const forms = app.slice(app.indexOf('const FORMS = {'));
@@ -83,6 +86,24 @@ describe('R2/R3: a deleted payment is remembered in removedPaymentIds', () => {
     expect(handler('payment')).toContain('o.payments.push(pay);');
     expect(handler('new-order')).toMatch(/order\.payments\.push\(\{ id: nid\(\),/);
     expect(demo).toMatch(/order\.payments\.push\(\{ id: demoId\(\),/);
+    // and no code path added later can make one without: every push of a payment names its id first
+    expect([...app.matchAll(/\.payments\.push\(/g)].length).toBeGreaterThan(0);
+    expect(app.match(/\.payments\.push\((?!pay\)|\{ id: nid\(\),)[^\n]*/g)).toBeNull();
+  });
+  it('the demo, run for real: every seeded payment has its own id in every business type, and deleting one is remembered', () => {
+    const sandbox = {};
+    vm.runInNewContext(`${demo}\nthis.makeDemoData = makeDemoData;`, sandbox);
+    for (const type of ['home', 'shop', 'services', 'food', 'foodTruck', 'other']) {
+      const data = sandbox.makeDemoData(type, new Date('2026-09-29T08:00:00.000Z'));
+      const payments = data.orders.flatMap(o => o.payments);
+      expect(payments.length).toBeGreaterThan(10);
+      payments.forEach(p => expect(typeof p.id === 'string' && p.id.length > 0).toBe(true));
+      expect(new Set(payments.map(p => p.id)).size).toBe(payments.length);
+      data.orders.forEach(o => expect(o).not.toHaveProperty('removedPaymentIds')); // nothing deleted yet: no key
+      const order = data.orders.find(o => o.payments.length), id = order.payments[0].id;
+      expect(core.removePayment(order, { id })).toBe(true);
+      expect(order.removedPaymentIds).toEqual([id]);
+    }
   });
   it('a backup is the whole state, so orders carry the list out and back in', () => {
     expect(action('export')).toContain('data: S');
