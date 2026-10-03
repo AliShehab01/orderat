@@ -124,6 +124,33 @@ describe("several moves of one order in one push: the stock is the net of them (
   }
 });
 
+describe("staff phones (iOS 1.0) doing the same in one push", () => {
+  for (const flags of [{ orders: true, prepare: false, money: false, products: false }, { orders: true, prepare: true, money: true, products: true }]) {
+    it(`staff with ${Object.entries(flags).filter(([, on]) => on).map(([k]) => k).join("+")}: create, confirm, edit down and cancel another, all before the first sync, take exactly what the orders hold`, async () => {
+      const { phone: A, customer, product } = await shopWith("ios1", 20);
+      const staff = await fleet.addStaff(owner.session, "orders-staff", flags);
+      const S = new SimPhone(fleet, staff.session, "ios1", "S");
+      S.cloudOn = true;
+      expect((await S.sync()).ok).toBe(true);
+      S.online = false;
+      const a = S.createOrder({ customerId: customer, lines: [{ productId: product, name: "Cake", qty: 4, priceMinor: 1000 }] });
+      S.setStatus(a, "confirmed"); // -4
+      S.editItems(a, [{ productId: product, name: "Cake", qty: 1, priceMinor: 1000 }]); // +3
+      const b = S.createOrder({ customerId: customer, lines: [{ productId: product, name: "Cake", qty: 2, priceMinor: 1000 }] });
+      S.setStatus(b, "confirmed"); // -2
+      S.setStatus(b, "cancelled"); // +2
+      S.online = true;
+      const r = await S.sync();
+      expect(r.ok).toBe(true);
+      expect(r.rejected, "staff who may handle orders are never refused for this").toEqual([]);
+      expect((await fleet.storedData("product", product)).stockQuantity, "20 - 1").toBe(19);
+      expect(S.get("product", product).stockQuantity).toBe(19);
+      expect((await A.sync()).ok).toBe(true);
+      expect(A.get("product", product).stockQuantity).toBe(19);
+    });
+  }
+});
+
 describe("a forged or inflated move is still refused (F2 stays closed)", () => {
   it("a prepare-only member cannot take stock out of, or put it into, a product with moves whose NET is more than the order holds", async () => {
     const { phone, customer, product } = await shopWith("ios1");
