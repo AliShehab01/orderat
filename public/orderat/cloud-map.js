@@ -9,13 +9,15 @@
 //   survive a web edit;
 // - a field the web did not change keeps its exact raw form (null or missing, another app's date format,
 //   an enum code this build does not know), so toCloud(toWeb(raw), raw) deep-equals raw for any record
-//   and cloud-sync.js pushes only what the web really changed;
+//   the server can hold and cloud-sync.js pushes only what the web really changed (a payment that an
+//   order lists both in `payments` and in `removedPaymentIds` is the one thing a write leaves out: the
+//   server's rule is payments minus removed);
 // - a field missing from the web object (undefined) is left as it is.
 // For an existing record, callers must pass xToCloud a web object that came from this same rawData
 // (read with xToWeb, then edited), and always the live object, not a copy (see the side effect below).
 // The web object is the authority for items, payments and plain fields, so one read from an older raw
-// record would drop what a phone added since (only order history is merged): rebuild web objects from
-// raw after every pull or restore.
+// record would drop what a phone added since (only order history and the order's grow-only
+// removedPaymentIds are merged): rebuild web objects from raw after every pull or restore.
 // ctx = { decimals, now: Date, deviceCode }. Money is integer minor units in the cloud and major units on
 // the web; cloud dates are ISO 8601 UTC with milliseconds.
 //
@@ -294,6 +296,28 @@
     },
     write: v => (v === undefined ? undefined : LEDGER.read(v) || undefined),
   };
+  // The ids of the payments the seller deliberately deleted from an order: `removedPaymentIds`. A payment is
+  // identified by its id and payments are add-only on the wire (the server and the phones never drop one
+  // because a pushed order leaves it out, or a stale copy would bring every deleted payment back), so a
+  // deletion is the payment's id in this list. It only grows: every side keeps the union of all the lists,
+  // and nothing here ever takes an id out. What the server takes is strings of 1 to 64 characters; it ignores
+  // a list over 500 ids whole (a limit one order does not reach). Ids are compared without letter case like
+  // the server's payment identity (the iPhone writes uppercase UUIDs, Android and the web lowercase) and
+  // written as they are spelled. A record without the list (an older app, a stale copy) has no key on the web.
+  const REMOVED_ID_MAX = 64;
+  const idKey = id => id.toLowerCase();
+  const isRemovedId = v => typeof v === 'string' && v !== '' && v.length <= REMOVED_ID_MAX;
+  // The valid ids of a list, each once, in the order they come; undefined when the value is not a list.
+  function removedIds(v) {
+    if (!Array.isArray(v)) return undefined;
+    const seen = new Set(), out = [];
+    v.forEach(id => {
+      if (!isRemovedId(id) || seen.has(idKey(id))) return;
+      seen.add(idKey(id));
+      out.push(id);
+    });
+    return out;
+  }
   // The order's plain fields; the address area, items, payments and history are mapped below.
   const orderFields = (m, now) => [
     ['customerId', 'customerId', text], ['status', 'status', STATUS], ['fulfillment', 'fulfillmentType', FULFILLMENT],
@@ -327,6 +351,8 @@
       return { id: idOf(it), pid: nullableText.read(it.productId), nameAr: name, nameEn: name, qty: QTY.read(it.quantity), price: m.read(it.unitPriceMinor), cost: m.read(it.unitCostMinor) };
     });
     web.payments = objects(d.payments).map(p => ({ id: idOf(p), amount: m.read(p.amountMinor), method: METHOD.read(p.method), note: optText.read(p.note), at: anyDate.read(p.paidAt) }));
+    const removed = removedIds(d.removedPaymentIds);
+    if (removed) web.removedPaymentIds = removed;
     web.changes = objects(d.changes).map(historyToWeb);
     web.stockApplied = STOCK_TAKEN.indexOf(web.status) >= 0;
     web.createdAt = anyDate.read(d.createdAt);
@@ -357,8 +383,11 @@
     });
   }
 
-  function paymentsToCloud(payments, rawPayments, m, now) {
-    const known = byId(rawPayments), paidAt = date(now);
+  // The order's payments as the web has them, each with its id and its raw copy's other keys, minus the ones
+  // in `removed` (the ids deleted on any side): the same rule as the server's, so a stale web copy that still
+  // holds a payment another device deleted never writes it back.
+  function paymentsToCloud(payments, rawPayments, m, now, removed) {
+    const known = byId(rawPayments), paidAt = date(now), gone = new Set((removed || []).map(idKey));
     return objects(payments).map(p => {
       if (!idOf(p)) p.id = newId();
       const r = known[p.id], isNew = !r, base = r || {}, out = isNew ? { id: p.id } : clone(r);
@@ -367,7 +396,7 @@
       put(out, base, 'note', p.note, optText, isNew);
       put(out, base, 'paidAt', p.at, paidAt, isNew);
       return out;
-    });
+    }).filter(p => !gone.has(idKey(p.id)));
   }
 
   // A new web history entry in cloud form; payments are not history in the cloud (the payments array
@@ -420,6 +449,9 @@
 
   // When the web changed anything, paymentStatus is recomputed (a change is logged when it moves) and
   // updatedAt is set to now. Never written: `no`, `stockApplied`, the items' nameAr/nameEn.
+  // removedPaymentIds is a merge, never a replacement: the record's own ids first (also those another device
+  // added since the web read the order), then the web's new ones, so the written list has every id either
+  // side has; the key is written only when that adds an id, so an unchanged record keeps its exact raw form.
   function orderToCloud(o, raw, ctx) {
     const w = obj(o), r = obj(raw), isNew = !isObj(raw), out = start(raw);
     const m = money(decimalsOf(ctx)), now = nowIso(ctx);
@@ -430,8 +462,14 @@
       out.address = address;
       changed = true;
     }
+    const had = removedIds(r.removedPaymentIds) || [];
+    const removed = removedIds(had.concat(removedIds(w.removedPaymentIds) || []));
+    if (removed.length > had.length) {
+      out.removedPaymentIds = removed;
+      changed = true;
+    }
     if (isNew || w.items !== undefined) changed = putList(out, r, 'items', itemsToCloud(w.items, r.items, m), isNew) || changed;
-    if (isNew || w.payments !== undefined) changed = putList(out, r, 'payments', paymentsToCloud(w.payments, r.payments, m, now), isNew) || changed;
+    if (isNew || w.payments !== undefined) changed = putList(out, r, 'payments', paymentsToCloud(w.payments, r.payments, m, now, removed), isNew) || changed;
     if (isNew || w.changes !== undefined) changed = putList(out, r, 'changes', historyToCloud(w.changes, r, now), isNew) || changed;
     if (!isNew && !changed) return out; // nothing the web owns changed: still the raw record
 

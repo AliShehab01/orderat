@@ -27,6 +27,8 @@ const OCCASION_ID = '2f3a4b5c-6d7e-4f8a-9b0c-1d2e3f4a5b6c';
 const ITEM_1 = 'e1f2a3b4-c5d6-4e7f-8a9b-0c1d2e3f4a5b';
 const ITEM_2 = 'f2a3b4c5-d6e7-4f8a-9b0c-1d2e3f4a5b6c';
 const PAY_1 = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+const PAY_2 = 'a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d';
+const PAY_3 = 'a3b4c5d6-e7f8-4a9b-8c0d-2e3f4a5b6c7d';
 const CH_1 = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e';
 const CH_2 = 'c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f';
 const CH_3 = 'd3e4f5a6-b7c8-4d9e-8f0a-2b3c4d5e6f7a';
@@ -445,6 +447,148 @@ describe('order', () => {
     expect(map.orderToWeb(ORDER_ID, junk, BHD).stockDeducted).toEqual({ b: 3 });
     expect(roundTrip('order', ORDER_ID, junk, BHD)).toStrictEqual(junk);
     expect(map.orderToWeb(ORDER_ID, { ...orderRecord(), stockDeducted: 'x' }, BHD)).not.toHaveProperty('stockDeducted');
+  });
+
+  // ---- Payments contract (fourth review R2, R3): removedPaymentIds ----
+  // A payment is identified by its id and payments are add-only on the wire: leaving one out of a pushed order
+  // never removes it. A deliberate deletion is its id in the order's grow-only `removedPaymentIds`.
+
+  it('reads removedPaymentIds and round-trips it unchanged, also an empty list', () => {
+    const raw = frozen({ ...orderRecord(), payments: [], paymentStatus: 'unpaid', removedPaymentIds: [PAY_2, PAY_1] });
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
+    expect(web.removedPaymentIds).toEqual([PAY_2, PAY_1]);
+    expect(web.removedPaymentIds).not.toBe(raw.removedPaymentIds);
+    expect(roundTrip('order', ORDER_ID, raw, BHD)).toStrictEqual(raw);
+    const empty = frozen({ ...orderRecord(), removedPaymentIds: [] });
+    expect(map.orderToWeb(ORDER_ID, empty, BHD).removedPaymentIds).toEqual([]);
+    expect(roundTrip('order', ORDER_ID, empty, BHD)).toStrictEqual(empty);
+  });
+
+  it('a record without removedPaymentIds (an older app, a stale copy) has no key on the web and gets none', () => {
+    for (const raw of [frozen(orderRecord()), frozen(androidRecord())]) {
+      const web = map.orderToWeb(ORDER_ID, raw, BHD);
+      expect(web).not.toHaveProperty('removedPaymentIds');
+      expect(roundTrip('order', ORDER_ID, raw, BHD)).toStrictEqual(raw);
+      web.notes = 'Moved to Friday'; // an edit that has nothing to do with payments
+      const out = map.orderToCloud(web, raw, BHD);
+      expect(out.notes).toBe('Moved to Friday');
+      expect(out).not.toHaveProperty('removedPaymentIds');
+    }
+    // anything that is not a list is no list: the web shows none and leaves the stored value alone
+    const odd = frozen({ ...orderRecord(), removedPaymentIds: 'x' });
+    expect(map.orderToWeb(ORDER_ID, odd, BHD)).not.toHaveProperty('removedPaymentIds');
+    expect(roundTrip('order', ORDER_ID, odd, BHD)).toStrictEqual(odd);
+  });
+
+  it('a deleted payment: out of payments, its id in removedPaymentIds, paymentStatus recomputed and logged, the rest kept', () => {
+    const raw = orderRecord();
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
+    web.payments = web.payments.filter(p => p.id !== PAY_1); // what OrderatLiveCore.removePayment does
+    web.removedPaymentIds = [PAY_1];
+    const out = map.orderToCloud(web, raw, BHD);
+    expect(out.payments).toStrictEqual([]);
+    expect(out.removedPaymentIds).toStrictEqual([PAY_1]);
+    expect(out.paymentStatus).toBe('unpaid');
+    expect(out.changes).toStrictEqual([...raw.changes, { id: anId(), field: 'paymentStatus', oldValue: 'deposit', newValue: 'unpaid', at: NOW.toISOString() }]);
+    expect(out.updatedAt).toBe(NOW.toISOString());
+    const rest = o => Object.fromEntries(Object.entries(o).filter(([k]) => !['payments', 'removedPaymentIds', 'paymentStatus', 'changes', 'updatedAt'].includes(k)));
+    expect(rest(out)).toStrictEqual(rest(raw)); // futureField, address.block, the VAT snapshot, the invoice: all kept
+  });
+
+  it('a deletion that leaves other payments: they stay, the status follows them', () => {
+    const raw = frozen({
+      ...orderRecord(),
+      payments: [...orderRecord().payments, { id: PAY_2, amountMinor: 12000, method: 'cash', note: null, paidAt: '2026-09-28T11:00:00.000Z' }],
+      paymentStatus: 'paid', // 5.000 + 12.000 of 17.000
+    });
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
+    web.payments = web.payments.filter(p => p.id !== PAY_2);
+    web.removedPaymentIds = [PAY_2];
+    const out = map.orderToCloud(web, raw, BHD);
+    expect(out.payments).toStrictEqual([raw.payments[0]]);
+    expect(out.removedPaymentIds).toStrictEqual([PAY_2]);
+    expect(out.paymentStatus).toBe('deposit');
+  });
+
+  it('merging with a pulled record takes the union: its ids first, then the web\'s new ones, never fewer', () => {
+    const read = frozen({ ...orderRecord(), removedPaymentIds: [PAY_2] }); // what the web was built from
+    const web = map.orderToWeb(ORDER_ID, read, BHD);
+    web.payments = [];
+    web.removedPaymentIds = [PAY_2, PAY_1];
+    expect(map.orderToCloud(web, read, BHD).removedPaymentIds).toStrictEqual([PAY_2, PAY_1]);
+    // a pulled record that lists an id the web has not read (a phone deleted another payment meanwhile)
+    const pulled = frozen({ ...orderRecord(), payments: [], paymentStatus: 'unpaid', removedPaymentIds: [PAY_3, PAY_2] });
+    expect(map.orderToCloud(web, pulled, BHD).removedPaymentIds).toStrictEqual([PAY_3, PAY_2, PAY_1]);
+    // a web copy that lacks the pulled ids (it was built before them) never takes them away
+    const stale = map.orderToWeb(ORDER_ID, frozen(orderRecord()), BHD);
+    stale.notes = 'Moved to Friday';
+    expect(map.orderToCloud(stale, pulled, BHD).removedPaymentIds).toStrictEqual([PAY_3, PAY_2]);
+    stale.removedPaymentIds = [];
+    expect(map.orderToCloud(stale, pulled, BHD).removedPaymentIds).toStrictEqual([PAY_3, PAY_2]);
+  });
+
+  it('an id is never written twice (also in another letter case) and an unchanged list keeps its exact raw form', () => {
+    const raw = frozen({ ...orderRecord(), payments: [], paymentStatus: 'unpaid', removedPaymentIds: [PAY_1] });
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
+    web.removedPaymentIds = [PAY_1, PAY_1, PAY_1.toUpperCase()];
+    expect(map.orderToCloud(web, raw, BHD)).toStrictEqual(raw); // nothing new: still the raw record
+    web.removedPaymentIds = [PAY_2, PAY_2, PAY_1.toUpperCase(), PAY_3];
+    expect(map.orderToCloud(web, raw, BHD).removedPaymentIds).toStrictEqual([PAY_1, PAY_2, PAY_3]);
+  });
+
+  it('reads and writes only ids the server takes: strings of 1 to 64 characters', () => {
+    const long = 'x'.repeat(65), edge = 'y'.repeat(64);
+    const junk = frozen({ ...orderRecord(), removedPaymentIds: [PAY_2, PAY_2, '', 7, null, long, { id: PAY_3 }, edge] });
+    expect(map.orderToWeb(ORDER_ID, junk, BHD).removedPaymentIds).toEqual([PAY_2, edge]);
+    expect(roundTrip('order', ORDER_ID, junk, BHD)).toStrictEqual(junk); // untouched while the web adds nothing
+    const web = map.orderToWeb(ORDER_ID, junk, BHD);
+    web.removedPaymentIds.push(PAY_3, '', 5, long, null);
+    expect(map.orderToCloud(web, junk, BHD).removedPaymentIds).toStrictEqual([PAY_2, edge, PAY_3]);
+  });
+
+  it('a payment the record lists as removed is not written back: a stale web copy cannot undo a deletion', () => {
+    // A phone deleted PAY_1 and the pulled record says so; this web copy was built before and still holds it.
+    const stale = map.orderToWeb(ORDER_ID, frozen(orderRecord()), BHD);
+    stale.notes = 'Moved to Friday';
+    const pulled = frozen({ ...orderRecord(), payments: [], paymentStatus: 'unpaid', removedPaymentIds: [PAY_1] });
+    const out = map.orderToCloud(stale, pulled, BHD);
+    expect(out.payments).toStrictEqual([]);
+    expect(out.removedPaymentIds).toStrictEqual([PAY_1]);
+    expect(out.paymentStatus).toBe('unpaid');
+    expect(out.notes).toBe('Moved to Friday');
+    // its own deletion too, before any record lists it
+    const web = map.orderToWeb(ORDER_ID, frozen(orderRecord()), BHD);
+    web.removedPaymentIds = [PAY_1]; // the payment still on the web order by mistake
+    expect(map.orderToCloud(web, frozen(orderRecord()), BHD).payments).toStrictEqual([]);
+    // the server's rule (payments minus removed) also heals a record that lists a payment both ways, but only
+    // when the web writes the order anyway: an order the web did not change is still never rewritten
+    const both = frozen({ ...orderRecord(), removedPaymentIds: [PAY_1] });
+    const bw = map.orderToWeb(ORDER_ID, both, BHD);
+    expect(bw.payments.map(p => p.id)).toEqual([PAY_1]); // read as it is
+    bw.notes = 'Moved to Friday';
+    expect(map.orderToCloud(bw, both, BHD)).toMatchObject({ payments: [], removedPaymentIds: [PAY_1], paymentStatus: 'unpaid' });
+  });
+
+  it('a new web order that records a payment and undoes it before the first sync carries the id', () => {
+    const web = newWebOrder();
+    web.payments[0].id = PAY_1; // FORMS['new-order'] gives the payment its id when it makes it
+    web.payments = [];
+    web.removedPaymentIds = [PAY_1];
+    const out = map.orderToCloud(web, undefined, BHD);
+    expect(out.payments).toStrictEqual([]);
+    expect(out.removedPaymentIds).toStrictEqual([PAY_1]);
+    expect(out.paymentStatus).toBe('unpaid');
+    // an order that never had a deletion carries no key at all
+    expect(map.orderToCloud(newWebOrder(), undefined, BHD)).not.toHaveProperty('removedPaymentIds');
+    expect(map.orderToCloud({ ...newWebOrder(), removedPaymentIds: [] }, undefined, BHD)).not.toHaveProperty('removedPaymentIds');
+  });
+
+  it('a payment with an id keeps it from the web order to the record and back', () => {
+    const web = newWebOrder();
+    web.payments[0].id = PAY_1;
+    const out = map.orderToCloud(web, undefined, BHD);
+    expect(out.payments.map(p => p.id)).toEqual([PAY_1]);
+    expect(map.orderToWeb(ORDER_ID, frozen(out), BHD).payments.map(p => p.id)).toEqual([PAY_1]);
   });
 
   it("reads source as a known code: an unknown or malicious one shows as 'manual' and is kept on write", () => {
