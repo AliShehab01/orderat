@@ -15,7 +15,7 @@ const COPY = {
   ar: {
     metaTitle: "اوردرات | نظّم طلبات واتساب وإنستغرام لمشروعك",
     metaDescription:
-      "اوردرات تطبيق لأصحاب الأعمال الصغيرة: طلبات واتساب وإنستغرام في مكان واحد، عملاء، أرباح، فاتورة ضريبية اختيارية، مخزون اختياري، وأدوات ذكاء اصطناعي. قريباً على App Store و Google Play.",
+      "اوردرات تطبيق لأصحاب الأعمال الصغيرة: طلبات واتساب وإنستغرام في مكان واحد، عملاء، أرباح، فاتورة ضريبية اختيارية، مخزون اختياري، وأدوات ذكاء اصطناعي. متوفر الآن على App Store، وقريباً على Google Play.",
     eyebrow: "لأصحاب الأعمال الصغيرة في الخليج العربي",
     h1: "طلبات واضحة. يوم أهدأ.",
     heroLead:
@@ -31,12 +31,12 @@ const COPY = {
       "تحسب ربحك من راسك بدون تسجيل حقيقي للمصاريف",
       "عميل يسأل عن سعر أو توفر، والرد يتأخر وسط الضغط",
     ],
-    finalCtaLead: "جرّب متجراً تجريبياً الآن لتشوف تجربة عميلك، واوردرات قريباً على App Store و Google Play.",
+    finalCtaLead: "جرّب متجراً تجريبياً الآن لتشوف تجربة عميلك. اوردرات متوفر الآن على App Store، وقريباً على Google Play.",
   },
   en: {
     metaTitle: "Orderat | Organize WhatsApp & Instagram orders for your business",
     metaDescription:
-      "Orderat is an app for small businesses: WhatsApp and Instagram orders in one place, customers, profit, optional tax invoices, optional stock, and AI tools. Launching soon on the App Store and Google Play.",
+      "Orderat is an app for small businesses: WhatsApp and Instagram orders in one place, customers, profit, optional tax invoices, optional stock, and AI tools. Now on the App Store, coming soon to Google Play.",
     eyebrow: "For small businesses across the Arabian Gulf",
     h1: "Orders clear. Day calm.",
     heroLead:
@@ -52,7 +52,7 @@ const COPY = {
       "Profit estimated in your head, without real expense tracking",
       "A customer asks about price or availability, and the reply gets delayed under pressure",
     ],
-    finalCtaLead: "Try a demo shop right now to see your customer's experience. Orderat is launching soon on the App Store and Google Play.",
+    finalCtaLead: "Try a demo shop right now to see your customer's experience. Orderat is now on the App Store, and coming soon to Google Play.",
   },
 };
 

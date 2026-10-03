@@ -13,8 +13,8 @@ const COPY = {
     h1: "تواصل معنا",
     emailCta: "راسلنا على البريد الإلكتروني",
     social: "تابعنا",
-    interestTitle: "تبي تكون أول من يجرّب اوردرات؟",
-    interestBody: "راسلنا وقل لنا نوع نشاطك، ونعلمك أول ما يصير اوردرات متاحاً على App Store و Google Play.",
+    interestTitle: "تنتظر اوردرات على أندرويد؟",
+    interestBody: "اوردرات متوفر الآن على App Store. لو جوالك أندرويد، راسلنا وقل لنا نوع نشاطك، ونعلمك أول ما يصير متاحاً على Google Play.",
   },
   en: {
     metaTitle: "Contact us | Orderat",
@@ -22,8 +22,8 @@ const COPY = {
     h1: "Contact us",
     emailCta: "Email us",
     social: "Follow us",
-    interestTitle: "Want to be first to try Orderat?",
-    interestBody: "Email us with your business type, and we'll let you know as soon as Orderat is available on the App Store and Google Play.",
+    interestTitle: "Waiting for Orderat on Android?",
+    interestBody: "Orderat is now on the App Store. If you use Android, email us with your business type and we'll let you know as soon as it is on Google Play.",
   },
 };
 

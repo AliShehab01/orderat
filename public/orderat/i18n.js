@@ -381,7 +381,7 @@ const I18N = {
   'paywallCta': ['Start free trial', 'ابدأ التجربة المجانية', 'ابدئي التجربة المجانية'],
   'paywallTerms': ['Terms of service', 'شروط الاستخدام'],
   'paywallPrivacy': ['Privacy policy', 'سياسة الخصوصية'],
-  'paywall.appsOnly': ['Subscriptions start in the iPhone and Android apps, coming soon to the App Store and Google Play.', 'الاشتراك يبدأ من تطبيق الآيفون والأندرويد، قريباً على App Store و Google Play.'],
+  'paywall.appsOnly': ['Subscriptions start in the phone apps: Orderat is on the App Store now, and coming soon to Google Play.', 'الاشتراك يبدأ من تطبيق الجوال: اوردرات متوفر الآن على App Store، وقريباً على Google Play.'],
 
   // Settings
   'settings.language': ['Language', 'اللغة'],

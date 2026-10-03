@@ -8,7 +8,7 @@ export const SITE_URL = process.env.SITE_URL || "https://orderatweb.com";
 
 /** @type {{ ios: string | null, android: string | null }} */
 export const STORE_LINKS = {
-  ios: null,
+  ios: "https://apps.apple.com/app/id6816299089",
   android: null,
 };
 
