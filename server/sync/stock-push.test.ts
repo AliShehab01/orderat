@@ -1053,6 +1053,22 @@ describe("R1 / a pull delivers the product an order moved before the order", () 
     expect(all.indexOf("product/p1")).toBeLessThan(all.indexOf("order/oA"));
   });
 
+  it("an error while the order's seq is written again costs only the order of the pull: the push is answered, applied, and a retry applies nothing twice", async () => {
+    const failing: SqlClient = {
+      async query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> {
+        if (RETOUCH.test(text)) throw new Error("deadlock detected");
+        return sql.query<T>(text, params);
+      },
+    };
+    expect(await pushChanges(failing, SHOP_ID, ownerPhone.member, confirmBatch("mA", "oA", 3, 1), OWNER_ID, { now: serverNow })).toEqual({ conflicts: [], rejected: [] });
+    expect(await stockNow()).toBe(7);
+    expect((await orderNow("oA")).stockDeducted).toEqual({ p1: 3 });
+    expect(await push(ownerPhone, confirmBatch("mA", "oA", 3, 1))).toMatchObject({ rejected: [] });
+    expect(await stockNow()).toBe(7);
+    const all = await kinds(0);
+    expect(all.indexOf("product/p1")).toBeLessThan(all.indexOf("order/oA")); // the retry did write it
+  });
+
   it("the stock and the ledgers are what they were: two devices, retries and a cancel (F1 acceptance) end where they did", async () => {
     await push(ownerPhone, confirmBatch("mA", "oA", 3, 1));
     await push(preparePhone, confirmBatch("mB", "oA", 3, 2));

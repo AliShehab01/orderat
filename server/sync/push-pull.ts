@@ -105,7 +105,12 @@ export async function pushChanges(
   }
   // One order alone has its products' seqs below its own already (its atomic write); more than that needs a look.
   if (writtenOrders.size > 1 || (writtenOrders.size === 1 && changes.some((c) => c.entity === "product"))) {
-    await orderAfterItsProducts(sql, shopId, [...writtenOrders.values()]);
+    try {
+      await orderAfterItsProducts(sql, shopId, [...writtenOrders.values()]);
+    } catch {
+      // Best effort: the changes of this push are applied and answered for; an error here (a deadlock with another writer,
+      // say) costs only the order of the pull, never the push (a retry of the batch would apply nothing twice).
+    }
   }
 
   const conflicts: Conflict[] = [];

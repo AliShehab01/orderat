@@ -474,3 +474,43 @@ describe("who may write payments and removal ids, and what an invalid value does
     }
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("released apps that send none of the new fields", () => {
+  it("Android 1.5.5 and the web app of before this change delete a payment by leaving it out (Android logs only a paymentStatus entry): the payment stays, nothing is lost; adding one still works; an app that writes removedPaymentIds removes it", async () => {
+    await push(ownerPhone, ORDER([payA, payB], "paid"), base);
+    const synced = await seqNow();
+    // Android's deletePayment: the payments list without A, and a history entry about the status only (what it was, what it is now).
+    const androidDeletes = ORDER([payB], "deposit", { changes: [{ id: "h1", field: "paymentStatus", oldValue: "paid", newValue: "deposit", note: null, at: "2026-10-03T09:00:00.000Z" }] });
+    for (const phone of WRITERS) {
+      const result = await push(phone, androidDeletes, synced);
+      expect(result.rejected).toEqual([]);
+      expect(await paymentIds(), phone.name).toEqual(["payA", "payB"]); // it comes back on the phone's next pull
+      expect((await orderNow()).data.paymentStatus).toBe("paid"); // the status is what the payments say
+      expect(await removedNow()).toBeUndefined();
+    }
+    // The same phone records another payment: that works as always.
+    await push(ordersPhone, ORDER([payB, payC], "paid"), await seqNow());
+    expect(await paymentIds()).toEqual(["payA", "payB", "payC"]);
+    // After an update the phone's deletion is the id.
+    await push(ordersPhone, ORDER([payB, payC], "paid", { removedPaymentIds: ["payA"] }), await seqNow());
+    expect(await paymentIds()).toEqual(["payB", "payC"]);
+  });
+
+  it("a pull gives every app the server's payments and removedPaymentIds, and the app that does not know the field sends it back as it found it (unknown keys are kept)", async () => {
+    await push(ownerPhone, ORDER([payA, payB], "paid"), base);
+    await push(ownerPhone, ORDER([payB], "deposit", { removedPaymentIds: ["payA"] }), await seqNow());
+    const pulled = (await orderNow()).data;
+    expect(pulled.removedPaymentIds).toEqual(["payA"]);
+    // An older app pulls that, edits the notes and pushes the whole record back with the unknown key as it found it...
+    await push(ordersPhone, { ...pulled, notes: "edited on an older app" }, await seqNow());
+    expect((await orderNow()).data).toMatchObject({ notes: "edited on an older app", removedPaymentIds: ["payA"] });
+    expect(await paymentIds()).toEqual(["payB"]);
+    // ...and one that drops the key altogether changes nothing either.
+    const { removedPaymentIds: _drop, ...without } = pulled;
+    void _drop;
+    await push(ordersPhone, { ...without, notes: "dropped the key" }, await seqNow());
+    expect((await orderNow()).data).toMatchObject({ notes: "dropped the key", removedPaymentIds: ["payA"] });
+    expect(await paymentIds()).toEqual(["payB"]);
+  });
+});
