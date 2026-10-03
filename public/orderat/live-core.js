@@ -17,6 +17,8 @@
 //   only because tracking was switched on or off: each order keeps what it took out of every product in
 //   its own ledger `stockDeducted` { productId: units }, and gives back exactly that (see "Stock" below).
 // - new order deposit: checkDeposit, the "Partial payment" amount against the order's final total.
+// - payments: add-only on the wire, so deleting one (the trash button, or the Undo of a payment just
+//   recorded) takes its id into the order's grow-only `removedPaymentIds` too (removePayment).
 // - buildAskSnapshot: AskSnapshotBuilder's JSON, same keys, first names and short refs only.
 // - AI order entry: an orderat-parse draft into the New order form, its pickup or delivery and address
 //   included (Bahrain's area to the area list, the rest as the one free-text address).
@@ -365,6 +367,51 @@
   // (server/sync/record-access.ts isOrderStockUpdate).
   const canMoveOrderStock = can => !!(can('products') || can('orders') || can('prepare'));
 
+  // ---------- Payments ----------
+  //
+  // A payment is identified by its id, and payments are add-only on the wire: a pushed order that leaves a
+  // payment out never removes it (a stale copy would only bring it back). A deliberate deletion, the trash
+  // button on the order or the Undo of a payment just recorded, therefore takes the payment out of
+  // `payments` and puts its id into the order's `removedPaymentIds`. cloud-map.js writes that list and keeps
+  // the union with the record's, the server and the phones keep the union of every copy's. It only grows: no
+  // id is ever taken out of it and none is written twice (compared without letter case, like the server).
+  // A payment without an id (a demo saved before payments had ids) has nothing to remember and is simply
+  // taken out, as it always was; so is one whose id the server would refuse (over 64 characters), because
+  // one such id would make it ignore the whole list.
+
+  const PAYMENT_ID_MAX = 64;
+  const validPaymentId = v => typeof v === 'string' && v !== '' && v.length <= PAYMENT_ID_MAX;
+
+  // The order's removedPaymentIds as a clean list: valid ids, each once, in the order they came.
+  function removedPaymentIds(order) {
+    const seen = new Set(), out = [];
+    (Array.isArray(order && order.removedPaymentIds) ? order.removedPaymentIds : []).forEach(id => {
+      if (!validPaymentId(id) || seen.has(id.toLowerCase())) return;
+      seen.add(id.toLowerCase());
+      out.push(id);
+    });
+    return out;
+  }
+
+  // Takes one payment out of the order and remembers its id. `ref` says which: { id } is the payment with
+  // that id (and no other, even when its time matches); without an id, { at, amount? } is the first payment
+  // made at that time, with that amount when one is given (a payment from before ids). Returns whether a
+  // payment was removed.
+  function removePayment(order, ref) {
+    const list = order && Array.isArray(order.payments) ? order.payments : [];
+    const r = ref || {};
+    const i = list.findIndex(p => isObj(p) && (r.id ? p.id === r.id : !!r.at && p.at === r.at && (r.amount === undefined || p.amount === r.amount)));
+    if (i < 0) return false;
+    const gone = list[i];
+    order.payments = list.filter((_, k) => k !== i);
+    if (validPaymentId(gone.id)) {
+      const ids = removedPaymentIds(order);
+      if (!ids.some(id => id.toLowerCase() === gone.id.toLowerCase())) ids.push(gone.id);
+      order.removedPaymentIds = ids;
+    }
+    return true;
+  }
+
   // ---------- Leaving a shop, member permissions ----------
 
   // Before leaving a shop (switching, signing out): sends the last edits while the session is still
@@ -661,7 +708,7 @@
   return {
     subscriptionAllowed, subscriptionActive, aiDemo, callingCode, localDigits, normalizePhone, access, formatInvoice, nextInvoice, invoiceLabel,
     vatMinor, defaultRateBps, applyVat, reapplyVat, orderMinor, checkDeposit, stockForStatus, stockForEdit, ledgerOf, ledgerFromMoves, ledgerFromFlag,
-    orderNumbers, historyLabel,
+    removePayment, removedPaymentIds, orderNumbers, historyLabel,
     cleanItems, parseProducts, answerDraft, draftFields, deliveryAddress, buildAskSnapshot, canMoveOrderStock, flushBeforeLeaving,
     createPermissionEditor, deliveryFeeMinor, feeForFulfillment, isOutForDelivery, nextStep,
   };

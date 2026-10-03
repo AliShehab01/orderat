@@ -777,6 +777,110 @@ describe('new order deposit (integrity review R5)', () => {
   });
 });
 
+// Fourth review R2/R3 (3 Oct 2026): a payment is identified by its id and payments are add-only on the wire,
+// so deleting one (the trash button, or the Undo of a payment just recorded) also puts its id into the
+// order's grow-only removedPaymentIds. Both modes: the live shop and the demo.
+describe('removing a payment (payments contract R2, R3)', () => {
+  const A = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', B = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e', C = 'c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f';
+  const pay = (id, amount, at = '2026-09-29T07:45:00.000Z') => ({ ...(id === undefined ? {} : { id }), amount, method: 'cash', note: '', at });
+  const order = (payments, extra) => ({ id: 'o1', items: [{ pid: 'p', qty: 2, price: 6.5, cost: 2 }], deliveryFee: 0, payments, ...extra });
+
+  it('takes the payment out of payments and its id into removedPaymentIds', () => {
+    const o = order([pay(A, 5), pay(B, 3, '2026-09-29T07:50:00.000Z')]);
+    expect(core.removePayment(o, { id: A })).toBe(true);
+    expect(o.payments.map(p => p.id)).toEqual([B]);
+    expect(o.removedPaymentIds).toEqual([A]);
+    expect(core.orderMinor(o, 3).paid).toBe(3000); // the money follows
+  });
+
+  it('only grows: new ids go to the end, nothing is dropped, nothing is written twice', () => {
+    const o = order([pay(A, 5), pay(B, 3, 'b'), pay(C, 1, 'c')], { removedPaymentIds: ['from-a-phone'] });
+    core.removePayment(o, { id: B });
+    core.removePayment(o, { id: A });
+    expect(o.removedPaymentIds).toEqual(['from-a-phone', B, A]);
+    // a payment that a stale copy still lists although its id is already there: taken out, id kept once
+    const stale = order([pay(A, 5)], { removedPaymentIds: [A.toUpperCase(), B] });
+    expect(core.removePayment(stale, { id: A })).toBe(true);
+    expect(stale.payments).toEqual([]);
+    expect(stale.removedPaymentIds).toEqual([A.toUpperCase(), B]);
+  });
+
+  it('never takes a second payment: a second delete or Undo of the same one does nothing', () => {
+    const o = order([pay(A, 5), pay(B, 3, 'b')]);
+    expect(core.removePayment(o, { id: A })).toBe(true);
+    const after = JSON.stringify(o);
+    expect(core.removePayment(o, { id: A })).toBe(false);
+    expect(JSON.stringify(o)).toBe(after);
+    expect(core.removePayment(o, { id: 'nobody' })).toBe(false);
+    expect(core.removePayment(o, {})).toBe(false);
+    expect(core.removePayment(o, undefined)).toBe(false);
+    expect(core.removePayment({}, { id: A })).toBe(false);
+    expect(core.removePayment(null, { id: A })).toBe(false);
+    expect(JSON.stringify(o)).toBe(after);
+  });
+
+  it('finds the payment by its id first; a payment without an id by its time (and amount when given)', () => {
+    const o = order([pay(A, 5, 't1'), pay(B, 5, 't1')]);
+    expect(core.removePayment(o, { id: B, at: 't1', amount: 5 })).toBe(true); // the id decides, not the time
+    expect(o.payments.map(p => p.id)).toEqual([A]);
+    expect(core.removePayment(o, { id: 'gone', at: 't1', amount: 5 })).toBe(false); // an id that is gone is not a time match
+    const old = order([pay(undefined, 5, 't1'), pay(undefined, 3, 't2'), pay(undefined, 4, 't2')]);
+    expect(core.removePayment(old, { at: 't2', amount: 4 })).toBe(true);
+    expect(old.payments.map(p => p.amount)).toEqual([5, 3]);
+    expect(core.removePayment(old, { at: 't2', amount: 9 })).toBe(false);
+    expect(core.removePayment(old, { at: 't2' })).toBe(true);
+    expect(old.payments.map(p => p.amount)).toEqual([5]);
+  });
+
+  it('a payment without an id (older demo data) is simply taken out, with no list made', () => {
+    const o = order([pay(undefined, 5, 't1'), pay('', 2, 't2')]);
+    expect(core.removePayment(o, { at: 't1' })).toBe(true);
+    expect(core.removePayment(o, { at: 't2' })).toBe(true);
+    expect(o.payments).toEqual([]);
+    expect(o).not.toHaveProperty('removedPaymentIds');
+  });
+
+  it('an id the server would refuse (over 64 characters) is not recorded: it would void the whole list', () => {
+    const long = 'x'.repeat(65), edge = 'y'.repeat(64);
+    const o = order([pay(long, 5, 't1'), pay(edge, 3, 't2')], { removedPaymentIds: [A] });
+    expect(core.removePayment(o, { id: long })).toBe(true);
+    expect(o.removedPaymentIds).toEqual([A]);
+    expect(core.removePayment(o, { id: edge })).toBe(true);
+    expect(o.removedPaymentIds).toEqual([A, edge]);
+  });
+
+  it('cleans what it rewrites: junk entries and repeats of a list from another writer are not ids', () => {
+    expect(core.removedPaymentIds({ removedPaymentIds: [A, A, '', 7, null, { id: B }, 'x'.repeat(65), C] })).toEqual([A, C]);
+    expect(core.removedPaymentIds({ removedPaymentIds: 'x' })).toEqual([]);
+    expect(core.removedPaymentIds({})).toEqual([]);
+    expect(core.removedPaymentIds(null)).toEqual([]);
+    const o = order([pay(B, 1)], { removedPaymentIds: [A, 5, A] });
+    core.removePayment(o, { id: B });
+    expect(o.removedPaymentIds).toEqual([A, B]);
+  });
+
+  it('the Undo of a payment just recorded: the id it was given is remembered, once', () => {
+    const o = order([pay(A, 5)]);
+    const made = pay(B, 2.5, '2026-09-29T08:01:00.000Z'); // FORMS.payment: the payment has its id from the start
+    o.payments.push(made);
+    expect(core.removePayment(o, { id: made.id, at: made.at, amount: made.amount })).toBe(true);
+    expect(o.payments.map(p => p.id)).toEqual([A]);
+    expect(o.removedPaymentIds).toEqual([B]);
+    expect(core.removePayment(o, { id: made.id, at: made.at, amount: made.amount })).toBe(false);
+    expect(o.removedPaymentIds).toEqual([B]);
+  });
+
+  it('works on a demo order (short ids, no cloud fields) and survives a backup: export, import, delete again', () => {
+    const o = { id: 'k3j2h1g0', no: 4, items: [{ pid: 'x1y2z3w4', qty: 1, price: 6.5, cost: 2.5 }], deliveryFee: 1, payments: [pay('q1w2e3r4', 5), pay('t5y6u7i8', 2.5, 'b')], changes: [], status: 'new', stockApplied: false };
+    core.removePayment(o, { id: 'q1w2e3r4' });
+    const restored = JSON.parse(JSON.stringify({ app: 'orderat-web', data: { orders: [o] } })).data.orders[0]; // the Settings backup is the whole state
+    expect(restored.removedPaymentIds).toEqual(['q1w2e3r4']);
+    core.removePayment(restored, { id: 't5y6u7i8' });
+    expect(restored.removedPaymentIds).toEqual(['q1w2e3r4', 't5y6u7i8']);
+    expect(restored.payments).toEqual([]);
+  });
+});
+
 describe('order numbers and history', () => {
   it('numbers orders by createdAt, then id', () => {
     const nos = core.orderNumbers([
