@@ -98,7 +98,9 @@ as $fn$
 $fn$;
 
 -- Records every move in a product's stored list (`p_data` is the product record as it is stored now) in stock_ops, as
--- 'listed', unless it is there already. sync_apply calls it for every product whose record it replaces, before the
+-- 'listed', unless it is there already. A key longer than 600 characters is left out: a btree row holds about 2,700 bytes,
+-- an id that long is nobody's UUID, and one such move must not make every write of its product fail (stock-merge.ts
+-- MAX_KEY_CHARS skips it the same way). sync_apply calls it for every product whose record it replaces, before the
 -- 50-entry list can lose a move (fourth review, R4).
 create or replace function orderat.record_listed_moves(p_shop uuid, p_product_id text, p_data jsonb)
 returns void
@@ -109,7 +111,7 @@ as $fn$
     from jsonb_array_elements(
            case when jsonb_typeof(p_data -> 'stockMoves') = 'array' then p_data -> 'stockMoves' else '[]'::jsonb end
          ) as m(move)
-   where jsonb_typeof(m.move) = 'object'
+   where jsonb_typeof(m.move) = 'object' and length(orderat.stock_move_key(m.move)) <= 600
   on conflict (shop_id, op_id) do nothing
 $fn$;
 
@@ -130,6 +132,7 @@ select r.shop_id, orderat.stock_move_key(m.move), r.id, 'listed'
        ) as m(move)
  where r.entity = 'product'
    and jsonb_typeof(m.move) = 'object'
+   and length(orderat.stock_move_key(m.move)) <= 600
 on conflict (shop_id, op_id) do nothing;
 
 -- Same ownership dance as 0001-0009 (see 0001_orderat_isolation.sql's comments for the full reasoning).

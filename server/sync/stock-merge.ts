@@ -78,6 +78,12 @@ export function moveKey(move: Json): string {
   return `f:[${keyToken(move.at)},${keyToken(move.delta)},${keyToken(move.reason)},${keyToken(move.orderId)}]`;
 }
 
+/** The longest key stock_ops takes. A btree row holds about 2,700 bytes, so a key from a (hostile or broken) client's enormous id would
+ * make every write that lists or records it fail; no app writes an id that long (they are UUIDs). A move whose key is longer is
+ * skipped: not applied, not recorded, not listed; the rest of the push stands. SQL: orderat.record_listed_moves and the backfill. */
+export const MAX_KEY_CHARS = 600;
+const storable = (key: string): boolean => key.length <= MAX_KEY_CHARS;
+
 const foldAsciiCase = (text: string): string => text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
 const keyToken = (value: unknown): string => {
   if (typeof value === "string") return JSON.stringify(value);
@@ -228,7 +234,7 @@ export function namesAnyOrder(product: Json, orderIds: ReadonlySet<string>): boo
 
 /** Every move key of the stored and the incoming lists: what to ask stock_ops about. */
 export function listedKeys(stored: Json, incoming: Json): string[] {
-  return [...new Set([...movesOf(stored.stockMoves), ...movesOf(incoming.stockMoves)].map(moveKey))];
+  return [...new Set([...movesOf(stored.stockMoves), ...movesOf(incoming.stockMoves)].map(moveKey))].filter(storable);
 }
 
 /** The ids of the orders the fresh order-driven moves name: what to read to judge them. */
@@ -247,7 +253,7 @@ export function orderIdsOfFreshMoves(stored: Json, incoming: Json): string[] {
  */
 export function planProductPush(productId: string, stored: Json, incoming: Json, mayEditProduct: boolean, facts: StockFacts): ProductPlan | undefined {
   const storedMoves = movesOf(stored.stockMoves);
-  const listed = storedMoves.map(moveKey).filter((key, i, all) => !facts.knownOps.has(key) && all.indexOf(key) === i);
+  const listed = storedMoves.map(moveKey).filter((key, i, all) => storable(key) && !facts.knownOps.has(key) && all.indexOf(key) === i);
   const plain = (data: Json): ProductPlan => ({ data, ops: [], listed, orderStock: [], deps: [] });
 
   if (mayEditProduct && !Array.isArray(incoming.stockMoves)) return plain(incoming); // No history sent: stored as sent, as before.
@@ -277,6 +283,7 @@ export function planProductPush(productId: string, stored: Json, incoming: Json,
 
   for (const move of fresh) {
     const key = moveKey(move);
+    if (!storable(key)) continue; // A key no index row can hold: skipped, not applied and not recorded.
     if (facts.knownOps.has(key)) continue; // Applied or ignored before.
 
     if (!isOrderLinked(move)) {

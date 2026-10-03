@@ -252,6 +252,49 @@ describe("R4 / every path that rewrites a product's stockMoves records the moves
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
+describe("R4 / a move key that would not fit an index row can neither be applied nor break the writes around it", () => {
+  // stock_ops is keyed by the move key; a btree row holds about 2,700 bytes. An id that long is nobody's UUID: the move is skipped
+  // (not applied, not recorded), and a stored list that holds one is listed without it, so no later write of the product fails.
+  // Incompressible (a repeated character would be squeezed by TOAST and fit): 5,000 characters from a seeded generator.
+  const huge = (() => {
+    let seed = 99;
+    return Array.from({ length: 5000 }, () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return "abcdefghijklmnopqrstuvwxyz0123456789"[seed >>> 27 | 0 ? (seed >>> 20) % 36 : 0];
+    }).join("");
+  })();
+  const hugeMove = { id: huge, delta: 7, reason: "received", orderId: null, note: null, at: T(5) };
+
+  it("a pushed move with an enormous id is skipped like an unknown one: nothing is applied or recorded, and the rest of the push stands", async () => {
+    await push(ownerPhone, [ch("product", "p1", PRODUCT(10, []), 0)]);
+    const fine = { id: "ok-1", delta: 2, reason: "received", orderId: null, note: null, at: T(6) };
+    for (const phone of [ownerPhone, productsPhone]) {
+      const result = await push(phone, [ch("product", "p1", PRODUCT(99, [fine, hugeMove], { priceMinor: 7000 }), await seqOf("product", "p1"))]);
+      expect(result.rejected).toEqual([]);
+      expect(await stockNow()).toBe(12); // only the ordinary move counted (once)
+      expect(await productNow()).toMatchObject({ priceMinor: 7000 });
+    }
+    expect((await opKeys()).has("id:ok-1")).toBe(true);
+    expect([...(await opKeys())].every((key) => key.length < 700)).toBe(true);
+  });
+
+  it("a stored list that holds one (a new product written as it came) does not stop a later client push or an order's stock effect", async () => {
+    await push(ownerPhone, [ch("product", "p1", PRODUCT(10, [hugeMove, history(1)]), 0)]); // a new product is stored as sent
+    await upsertRecord(sql, SHOP_ID, "order", "oA", ORDER("newOrder", 3), false, OWNER_ID);
+    const confirmed = await push(ownerPhone, [ch("order", "oA", ORDER("confirmed", 3, { p1: 3 }), await seqOf("order", "oA"))]);
+    expect(confirmed).toEqual({ conflicts: [], rejected: [] });
+    expect(await stockNow()).toBe(7);
+    const later = { id: "later-1", delta: 4, reason: "received", orderId: null, note: null, at: T(9) };
+    await push(ownerPhone, [ch("product", "p1", PRODUCT(11, [later, ...(await productNow()).stockMoves]), await seqOf("product", "p1"))]);
+    expect(await stockNow()).toBe(11);
+    expect([...(await opKeys())].every((key) => key.length < 700)).toBe(true);
+    // The migration skips it the same way.
+    await execCloudTestSql(migration);
+    expect([...(await opKeys())].every((key) => key.length < 700)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
 describe("R4 acceptance / a populated database, the migration file, an order confirmation, an offline phone's old snapshot", () => {
   /** The shop as the old server left it: quantity 100 and 50 historical moves (iOS-style uppercase ids, one move with no id among
    * them: a legacy Android row), and an order of 3 units that was never confirmed. The old server never wrote stock_ops. The

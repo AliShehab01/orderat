@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_STOCK_MOVES, moveKey, pairKey, planProductPush, type Json, type StockFacts } from "./stock-merge.ts";
+import { listedKeys, MAX_KEY_CHARS, MAX_STOCK_MOVES, moveKey, pairKey, planProductPush, type Json, type StockFacts } from "./stock-merge.ts";
 
 // A product's stock is the result of its moves, each applied exactly once (second review L2; third review F1-F3,
 // 3 Oct 2026). These are the pure rules; push-pull.test.ts runs the same scenarios through the real push path.
@@ -326,5 +326,32 @@ describe("planProductPush / histories of any length (stock_ops, not the 50-entry
     const result = plan(stored, incoming, true, facts({ orders: order("n3") }))!;
     expect(result.data.stockQuantity).toBe(98);
     expect(ids(result.data).slice(0, 2)).toEqual(["n3", "h59"]);
+  });
+});
+
+describe("planProductPush / a key no index row can hold (R4)", () => {
+  const huge = "x".repeat(MAX_KEY_CHARS);
+  const long = (reason = "received") => ({ id: huge, delta: 9, reason, orderId: null, note: null, at: at(5) });
+  const manual = { id: "k", delta: 5, reason: "received", orderId: null, note: null, at: at(3) };
+
+  it("a pushed move with such an id is skipped (not applied, not recorded), and the other moves of the push still count", () => {
+    const stored = product(10, []);
+    const result = plan(stored, product(99, [manual, long()]), true)!;
+    expect(result.data).toMatchObject({ stockQuantity: 15 });
+    expect(ids(result.data)).toEqual(["k"]);
+    expect(result.ops).toEqual([{ opId: "id:k", outcome: "applied" }]);
+    // One of exactly the longest key stays valid.
+    const edge = { ...manual, id: "y".repeat(MAX_KEY_CHARS - 3) };
+    expect(moveKey(edge)).toHaveLength(MAX_KEY_CHARS);
+    expect(plan(stored, product(99, [edge]), true)!.ops).toEqual([{ opId: moveKey(edge), outcome: "applied" }]);
+  });
+
+  it("a long move of a staff member who only handles orders is skipped too, and a long key is never listed or looked up", () => {
+    const stored = product(10, [long("orderConfirmed")]);
+    expect(listedKeys(stored, product(10, [manual, long()]))).toEqual(["id:k"]);
+    const result = plan(stored, product(10, [long("orderConfirmed")]), false)!;
+    expect(result.listed).toEqual([]);
+    expect(result.ops).toEqual([]);
+    expect(result.data).toMatchObject({ stockQuantity: 10 });
   });
 });
