@@ -743,7 +743,8 @@ replayed: 98 or more.
 - **Changed:** one key rule per language, tested on the same fixtures (uppercase ids, no id, an id that is not a string,
   every JSON escape, non-ASCII): `orderat.stock_move_key` in SQL and `moveKey` in `stock-merge.ts`. `id:` and the id
   with its ASCII capitals folded (so no database locale decides), or `f:[at,delta,reason,orderId]` for a move with no
-  id. The backfill lists every move of every product's stored list with it (and takes out the bare ids of the first
+  id (a field that is not a string or a number is null, as is a number the two languages print differently; a seeded
+  fuzz of 3,000 awkward moves runs both rules in one query). The backfill lists every move of every product's stored list with it (and takes out the bare ids of the first
   draft, idempotently). `sync_apply` records every move in the stored list of a product it replaces, whether the
   product is the primary record or the target of a stock effect, before the list can lose one; a product write with no
   plan of its own (a deletion, a product that comes back) goes through it too, so no path trims a list unrecorded.
