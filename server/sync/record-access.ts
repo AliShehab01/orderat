@@ -22,8 +22,10 @@
 //     staff member: per-device preferences never sync.
 //   - `orders`: full write of orders, customers and occasions (create, edit, delete).
 //   - `prepare` (without `orders`): an *existing* order's status fields only — `status`,
-//     `outForDeliveryAt`, `updatedAt`, and new `changes` entries about them. Every other field is
-//     kept from the stored record, never trusted from the payload. No creating or deleting orders.
+//     `outForDeliveryAt`, `updatedAt`, the stock ledger `stockDeducted` (confirming and cancelling an
+//     order moves stock, and the ledger records how much), and new `changes` entries about the status
+//     fields. Every other field is kept from the stored record, never trusted from the payload. No
+//     creating or deleting orders.
 //   - `money` (without `orders`): an existing order's money fields only — `payments`, `paymentStatus`,
 //     `updatedAt` and new payment history entries — and full write of expenses.
 //   - `products`: full write of products and stock moves (and photo uploads, server/sync/handler.ts).
@@ -158,6 +160,21 @@ const isString = (v: unknown) => typeof v === "string";
 const isIsoDateOrNull = (v: unknown) => v === null || (typeof v === "string" && ISO_DATE_RE.test(v) && Number.isFinite(Date.parse(v)));
 const isListOfObjects = (v: unknown) => Array.isArray(v) && v.every(isPlainObject);
 
+/** An order's stock ledger `stockDeducted` (what the order actually took out of each product's stock):
+ * { "<productId>": units } with at most 200 keys, each a non-empty string of up to 64 characters, and
+ * every value a whole number from 0 to 1,000,000. An empty object is valid: the order takes nothing now. */
+const MAX_LEDGER_KEYS = 200;
+const MAX_LEDGER_KEY_CHARS = 64;
+const MAX_LEDGER_UNITS = 1_000_000;
+const isStockLedger = (v: unknown) => {
+  if (!isPlainObject(v)) return false;
+  const entries = Object.entries(v);
+  return (
+    entries.length <= MAX_LEDGER_KEYS &&
+    entries.every(([key, units]) => key.length >= 1 && key.length <= MAX_LEDGER_KEY_CHARS && typeof units === "number" && Number.isInteger(units) && units >= 0 && units <= MAX_LEDGER_UNITS)
+  );
+};
+
 interface FieldRule {
   valid: (value: unknown) => boolean;
   /** Optional keys follow the payload when it leaves them out (cleared); required ones stay as stored. */
@@ -171,6 +188,9 @@ const PREPARE_FIELDS: Record<string, FieldRule> = {
   // "Out for delivery" (tester feedback, 1 Oct 2026): status stays "ready" on the wire and this key holds
   // when the order left; null or absent once it moves on.
   outForDeliveryAt: { valid: isIsoDateOrNull, optional: true },
+  // What the order took out of stock (3 Oct 2026, integrity review R3): staff who confirm or cancel an
+  // order write the ledger along with the status; owners and `orders` staff store the whole record.
+  stockDeducted: { valid: isStockLedger, optional: true },
   updatedAt: { valid: isString, optional: false },
 };
 const MONEY_FIELDS: Record<string, FieldRule> = {

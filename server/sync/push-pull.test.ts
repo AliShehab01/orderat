@@ -452,6 +452,72 @@ describe("R01 / a push racing another write to the same record", () => {
   });
 });
 
+// Integrity review R3 (3 Oct 2026): an order records what it took out of stock, `stockDeducted`
+// { productId: units }, and gives back exactly that. Staff who only prepare orders confirm and cancel
+// them (and move the products' stock with it), so their pushes carry the ledger too.
+describe("R3 / the order stock ledger through a real push", () => {
+  const AT = "2026-10-03T08:00:00.000Z";
+  const ORDER = { customerId: "c1", status: "newOrder", fulfillmentType: "pickup", paymentStatus: "unpaid", items: [{ id: "i1", productId: "p1", quantity: 3, unitPriceMinor: 6500 }], payments: [], changes: [], notes: "No nuts", updatedAt: AT };
+  const PRODUCT = { nameAr: "كيك", priceMinor: 6500, trackStock: true, stockQuantity: 10, lowStockThreshold: 3, stockMoves: [] };
+  const staff = (flags: Partial<Member["permissions"]>): Member => ({ role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, ...flags } });
+  const statusEntry = (id: string, from: string, to: string) => ({ id, field: "status", oldValue: from, newValue: to, note: null, at: AT });
+  const move = (id: string, delta: number, reason: string) => ({ id, delta, reason, orderId: "o1", note: null, at: AT });
+  const orderNow = async () => (await findRecord(sql, SHOP_ID, "order", "o1"))!.data;
+  const productNow = async () => (await findRecord(sql, SHOP_ID, "product", "p1"))!.data;
+  /** A change of an up-to-date copy: based on the seq the record has now, so it is no conflict. */
+  const fresh = async (entity: "order" | "product", id: string, data: Record<string, unknown>) => change({ entity, id, data, baseSeq: (await findRecord(sql, SHOP_ID, entity, id))!.seq });
+
+  beforeEach(async () => {
+    const seeded = await pushChanges(sql, SHOP_ID, owner, [change({ entity: "product", id: "p1", data: PRODUCT }), change({ entity: "order", id: "o1", data: ORDER })], OWNER_ID);
+    expect(seeded).toEqual({ conflicts: [], rejected: [] });
+  });
+
+  it("prepare only: confirming stores the status and the ledger, cancelling puts the ledger back to {}, and the product's stock follows", async () => {
+    const member = staff({ prepare: true });
+    const confirmed = { ...ORDER, status: "confirmed", changes: [statusEntry("h1", "newOrder", "confirmed")], stockDeducted: { p1: 3 }, updatedAt: "2026-10-03T08:01:00.000Z" };
+    const took = { ...PRODUCT, stockQuantity: 7, stockMoves: [move("m1", -3, "orderConfirmed")] };
+    expect(await pushChanges(sql, SHOP_ID, member, [await fresh("product", "p1", took), await fresh("order", "o1", confirmed)], STAFF_ID)).toEqual({ conflicts: [], rejected: [] });
+    expect(await orderNow()).toEqual(confirmed);
+    expect((await productNow()).stockQuantity).toBe(7);
+
+    const cancelled = { ...confirmed, status: "cancelled", changes: [...confirmed.changes, statusEntry("h2", "confirmed", "cancelled")], stockDeducted: {}, updatedAt: "2026-10-03T08:02:00.000Z" };
+    const gaveBack = { ...took, stockQuantity: 10, stockMoves: [move("m2", 3, "orderCancelled"), ...took.stockMoves] };
+    expect(await pushChanges(sql, SHOP_ID, member, [await fresh("product", "p1", gaveBack), await fresh("order", "o1", cancelled)], STAFF_ID)).toEqual({ conflicts: [], rejected: [] });
+    expect(await orderNow()).toEqual(cancelled);
+    expect((await productNow()).stockQuantity).toBe(10);
+  });
+
+  it("prepare only: a ledger that is not valid is not stored, and every other field of the push stays the stored one", async () => {
+    const member = staff({ prepare: true });
+    const confirmed = { ...ORDER, status: "confirmed", changes: [statusEntry("h1", "newOrder", "confirmed")], stockDeducted: { p1: 3 } };
+    await pushChanges(sql, SHOP_ID, member, [change({ entity: "order", id: "o1", data: confirmed })], STAFF_ID);
+    for (const forged of [{ p1: 1_000_001 }, { p1: -3 }, { p1: 2.5 }, [3], "p1:3", { ["k".repeat(65)]: 1 }]) {
+      const attempt = { ...confirmed, stockDeducted: forged, notes: "Attempted rename" };
+      expect((await pushChanges(sql, SHOP_ID, member, [change({ entity: "order", id: "o1", data: attempt })], STAFF_ID)).rejected, JSON.stringify(forged)).toEqual([]);
+      expect(await orderNow()).toEqual(confirmed);
+    }
+  });
+
+  it("money only: cannot rewrite the ledger; its payment lands and the ledger stays as stored", async () => {
+    await pushChanges(sql, SHOP_ID, owner, [change({ entity: "order", id: "o1", data: { ...ORDER, status: "confirmed", stockDeducted: { p1: 3 } } })], OWNER_ID);
+    const payment = { id: "pay1", amountMinor: 19500, method: "cash", note: null, paidAt: AT };
+    const forged = { ...ORDER, status: "confirmed", stockDeducted: { p1: 1_000_000 }, payments: [payment], paymentStatus: "paid" };
+    expect((await pushChanges(sql, SHOP_ID, staff({ money: true }), [change({ entity: "order", id: "o1", data: forged })], STAFF_ID)).rejected).toEqual([]);
+    expect(await orderNow()).toEqual({ ...ORDER, status: "confirmed", stockDeducted: { p1: 3 }, payments: [payment], paymentStatus: "paid" });
+  });
+
+  it("orders staff and the owner store the whole record, ledger included, and a phone that never heard of it keeps it", async () => {
+    const edited = { ...ORDER, status: "confirmed", stockDeducted: { p1: 3 }, notes: "Edited" };
+    expect((await pushChanges(sql, SHOP_ID, staff({ orders: true }), [change({ entity: "order", id: "o1", data: edited })], STAFF_ID)).rejected).toEqual([]);
+    expect(await orderNow()).toEqual(edited);
+    // An older phone pulls the order, edits its notes and pushes the record back with the key it does not know.
+    const pulled = (await pullForMember(sql, SHOP_ID, owner, 0)).changes.find((c) => c.entity === "order")!;
+    const fromOlderPhone = { ...pulled.data, notes: "Edited on an older phone" };
+    expect((await pushChanges(sql, SHOP_ID, owner, [change({ entity: "order", id: "o1", data: fromOlderPhone })], OWNER_ID)).rejected).toEqual([]);
+    expect(await orderNow()).toEqual({ ...edited, notes: "Edited on an older phone" });
+  });
+});
+
 describe("pullForMember / pagination", () => {
   it("reports more: true and a cursor at the page boundary when more records remain", async () => {
     const changes: ChangeInput[] = Array.from({ length: 3 }, (_, i) => change({ id: `order-${i}` }));
