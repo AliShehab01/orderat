@@ -137,6 +137,33 @@ describe("a bad record never fails the request: 300 seeded batches of mixed, mal
   }
 });
 
+describe("a record the request validation refuses (unchanged from the previous server): the whole request answers 400 or 413, none of it is applied", () => {
+  // iOS 1.0 never sends one: SyncBatching.plan holds back a record over 32 KB or with an id outside the server's alphabet (the pending
+  // change stays dirty, the other records of the pass go through). These pin what the server answers if one arrives anyway.
+  const good = Array.from({ length: 199 }, (_, i) => base("customer", `cust-${i}`, { name: `C${i}`, phone: String(i) }));
+
+  for (const [name, bad, status] of [
+    ["an id outside the alphabet", base("customer", "has/slash", { name: "x" }), 400],
+    ["data over 32 KB", base("customer", "big", { name: "x".repeat(33 * 1024) }), 413],
+    ["data that is not an object", { entity: "customer", id: "arr", data: [1], deleted: false, baseSeq: 0 }, 400],
+    ["an unknown entity", { entity: "bogus", id: "x", data: {}, deleted: false, baseSeq: 0 }, 400],
+    ["a negative baseSeq", { entity: "customer", id: "neg", data: {}, deleted: false, baseSeq: -1 }, 400],
+  ] as [string, J, number][]) {
+    it(`${name}: 199 good records and this one answer ${status}, nothing is stored`, async () => {
+      const res = await sync([...good.slice(0, 100), bad, ...good.slice(100)]);
+      expect(res.status).toBe(status);
+      expect((await fleet.stored()).size).toBe(0);
+      // The same request through the PREVIOUS server answers the same: this is not new behaviour.
+      const old = new Fleet(sql);
+      old.useHandler((await import("./old-server/handler.ts")).createSyncHandler);
+      const oldOwner = await old.newUser("old-owner");
+      await old.createShop(oldOwner.session);
+      const before = await old.call(oldOwner.session, { action: "sync", shopId: old.shopId, cursor: 0, changes: [...good.slice(0, 100), bad, ...good.slice(100)] });
+      expect(before.status).toBe(status);
+    });
+  }
+});
+
 describe("KNOWN GAP, hostile or broken clients only: a record the server throws on answers 500 every time (no released app can write one)", () => {
   // iOS 1.0 caps a quantity at 9999 (OrderLineMerge.maxQuantity), the web at 99, every id is a UUID. These two records are what a
   // hand-made or buggy client could send. The batch's other records are applied; the request answers 500 and the phone that sent it

@@ -134,6 +134,33 @@ describe("iOS 1.0 / the first upload of a whole shop", () => {
     expect(A.failures).toEqual([]);
   });
 
+  it("a first upload whose answers were all lost is sent again: the same shop, nothing doubled, stock and payments as built", async () => {
+    const records = A.records.size;
+    for (const batch of A.plan()) {
+      const lost = await fleet.call(owner.session, { action: "sync", shopId: fleet.shopId, cursor: 0, changes: batch });
+      expect(lost.status).toBe(200);
+    }
+    const before = await fleet.counts();
+    expect(before.records).toBe(records);
+    const again = await A.sync(); // every record is dirty still: the whole upload again, on a shop the server already holds
+    expect(again.ok).toBe(true);
+    expect(again.rejected).toEqual([]);
+    const after = await fleet.counts();
+    expect(after.records).toBe(records);
+    // The products were new the first time (a plain write); now that they exist the server lists the moves they hold, once.
+    expect(after.stockOps).toBeGreaterThan(before.stockOps);
+    expect(after.orderStock).toBe(before.orderStock);
+    A.attach(); // and a third time: nothing more to list, nothing grows
+    expect((await A.sync()).ok).toBe(true);
+    const third = await fleet.counts();
+    expect([third.records, third.stockOps, third.orderStock]).toEqual([after.records, after.stockOps, after.orderStock]);
+    await expectPhoneEqualsServer("upload twice", A);
+    B.cloudOn = true;
+    expect((await B.sync()).ok).toBe(true);
+    await expectStockMatches("upload twice");
+    await expectIdle("after uploading twice");
+  });
+
   it("a second phone that restores the shop pulls exactly what the first holds, and further syncs of both change nothing", async () => {
     expectClean("upload", await A.sync());
     B.cloudOn = true;
