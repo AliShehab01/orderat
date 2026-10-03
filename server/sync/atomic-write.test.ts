@@ -129,7 +129,7 @@ describe("sync_apply / stock effects: a relative update of each live product, wi
       stockQuantity: 7,
       stockMoves: [{ id: moveId, delta: -3, reason: "orderConfirmed", orderId: "o1", note: null, at: AT }, { id: "x", delta: 5, reason: "received", orderId: null, note: null, at: AT }],
     });
-    expect(after.seq).toBeGreaterThan(written.seq); // after the order, so a phone applying a pull in seq order has the order first
+    expect(after.seq).toBeLessThan(written.seq); // before the order (fourth review, R1): a pull in seq order delivers the product first
     expect(after.seq).toBeGreaterThan(product.seq);
     expect(await opsOf(`id:${moveId}`)).toEqual([`id:${moveId}`]);
     // A quantity another write changed meanwhile is moved from where it is: -3 on top of the new value, not on the value that was read.
@@ -137,6 +137,64 @@ describe("sync_apply / stock effects: a relative update of each live product, wi
     const again = (await write({ primary: primaryOrder((await findRecord(sql, SHOP_ID, "order", "o1"))!.seq), effects: [{ productId: "p1", orderId: "o1", delta: 3, reason: "orderCancelled", at: AT }] }))!;
     expect((await findRecord(sql, SHOP_ID, "product", "p1"))!.data.stockQuantity).toBe(103);
     expect(again.seq).toBeGreaterThan(written.seq);
+  });
+
+  it("R1: every product an effect moves has a lower seq than the order written with it, whatever the number of products, and a refused write moves none", async () => {
+    await upsertRecord(sql, SHOP_ID, "order", "o1", { status: "new" }, false, OWNER_ID);
+    for (const id of ["p1", "p2", "p3"]) await seedProduct({ stockQuantity: 10, stockMoves: [] }, id);
+    const order = (await findRecord(sql, SHOP_ID, "order", "o1"))!;
+    const effect = (productId: string) => ({ productId, orderId: "o1", delta: -1, reason: "orderConfirmed", at: AT });
+    const seqsOf = () => Promise.all(["p1", "p2", "p3"].map(async (id) => (await findRecord(sql, SHOP_ID, "product", id))!.seq));
+    const written = (await write({ primary: primaryOrder(order.seq), effects: [effect("p3"), effect("p1"), effect("p2"), effect("pMissing")] }))!;
+    const seqs = await seqsOf();
+    expect(new Set(seqs).size).toBe(3); // each product has a seq of its own: every device pulls each of them
+    for (const seq of seqs) {
+      expect(seq).toBeGreaterThan(order.seq);
+      expect(seq).toBeLessThan(written.seq);
+    }
+    // A stale expectation writes nothing: no product moves and the order keeps its seq.
+    expect(await write({ primary: primaryOrder(order.seq, { status: "stale" }), effects: [effect("p1")] })).toBeUndefined();
+    expect(await seqsOf()).toEqual(seqs);
+    expect((await findRecord(sql, SHOP_ID, "order", "o1"))!.seq).toBe(written.seq);
+    // A new order (the primary does not exist yet) is written after its products too.
+    const created = (await write({ primary: { entity: "order", id: "o2", expectSeq: undefined, data: { status: "confirmed" }, deleted: false }, effects: [{ ...effect("p1"), orderId: "o2" }] }))!;
+    expect((await findRecord(sql, SHOP_ID, "product", "p1"))!.seq).toBeLessThan(created.seq);
+  });
+
+  it("R4: the moves a product's list holds are recorded before the server's move can push one off it; a short list and a move with no id are recorded too", async () => {
+    await upsertRecord(sql, SHOP_ID, "order", "o1", { status: "new" }, false, OWNER_ID);
+    const fifty = Array.from({ length: 50 }, (_, i) => ({ id: `M${i}`, delta: 1, reason: "received", orderId: null, note: null, at: AT }));
+    await seedProduct({ stockQuantity: 20, stockMoves: fifty });
+    await seedProduct({ stockQuantity: 5, stockMoves: [{ id: "S1", delta: 1, reason: "received", orderId: null, note: null, at: AT }, { delta: 2 }] }, "p2");
+    expect(await opsOf("id:m0", "id:m49")).toEqual([]); // nothing in stock_ops yet
+    const order = (await findRecord(sql, SHOP_ID, "order", "o1"))!;
+    await write({ primary: primaryOrder(order.seq), effects: [{ productId: "p1", orderId: "o1", delta: -2, reason: "orderConfirmed", at: AT }, { productId: "p2", orderId: "o1", delta: -1, reason: "orderConfirmed", at: AT }] });
+    const moves = (await findRecord(sql, SHOP_ID, "product", "p1"))!.data.stockMoves as { id: string }[];
+    expect(moves).toHaveLength(50);
+    expect(moves.some((m) => m.id === "M49")).toBe(false); // trimmed off the list...
+    expect(await opsOf("id:m0", "id:m49")).toEqual(["id:m0", "id:m49"]); // ...and recorded, with every other
+    expect(await opsOf("id:s1", "f:[null,2,null,null]")).toEqual(["f:[null,2,null,null]", "id:s1"]);
+    // A missing or deleted product has nothing to list and nothing fails.
+    await upsertRecord(sql, SHOP_ID, "product", "pDeleted", { stockMoves: [{ id: "GONE" }] }, true, OWNER_ID);
+    const again = (await findRecord(sql, SHOP_ID, "order", "o1"))!;
+    expect(await write({ primary: primaryOrder(again.seq), effects: [{ productId: "pDeleted", orderId: "o1", delta: -1, reason: "orderConfirmed", at: AT }, { productId: "pMissing", orderId: "o1", delta: -1, reason: "orderConfirmed", at: AT }] })).toBeDefined();
+    expect(await opsOf("id:gone")).toEqual([]);
+  });
+
+  it("R4: a product the primary replaces has the moves of its stored list recorded first, a tombstone's included; a new product has none to record", async () => {
+    await seedProduct({ stockQuantity: 3, stockMoves: [{ id: "A1", delta: 1 }, { id: "a2", delta: 1 }] });
+    const stored = (await findRecord(sql, SHOP_ID, "product", "p1"))!;
+    const replace = (expectSeq: number | undefined, id = "p1", deleted = false) => ({ entity: "product" as const, id, expectSeq, data: { stockQuantity: 9, stockMoves: [{ id: "B1", delta: 1 }] }, deleted });
+    expect(await write({ primary: replace(stored.seq - 1) })).toBeUndefined(); // refused: nothing recorded
+    expect(await opsOf("id:a1", "id:a2")).toEqual([]);
+    await write({ primary: replace(stored.seq) });
+    expect(await opsOf("id:a1", "id:a2", "id:b1")).toEqual(["id:a1", "id:a2"]); // the replaced list, not the new one (the caller records its own)
+    await write({ primary: replace(undefined, "pNew") });
+    expect(await opsOf("id:b1")).toEqual([]);
+    // A tombstone's list is replaced when the product comes back.
+    await write({ primary: replace((await findRecord(sql, SHOP_ID, "product", "p1"))!.seq, "p1", true) });
+    await write({ primary: { entity: "product", id: "p1", expectSeq: (await findRecord(sql, SHOP_ID, "product", "p1"))!.seq, data: { stockMoves: [] }, deleted: false } });
+    expect(await opsOf("id:b1")).toEqual(["id:b1"]);
   });
 
   it("keeps the newest 50 moves, and the quantity under the web's old name qty when the product has it", async () => {
@@ -172,7 +230,7 @@ describe("sync_apply / stock effects: a relative update of each live product, wi
 describe("the migration", () => {
   const migration = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "db", "migrations", "0010_order_stock.sql"), "utf8");
 
-  it("is idempotent and backfills stock_ops from the move ids already in products' stored lists (lowercased), only for products", async () => {
+  it("is idempotent and backfills stock_ops with the keys the runtime computes for the moves already in products' stored lists (stock-ops-keys.test.ts covers the rule), only for products", async () => {
     const moves = [{ id: "AAAA-1", delta: -1 }, { id: "bbbb-2", delta: 1 }, { delta: 1 }, "junk", { id: 5 }];
     await upsertRecord(sql, SHOP_ID, "product", "p1", { stockMoves: moves }, false, OWNER_ID);
     await upsertRecord(sql, SHOP_ID, "product", "p2", { stockMoves: "not a list" }, false, OWNER_ID);
@@ -180,7 +238,13 @@ describe("the migration", () => {
     await execCloudTestSql(migration);
     await execCloudTestSql(migration);
     const rows = await sql.query<{ op_id: string; product_id: string; outcome: string }>(`select op_id, product_id, outcome from orderat.stock_ops where shop_id = $1 order by op_id`, [SHOP_ID]);
-    expect(rows).toEqual([{ op_id: "aaaa-1", product_id: "p1", outcome: "listed" }, { op_id: "bbbb-2", product_id: "p1", outcome: "listed" }]);
+    // A move with an id is `id:` and the id with its ASCII capitals folded; one with no id, or an id that is not a string, is its fields.
+    expect(rows).toEqual([
+      { op_id: "f:[null,1,null,null]", product_id: "p1", outcome: "listed" },
+      { op_id: "f:[null,null,null,null]", product_id: "p1", outcome: "listed" },
+      { op_id: "id:aaaa-1", product_id: "p1", outcome: "listed" },
+      { op_id: "id:bbbb-2", product_id: "p1", outcome: "listed" },
+    ]);
   });
 
   it("is additive: it touches no existing table (records keep their rows and seqs) and leaves only orderat_app able to call the functions", async () => {
@@ -188,7 +252,7 @@ describe("the migration", () => {
     await execCloudTestSql(migration);
     expect(await findRecord(sql, SHOP_ID, "order", "o1")).toMatchObject({ seq: seeded.seq, data: { status: "new" } });
     const grants = await sql.query<{ routine_name: string; grantee: string }>(
-      `select routine_name, grantee from information_schema.routine_privileges where routine_schema = 'orderat' and routine_name in ('sync_apply', 'apply_stock_effect', 'claim_invite') and privilege_type = 'EXECUTE' order by routine_name, grantee`,
+      `select routine_name, grantee from information_schema.routine_privileges where routine_schema = 'orderat' and routine_name in ('sync_apply', 'apply_stock_effect', 'claim_invite', 'stock_move_key', 'stock_move_key_token', 'record_listed_moves') and privilege_type = 'EXECUTE' order by routine_name, grantee`,
     );
     const grantees = new Set(grants.map((g) => g.grantee));
     expect(grantees.has("PUBLIC")).toBe(false);

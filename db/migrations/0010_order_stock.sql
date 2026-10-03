@@ -1,17 +1,22 @@
--- The server owns an order's stock (third external review, 3 Oct 2026, F1-F5; docs/security-review-2026-10-01.md
--- "Third review"; docs/sme-phase-2-cloud.md "Stock with several phones"). Three things, all additive:
+-- The server owns an order's stock (third external review, 3 Oct 2026, F1-F5; fourth review, same day, R1 and R4;
+-- docs/security-review-2026-10-01.md "Third review" and "Fourth review"; docs/sme-phase-2-cloud.md "Stock with several
+-- phones"). Three things, all additive:
 --
 --   order_stock   what the server has actually taken out of each product's stock for each order, per
 --                 (order, product): the "applied allocation". An accepted order write whose record carries a
 --                 ledger (`stockDeducted`) moves each product by `applied - ledger` and sets `applied`, in the
 --                 same unit as the order write (sync_apply below).
---   stock_ops     every client stock-move id the server has applied or deliberately ignored (and the ids of
---                 the moves already in a product's stored list when the server first sees it): a durable,
+--   stock_ops     every client stock-move id the server has applied or deliberately ignored (and the moves
+--                 already in a product's stored list whenever the server rewrites that list): a durable,
 --                 uncapped record that a move is never applied twice, whatever the 50-entry display history
---                 holds. Ids are compared lowercase (iOS sends uppercase UUIDs, Android and the web lowercase).
+--                 holds. A row's key is orderat.stock_move_key(move) below: `id:` and the move's id with the
+--                 ASCII capitals folded (iOS sends uppercase UUIDs, Android and the web lowercase), or, for a
+--                 move with no id, `f:` and its fields. server/sync/stock-merge.ts moveKey computes the same
+--                 key (fourth review, R4: the first draft of this file backfilled the bare lowercase id, which
+--                 nothing ever looks up, so an old move the display list had trimmed could apply a second time).
 --   functions     sync_apply: one atomic multi-record compare-and-swap (the sync push's unit, below), with
 --                 apply_stock_effect as its relative stock update; claim_invite (F5): claim a staff invite and
---                 create the membership in one call, with the staff limit inside.
+--                 create the membership in one call, with the staff limit inside it; the key functions.
 --
 -- Why functions and not several statements: production reaches Postgres through Supabase's transaction pooler,
 -- so a client-side BEGIN ... COMMIT across several statements is not safe, and the existing sync code
@@ -26,7 +31,9 @@
 -- Deploy order: this migration first, then the orderat-sync function. It is safe against the currently
 -- deployed code (nothing reads or writes these tables or calls these functions) and the new code needs
 -- them. Idempotent by design, like 0001-0009: tables are CREATE ... IF NOT EXISTS, functions CREATE OR
--- REPLACE, the backfill only inserts what is missing.
+-- REPLACE, the backfill only inserts what is missing. It has not been applied to any real database before
+-- the fourth review, so it is corrected in place; a database that did run the first draft gets its bare
+-- backfilled ids taken out below and the right keys put in.
 
 create table if not exists orderat.order_stock (
   shop_id uuid not null references orderat.shops_cloud (id) on delete cascade,
@@ -41,12 +48,13 @@ create table if not exists orderat.order_stock (
 
 create table if not exists orderat.stock_ops (
   shop_id uuid not null references orderat.shops_cloud (id) on delete cascade,
-  -- A client stock move's id, lowercase; a move with no id is keyed by its fields (server/sync/stock-merge.ts).
+  -- A client stock move's key (orderat.stock_move_key; server/sync/stock-merge.ts moveKey): `id:<id>` with the
+  -- ASCII capitals folded, or `f:[at,delta,reason,orderId]` for a move with no id.
   op_id text not null,
   product_id text null,
   -- applied: its delta changed the stock; ignored: the server owns that order's stock (it has a ledger) and
   -- never applies the client's copy of the move; listed: it was already in the product's stored list when the
-  -- server first saw the product, so it counts as applied (before this table existed).
+  -- server rewrote that list (or when this migration ran), so it counts as applied.
   outcome text not null check (outcome in ('applied', 'ignored', 'listed')),
   created_at timestamptz not null default now(),
   primary key (shop_id, op_id)
@@ -55,20 +63,71 @@ create table if not exists orderat.stock_ops (
 alter table orderat.order_stock enable row level security;
 alter table orderat.stock_ops enable row level security;
 
--- Backfill: every move id in a product's stored list is an applied move (the old server applied what it
--- stored). Moves the old server had already trimmed off a list are not recoverable; the new code also lists
--- the ids of a product's stored list the first time it writes that product, which covers the gap between this
--- migration and the deploy. Nothing reads this table until the new code runs.
+-- The key of a stock move: the ONE rule in SQL (server/sync/stock-merge.ts moveKey is the one in TypeScript, and
+-- server/sync/stock-ops-keys.test.ts runs both on the same fixtures). An id is a string of at least one character; its
+-- ASCII capitals are folded with translate() so the key never depends on the database's locale (lower() would
+-- change non-ASCII letters in some locales, JavaScript's toLowerCase() in others). A move with no id is
+-- identified by [at, delta, reason, orderId] as JSON, a field that is not a string or a number counting as null.
+create or replace function orderat.stock_move_key_token(v jsonb)
+returns text
+language sql
+immutable
+as $fn$
+  select case jsonb_typeof(v)
+    when 'string' then to_json(v #>> '{}')::text
+    when 'number' then v::text
+    else 'null'
+  end
+$fn$;
+
+create or replace function orderat.stock_move_key(move jsonb)
+returns text
+language sql
+immutable
+as $fn$
+  select case
+    when jsonb_typeof(move -> 'id') = 'string' and length(move ->> 'id') > 0
+      then 'id:' || translate(move ->> 'id', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
+    else 'f:[' || orderat.stock_move_key_token(move -> 'at')
+      || ',' || orderat.stock_move_key_token(move -> 'delta')
+      || ',' || orderat.stock_move_key_token(move -> 'reason')
+      || ',' || orderat.stock_move_key_token(move -> 'orderId') || ']'
+  end
+$fn$;
+
+-- Records every move in a product's stored list (`p_data` is the product record as it is stored now) in stock_ops, as
+-- 'listed', unless it is there already. sync_apply calls it for every product whose record it replaces, before the
+-- 50-entry list can lose a move (fourth review, R4).
+create or replace function orderat.record_listed_moves(p_shop uuid, p_product_id text, p_data jsonb)
+returns void
+language sql
+as $fn$
+  insert into orderat.stock_ops (shop_id, op_id, product_id, outcome)
+  select p_shop, orderat.stock_move_key(m.move), p_product_id, 'listed'
+    from jsonb_array_elements(
+           case when jsonb_typeof(p_data -> 'stockMoves') = 'array' then p_data -> 'stockMoves' else '[]'::jsonb end
+         ) as m(move)
+   where jsonb_typeof(m.move) = 'object'
+  on conflict (shop_id, op_id) do nothing
+$fn$;
+
+-- Backfill: every move in a product's stored list is an applied move (the old server applied what it stored), keyed
+-- exactly as the runtime computes it, with an id or without. Moves the old server had already trimmed off a list are not
+-- recoverable; the new code also lists the moves of a product's stored list whenever it rewrites that list, which covers
+-- the gap between this migration and the deploy. Nothing reads this table until the new code runs.
+-- First, take out what the first draft of this migration listed: bare lowercase ids, which no key the runtime computes
+-- can match (every one of its keys starts with `id:` or `f:[`).
+delete from orderat.stock_ops
+ where outcome = 'listed' and op_id not like 'id:%' and op_id not like 'f:[%';
+
 insert into orderat.stock_ops (shop_id, op_id, product_id, outcome)
-select r.shop_id, lower(m.move->>'id'), r.id, 'listed'
+select r.shop_id, orderat.stock_move_key(m.move), r.id, 'listed'
   from orderat.records r
  cross join lateral jsonb_array_elements(
          case when jsonb_typeof(r.data->'stockMoves') = 'array' then r.data->'stockMoves' else '[]'::jsonb end
        ) as m(move)
  where r.entity = 'product'
    and jsonb_typeof(m.move) = 'object'
-   and jsonb_typeof(m.move->'id') = 'string'
-   and length(m.move->>'id') > 0
 on conflict (shop_id, op_id) do nothing;
 
 -- Same ownership dance as 0001-0009 (see 0001_orderat_isolation.sql's comments for the full reasoning).
@@ -81,8 +140,8 @@ alter table orderat.stock_ops owner to orderat_app;
 revoke create on schema orderat from orderat_app;
 grant usage on schema orderat to orderat_app;
 
--- order_stock: read, inserted and updated in place; stock_ops: read, inserted, and (only inside sync_apply,
--- to take back the rows of a write that lost a race) deleted.
+-- order_stock: read, inserted and updated in place; stock_ops: read, inserted, and (only inside sync_apply, to take
+-- back the rows of a write that lost a race) deleted.
 grant select, insert, update on orderat.order_stock to orderat_app;
 grant select, insert, delete on orderat.stock_ops to orderat_app;
 
@@ -144,6 +203,13 @@ $fn$;
 -- Locks come first, in one fixed order (orders before products, then by id; a product written by an effect is
 -- locked too), so two writers cannot wait on each other. Anything that no longer matches returns no row and
 -- writes nothing. Returns the primary record as stored.
+--
+-- Seqs (fourth review, R1): a phone applies a pull in seq order and an installed Android app keeps a null link for an
+-- order line whose product it has not got yet, so when one write stores an order and the stock effects on its products
+-- the PRODUCTS draw their new seqs first and the primary record (the order) its own last: a pull delivers the products
+-- before the order. The server's move id is still derived from the primary's new seq (drawn up front), so it is unchanged.
+-- Stock keys (R4): every move in the stored list of a product this call replaces (the primary, or an effect's target) is
+-- recorded in stock_ops before the list can be trimmed, so a move the 50-entry list loses is still known.
 create or replace function orderat.sync_apply(
   p_shop uuid,
   p_by uuid,
@@ -171,6 +237,10 @@ declare
   v_inserted text[];
   v_effect record;
   v_move jsonb;
+  v_effect_count integer;
+  v_new_seq bigint;
+  v_product_seqs bigint[] := '{}';
+  v_n integer;
 begin
   -- 1. Lock every record involved, in a fixed order, and check each is still the version that was decided on.
   for v_ref in
@@ -232,10 +302,25 @@ begin
     end if;
   end if;
 
-  -- 4. The primary record.
+  -- 4. Draw the seqs: one for each product an effect moves, then the primary's own, which is the highest (R1).
+  select count(*) into v_effect_count from jsonb_array_elements(p_effects);
+  for v_n in 1..v_effect_count loop
+    v_product_seqs[v_n] := nextval(pg_get_serial_sequence('orderat.records', 'seq'));
+  end loop;
+  v_new_seq := nextval(pg_get_serial_sequence('orderat.records', 'seq'));
+
+  -- 5. A product this call replaces: the moves its stored list holds now are recorded before the list changes (R4).
+  if v_entity = 'product' and v_expect is not null then
+    perform orderat.record_listed_moves(
+      p_shop, v_id,
+      (select rec.data from orderat.records rec where rec.shop_id = p_shop and rec.entity = 'product' and rec.id = v_id)
+    );
+  end if;
+
+  -- 6. The primary record.
   if v_expect is null then
-    insert into orderat.records (shop_id, entity, id, data, deleted, updated_by, updated_at)
-    values (p_shop, v_entity, v_id, p_primary->'data', v_deleted, p_by, now())
+    insert into orderat.records (shop_id, entity, id, data, deleted, updated_by, updated_at, seq)
+    values (p_shop, v_entity, v_id, p_primary->'data', v_deleted, p_by, now(), v_new_seq)
     on conflict (shop_id, entity, id) do nothing
     returning * into v_row;
     if v_row.id is null then
@@ -248,7 +333,7 @@ begin
            deleted = v_deleted,
            updated_by = p_by,
            updated_at = now(),
-           seq = nextval(pg_get_serial_sequence('orderat.records', 'seq'))
+           seq = v_new_seq
      where rec.shop_id = p_shop and rec.entity = v_entity and rec.id = v_id and rec.seq = v_expect
     returning * into v_row;
     if v_row.id is null then
@@ -257,13 +342,15 @@ begin
     end if;
   end if;
 
-  -- 5. Stock effects: a relative update of each live product, with a server-made move.
+  -- 7. Stock effects: a relative update of each live product, with a server-made move.
+  v_n := 0;
   for v_effect in
     select e->>'product_id' as product_id, e->>'order_id' as order_id, (e->>'delta')::numeric as delta,
            e->>'reason' as reason, e->>'at' as moved_at
       from jsonb_array_elements(p_effects) as e
      order by 1
   loop
+    v_n := v_n + 1;
     v_move := jsonb_build_object(
       'id', md5(v_effect.order_id || ':' || v_row.seq::text || ':' || v_effect.product_id)::uuid::text,
       'delta', v_effect.delta,
@@ -272,29 +359,35 @@ begin
       'note', null,
       'at', v_effect.moved_at
     );
+    -- R4: the moves the list holds now are known before the new move can push the oldest off it.
+    perform orderat.record_listed_moves(
+      p_shop, v_effect.product_id,
+      (select rec.data from orderat.records rec
+        where rec.shop_id = p_shop and rec.entity = 'product' and rec.id = v_effect.product_id and not rec.deleted)
+    );
     update orderat.records rec
        set data = orderat.apply_stock_effect(rec.data, v_effect.delta, v_move),
            updated_by = p_by,
            updated_at = now(),
-           seq = nextval(pg_get_serial_sequence('orderat.records', 'seq'))
+           seq = v_product_seqs[v_n]
      where rec.shop_id = p_shop and rec.entity = 'product' and rec.id = v_effect.product_id and not rec.deleted;
     if found then
       -- The server's own move is an applied move: a phone that pulled it and pushes it back (in its list, however
       -- much later, even after the 50-entry list has dropped it) is never applied a second time.
       insert into orderat.stock_ops (shop_id, op_id, product_id, outcome)
-      values (p_shop, 'id:' || lower(v_move->>'id'), v_effect.product_id, 'applied')
+      values (p_shop, orderat.stock_move_key(v_move), v_effect.product_id, 'applied')
       on conflict (shop_id, op_id) do nothing;
     end if;
   end loop;
 
-  -- 6. The applied allocations.
+  -- 8. The applied allocations.
   insert into orderat.order_stock (shop_id, order_id, product_id, units, updated_at)
   select p_shop, o->>'order_id', o->>'product_id', (o->>'units')::integer, now()
     from jsonb_array_elements(p_order_stock) as o
    where coalesce((o->>'write')::boolean, false)
   on conflict (shop_id, order_id, product_id) do update set units = excluded.units, updated_at = now();
 
-  -- 7. Moves already in the stored list count as applied (best effort: never a reason to refuse the write).
+  -- 9. Moves already in the stored list count as applied (best effort: never a reason to refuse the write).
   insert into orderat.stock_ops (shop_id, op_id, product_id, outcome)
   select p_shop, o->>'op_id', o->>'product_id', 'listed' from jsonb_array_elements(p_listed) as o
   on conflict (shop_id, op_id) do nothing;
@@ -356,9 +449,15 @@ $fn$;
 
 -- Functions run with the caller's own privileges (the default, SECURITY INVOKER): orderat_app already holds
 -- exactly the table privileges these need. Only orderat_app may call them.
+revoke all on function orderat.stock_move_key_token(jsonb) from public;
+revoke all on function orderat.stock_move_key(jsonb) from public;
+revoke all on function orderat.record_listed_moves(uuid, text, jsonb) from public;
 revoke all on function orderat.apply_stock_effect(jsonb, numeric, jsonb) from public;
 revoke all on function orderat.sync_apply(uuid, uuid, jsonb, jsonb, jsonb, jsonb, jsonb, jsonb) from public;
 revoke all on function orderat.claim_invite(text, uuid, timestamptz, jsonb, integer) from public;
+grant execute on function orderat.stock_move_key_token(jsonb) to orderat_app;
+grant execute on function orderat.stock_move_key(jsonb) to orderat_app;
+grant execute on function orderat.record_listed_moves(uuid, text, jsonb) to orderat_app;
 grant execute on function orderat.apply_stock_effect(jsonb, numeric, jsonb) to orderat_app;
 grant execute on function orderat.sync_apply(uuid, uuid, jsonb, jsonb, jsonb, jsonb, jsonb, jsonb) to orderat_app;
 grant execute on function orderat.claim_invite(text, uuid, timestamptz, jsonb, integer) to orderat_app;
@@ -366,11 +465,17 @@ grant execute on function orderat.claim_invite(text, uuid, timestamptz, jsonb, i
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
+    execute 'revoke all on function orderat.stock_move_key_token(jsonb) from anon';
+    execute 'revoke all on function orderat.stock_move_key(jsonb) from anon';
+    execute 'revoke all on function orderat.record_listed_moves(uuid, text, jsonb) from anon';
     execute 'revoke all on function orderat.apply_stock_effect(jsonb, numeric, jsonb) from anon';
     execute 'revoke all on function orderat.sync_apply(uuid, uuid, jsonb, jsonb, jsonb, jsonb, jsonb, jsonb) from anon';
     execute 'revoke all on function orderat.claim_invite(text, uuid, timestamptz, jsonb, integer) from anon';
   end if;
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    execute 'revoke all on function orderat.stock_move_key_token(jsonb) from authenticated';
+    execute 'revoke all on function orderat.stock_move_key(jsonb) from authenticated';
+    execute 'revoke all on function orderat.record_listed_moves(uuid, text, jsonb) from authenticated';
     execute 'revoke all on function orderat.apply_stock_effect(jsonb, numeric, jsonb) from authenticated';
     execute 'revoke all on function orderat.sync_apply(uuid, uuid, jsonb, jsonb, jsonb, jsonb, jsonb, jsonb) from authenticated';
     execute 'revoke all on function orderat.claim_invite(text, uuid, timestamptz, jsonb, integer) from authenticated';

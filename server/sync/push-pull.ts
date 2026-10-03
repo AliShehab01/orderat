@@ -177,15 +177,19 @@ async function writeDecision(
   const none: Omit<AtomicWrite, "primary"> = { deps: [], effects: [], orderStock: [], ops: [], listed: [] };
 
   const plan = decision.stock;
-  if (change.entity === "product" && plan) {
-    if (plan.ops.length === 0 && plan.orderStock.length === 0 && plan.deps.length === 0 && plan.listed.length === 0) return plain();
+  if (change.entity === "product") {
+    const bookkeeping = plan !== undefined && (plan.ops.length > 0 || plan.orderStock.length > 0 || plan.deps.length > 0 || plan.listed.length > 0);
+    // Fourth review, R4: a product write that replaces a stored list of stock moves (a deletion, a product that comes back, a
+    // push with no plan) goes through sync_apply as well, which records the moves the list holds before it is replaced.
+    const replacesMoves = existing !== undefined && Array.isArray(existing.data.stockMoves) && existing.data.stockMoves.length > 0;
+    if (!bookkeeping && !(plan === undefined && replacesMoves)) return plain();
     return writeAtomic(sql, shopId, updatedBy, {
       primary,
       ...none,
-      deps: plan.deps.map((d) => ({ entity: "order" as const, id: d.orderId, seq: d.seq })),
-      orderStock: plan.orderStock,
-      ops: plan.ops.map((o) => ({ opId: o.opId, productId: change.id, outcome: o.outcome })),
-      listed: plan.listed.map((opId) => ({ opId, productId: change.id })),
+      deps: (plan?.deps ?? []).map((d) => ({ entity: "order" as const, id: d.orderId, seq: d.seq })),
+      orderStock: plan?.orderStock ?? [],
+      ops: (plan?.ops ?? []).map((o) => ({ opId: o.opId, productId: change.id, outcome: o.outcome })),
+      listed: (plan?.listed ?? []).map((opId) => ({ opId, productId: change.id })),
     });
   }
 

@@ -61,11 +61,24 @@ export function movesOf(value: unknown): Json[] {
   return Array.isArray(value) ? value.filter(isPlainObject) : [];
 }
 
-/** What identifies a move: its id without case, or, with no id, its own fields. Also the `op_id` of stock_ops. */
+/**
+ * What identifies a move, and the `op_id` of stock_ops: `id:` and its id with the ASCII capitals folded (iOS sends uppercase
+ * UUIDs, Android and the web lowercase; non-ASCII letters are left alone so no database locale can decide what a key is), or,
+ * for a move with no id (a legacy Android row), `f:` and its own fields `[at, delta, reason, orderId]` as JSON, where a field
+ * that is not a string or a finite number counts as null.
+ *
+ * Fourth review, R4: this rule is written once per language and the two must agree on every move. SQL:
+ * orderat.stock_move_key (db/migrations/0010_order_stock.sql), which backfills stock_ops, lists the moves of a stored list
+ * before it is trimmed (sync_apply) and keys the server's own moves; stock-ops-keys.test.ts runs both on the same fixtures.
+ * Change one, change the other.
+ */
 export function moveKey(move: Json): string {
-  if (typeof move.id === "string" && move.id.length > 0) return `id:${move.id.toLowerCase()}`;
-  return `f:${JSON.stringify([move.at ?? null, move.delta ?? null, move.reason ?? null, move.orderId ?? null])}`;
+  if (typeof move.id === "string" && move.id.length > 0) return `id:${foldAsciiCase(move.id)}`;
+  return `f:[${keyToken(move.at)},${keyToken(move.delta)},${keyToken(move.reason)},${keyToken(move.orderId)}]`;
 }
+
+const foldAsciiCase = (text: string): string => text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+const keyToken = (value: unknown): string => (typeof value === "string" || (typeof value === "number" && Number.isFinite(value)) ? JSON.stringify(value) : "null");
 
 /** The stock_ops key of an order and product pair in the maps below. */
 export const pairKey = (orderId: string, productId: string): string => `${orderId}\u0000${productId}`;
