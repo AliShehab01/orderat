@@ -11,6 +11,7 @@ process.env.TZ = 'Asia/Bahrain';
 
 const load = createRequire(import.meta.url);
 const map = load('../public/orderat/cloud-map.js');
+const core = load('../public/orderat/live-core.js');
 const { createSync } = load('../public/orderat/cloud-sync.js');
 const { CloudError } = load('../public/orderat/cloud-api.js');
 
@@ -26,6 +27,8 @@ const OCCASION_ID = '2f3a4b5c-6d7e-4f8a-9b0c-1d2e3f4a5b6c';
 const NEW_ID = 'a9b8c7d6-e5f4-4a3b-9c2d-1e0f9a8b7c6d';
 const ITEM_ID = 'e1f2a3b4-c5d6-4e7f-8a9b-0c1d2e3f4a5b';
 const PAY_ID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+const PAY_B = 'a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d';
+const PAY_C = 'a3b4c5d6-e7f8-4a9b-8c0d-2e3f4a5b6c7d';
 const CH_ID = 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e';
 const OWNER = { role: 'owner', permissions: { orders: true, prepare: true, money: true, products: true } };
 
@@ -83,6 +86,8 @@ function fakeServer({ pageSize = 500 } = {}) {
   const server = {
     calls: [], membership: OWNER, fail: null, gate: null, inFlight: 0, maxInFlight: 0,
     refuse: () => false,
+    // How the server stores an accepted change: as pushed (the default), or as a test says (merge(change, existing)).
+    merge: null,
     put(entity, id, data, deleted = false) {
       seq += 1;
       rows.set(`${entity}/${id}`, { entity, id, data: clone(data), deleted, seq, updatedAt: new Date(Date.UTC(2026, 8, 29, 8, 0, seq)).toISOString() });
@@ -108,7 +113,7 @@ function fakeServer({ pageSize = 500 } = {}) {
             continue;
           }
           const previous = existing ? existing.seq : 0;
-          server.put(c.entity, c.id, c.data, c.deleted === true);
+          server.put(c.entity, c.id, server.merge ? server.merge(c, existing) : c.data, c.deleted === true);
           if (previous > (c.baseSeq || 0)) conflicts.push({ entity: c.entity, id: c.id, seq: previous });
         }
         if (server.afterPush) server.afterPush(req); // another device writes between the push and the pull
@@ -1065,5 +1070,218 @@ describe('fix round 2 follow-ups', () => {
     expect(server.row('customer', NEW_ID).deleted).toBe(true);
     expect(server.calls.at(-1).changes.map(c => [c.id, c.deleted])).toEqual([[NEW_ID, true]]);
     expect(app.S.customers.map(c => c.id)).toEqual([FATIMA_ID, NOORA_ID]);
+  });
+});
+
+// Fourth review R2/R3 (3 Oct 2026), the web as a client. A payment is identified by its id and payments are
+// add-only on the wire: a pushed order that leaves one out never removes it, so a deliberate deletion (the
+// trash button, the Undo of a payment just recorded: live-core removePayment) also puts the id into the
+// order's grow-only removedPaymentIds. The fake server below applies the contract's rule to every accepted
+// order write, as the real one does (server/sync/payments-merge.ts and its tests are the proof of that rule;
+// this is a model of it so the web's engine runs against it end to end).
+describe('payments deleted on the web (payments contract R2, R3)', () => {
+  const key = id => String(id).toLowerCase();
+  const total = order => (order.items || []).reduce((s, it) => s + it.quantity * it.unitPriceMinor, order.deliveryFeeMinor || 0);
+  // payments = (stored ∪ pushed by id, the pushed copy wins) minus every removed id, which is itself the
+  // union of the stored and the pushed lists; paymentStatus follows the payments.
+  function mergeOrder(stored, incoming) {
+    const removed = [];
+    [stored.removedPaymentIds, incoming.removedPaymentIds].forEach(list => (Array.isArray(list) ? list : []).forEach(id => { if (!removed.some(r => key(r) === key(id))) removed.push(id); }));
+    const gone = new Set(removed.map(key)), byKey = new Map();
+    [...(stored.payments || []), ...(incoming.payments || [])].forEach(p => byKey.set(key(p.id), p));
+    const out = { ...incoming, payments: [...byKey.values()].filter(p => !gone.has(key(p.id))) };
+    if (removed.length) out.removedPaymentIds = removed;
+    const paid = out.payments.reduce((s, p) => s + p.amountMinor, 0);
+    out.paymentStatus = paid <= 0 ? 'unpaid' : paid >= total(out) ? 'paid' : 'deposit';
+    return out;
+  }
+  const contractServer = () => {
+    const server = seeded();
+    server.merge = (change, existing) => (change.entity === 'order' && existing ? mergeOrder(existing.data, change.data) : change.data);
+    return server;
+  };
+  // What another phone writes: it goes through the same rule.
+  const phoneWrites = (server, data) => server.put('order', ORDER_ID, mergeOrder(server.row('order', ORDER_ID).data, data));
+  const paymentB = () => ({ id: PAY_B, amountMinor: 3000, method: 'cash', note: null, paidAt: '2026-09-29T06:00:00.000Z' });
+  const ordersPushed = server => server.pushed().filter(c => c.id === ORDER_ID);
+
+  it('R3: a payment deleted on the web stays deleted when an older phone, still holding it, saves the order', async () => {
+    const server = contractServer();
+    const app = await started(server);
+    expect(core.removePayment(app.S.orders[0], { id: PAY_ID })).toBe(true);
+    await app.sync.commit(app.S);
+    expect(server.row('order', ORDER_ID).data).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID], paymentStatus: 'unpaid' });
+    phoneWrites(server, { ...ORDER(), notes: 'Ring twice' }); // that phone's copy still has the payment and no list
+    await app.sync.pull(app.S);
+    expect(app.S.orders[0]).toMatchObject({ notes: 'Ring twice', payments: [], removedPaymentIds: [PAY_ID] });
+    await app.sync.commit(app.S);
+    expect(ordersPushed(server)).toHaveLength(1); // the web pushed its deletion once; nothing was brought back, nothing re-sent
+  });
+
+  it('R3, with other payments: the survivor and a payment a phone added meanwhile are untouched', async () => {
+    const server = contractServer();
+    server.put('order', ORDER_ID, { ...ORDER(), payments: [...ORDER().payments, paymentB()] });
+    const app = await started(server);
+    expect(app.S.orders[0].payments.map(p => p.id)).toEqual([PAY_ID, PAY_B]);
+    core.removePayment(app.S.orders[0], { id: PAY_ID });
+    const phone = { id: PAY_C, amountMinor: 1000, method: 'card', note: null, paidAt: '2026-09-29T06:30:00.000Z' };
+    phoneWrites(server, { ...ORDER(), payments: [...ORDER().payments, paymentB(), phone] }); // a phone adds C, from a copy that still has A
+    await app.sync.commit(app.S);
+    expect(server.row('order', ORDER_ID).data.payments.map(p => p.id)).toEqual([PAY_B, PAY_C]);
+    expect(server.row('order', ORDER_ID).data.removedPaymentIds).toEqual([PAY_ID]);
+    expect(app.S.orders[0].payments.map(p => [p.id, p.amount])).toEqual([[PAY_B, 3], [PAY_C, 1]]);
+    expect(app.S.orders[0].removedPaymentIds).toEqual([PAY_ID]);
+  });
+
+  it('R2: a payment another phone added survives the web saving the order from its older copy, and the web shows both', async () => {
+    const server = contractServer();
+    const app = await started(server); // the web holds [A]
+    const phoneSeq = phoneWrites(server, { ...ORDER(), payments: [...ORDER().payments, paymentB()] });
+    app.S.orders[0].notes = 'Ring twice'; // saved from the older copy
+    await app.sync.commit(app.S);
+    expect(app.notices).toEqual([['conflict', [{ entity: 'order', id: ORDER_ID, seq: phoneSeq }]]]);
+    expect(server.row('order', ORDER_ID).data.payments.map(p => p.id)).toEqual([PAY_ID, PAY_B]);
+    expect(app.S.orders[0].payments.map(p => [p.id, p.amount])).toEqual([[PAY_ID, 5], [PAY_B, 3]]);
+    expect(app.S.orders[0].notes).toBe('Ring twice');
+    expect(server.row('order', ORDER_ID).data.paymentStatus).toBe('deposit'); // 8.000 of 13.000
+  });
+
+  it('a deletion from a copy that is behind removes only what the user deleted: a newer payment stays', async () => {
+    const server = contractServer();
+    const app = await started(server);
+    phoneWrites(server, { ...ORDER(), payments: [...ORDER().payments, paymentB()] }); // B arrives after the web read the order
+    core.removePayment(app.S.orders[0], { id: PAY_ID });
+    await app.sync.commit(app.S);
+    expect(server.row('order', ORDER_ID).data).toMatchObject({ removedPaymentIds: [PAY_ID] });
+    expect(server.row('order', ORDER_ID).data.payments.map(p => p.id)).toEqual([PAY_B]);
+    expect(app.S.orders[0].payments.map(p => p.id)).toEqual([PAY_B]);
+  });
+
+  it('a payment recorded and undone before the sync that carries it returns is gone, and the next push says so', async () => {
+    const server = contractServer();
+    const app = await started(server);
+    const made = { id: PAY_B, amount: 2, method: 'cash', note: '', at: '2026-09-29T08:01:00.000Z' }; // FORMS.payment gives it its id
+    app.S.orders[0].payments.push(made);
+    const gate = deferred();
+    server.gate = gate.promise;
+    const committing = app.sync.commit(app.S);
+    await until(() => server.inFlight === 1);
+    expect(server.calls.at(-1).changes[0].data.payments.map(p => p.id)).toEqual([PAY_ID, PAY_B]);
+    expect(core.removePayment(app.S.orders[0], { id: PAY_B, at: made.at, amount: 2 })).toBe(true); // Undo, while the call is out
+    server.gate = null;
+    gate.resolve();
+    await committing;
+    await app.sync.commit(app.S);
+    const sent = server.calls.at(-1).changes[0].data;
+    expect(sent.removedPaymentIds).toEqual([PAY_B]);
+    expect(sent.payments.map(p => p.id)).toEqual([PAY_ID]);
+    expect(server.row('order', ORDER_ID).data.payments.map(p => p.id)).toEqual([PAY_ID]);
+    expect(server.row('order', ORDER_ID).data.removedPaymentIds).toEqual([PAY_B]);
+    expect(app.S.orders[0].payments.map(p => p.id)).toEqual([PAY_ID]);
+    expect(app.sync.pending).toBe(0);
+  });
+
+  it('an unsent deletion is not undone by a pull whose answer still holds the payment', async () => {
+    const server = contractServer();
+    const app = await started(server);
+    server.put('order', ORDER_ID, { ...ORDER(), notes: 'Ring twice' }); // a phone's save, waiting to be pulled; its copy still holds the payment
+    const gate = deferred();
+    server.gate = gate.promise;
+    const pulling = app.sync.pull(app.S);
+    await until(() => server.inFlight === 1);
+    core.removePayment(app.S.orders[0], { id: PAY_ID }); // deleted while the pull is on its way back
+    server.gate = null;
+    gate.resolve();
+    await pulling;
+    expect(app.S.orders[0].payments).toEqual([]);
+    expect(app.S.orders[0].removedPaymentIds).toEqual([PAY_ID]);
+    expect(app.sync.pending).toBe(1);
+    await app.sync.commit(app.S);
+    expect(server.row('order', ORDER_ID).data).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID] });
+    expect(app.S.orders[0]).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID] });
+  });
+
+  it('a deletion made offline survives a reload: kept as pending data, shown as deleted before it is sent, then stored', async () => {
+    const server = contractServer();
+    const app = await started(server);
+    core.removePayment(app.S.orders[0], { id: PAY_ID });
+    server.fail = new CloudError('offline', 0, 'network');
+    await app.sync.commit(app.S);
+    const kept = JSON.parse(JSON.stringify(app.sync.exportPending())); // what live.js keeps in localStorage
+    expect(kept).toHaveLength(1);
+    expect(kept[0].data).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID] });
+    app.sync.stop();
+
+    server.fail = null;
+    phoneWrites(server, { ...ORDER(), notes: 'Ring twice' }); // meanwhile a phone saved the order; its copy still holds the payment
+    const again = open(server);
+    expect(again.sync.importPending(kept)).toBe(1);
+    await again.sync.start();
+    expect(again.S.orders[0].payments).toEqual([]); // the server's copy has it; the unsent deletion wins on screen
+    expect(again.S.orders[0].removedPaymentIds).toEqual([PAY_ID]);
+    await again.sync.pull(again.S);
+    expect(server.row('order', ORDER_ID).data).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID] });
+    expect(again.S.orders[0]).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID] });
+    expect(again.sync.pending).toBe(0);
+  });
+
+  it("on a pull the web takes the server's payments and removedPaymentIds, and pushes nothing back", async () => {
+    const server = contractServer();
+    const app = await started(server);
+    expect(app.S.orders[0]).not.toHaveProperty('removedPaymentIds'); // an order from before the field
+    phoneWrites(server, { ...ORDER(), payments: [], removedPaymentIds: [PAY_ID], paymentStatus: 'unpaid' }); // another phone deleted it
+    await app.sync.pull(app.S);
+    expect(app.S.orders[0]).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID] });
+    await app.sync.commit(app.S);
+    expect(ordersPushed(server)).toHaveLength(0);
+    // and a payment a phone adds later comes in next to the list, which only grows
+    phoneWrites(server, { ...ORDER(), payments: [paymentB()], removedPaymentIds: [PAY_C] });
+    await app.sync.pull(app.S);
+    expect(app.S.orders[0].payments.map(p => p.id)).toEqual([PAY_B]);
+    expect(app.S.orders[0].removedPaymentIds).toEqual([PAY_ID, PAY_C]);
+  });
+
+  it('never drops an id a phone added: the web writes the union; an edit of something else leaves the list as it is', async () => {
+    const server = seeded(); // an older server: stores what it is sent, as it is
+    server.put('order', ORDER_ID, { ...ORDER(), payments: [...ORDER().payments, paymentB()], removedPaymentIds: [PAY_C], futureField: 1 });
+    const app = await started(server);
+    expect(app.S.orders[0].removedPaymentIds).toEqual([PAY_C]);
+    app.S.orders[0].notes = 'Ring twice';
+    await app.sync.commit(app.S);
+    expect(server.row('order', ORDER_ID).data).toMatchObject({ notes: 'Ring twice', removedPaymentIds: [PAY_C], futureField: 1 });
+    core.removePayment(app.S.orders[0], { id: PAY_ID });
+    await app.sync.commit(app.S);
+    expect(server.row('order', ORDER_ID).data).toMatchObject({ removedPaymentIds: [PAY_C, PAY_ID], futureField: 1 });
+    expect(server.row('order', ORDER_ID).data.payments.map(p => p.id)).toEqual([PAY_B]);
+  });
+
+  it('a deletion whose answer was lost is sent again unchanged and stored once', async () => {
+    const server = contractServer();
+    const app = await started(server);
+    core.removePayment(app.S.orders[0], { id: PAY_ID });
+    server.onAnswer = () => { server.onAnswer = null; throw new CloudError('offline', 0, 'network'); }; // the server took it; the answer never came
+    await expect(app.sync.commit(app.S)).resolves.toBe(false);
+    expect(app.sync.pending).toBe(1);
+    expect(server.row('order', ORDER_ID).data.removedPaymentIds).toEqual([PAY_ID]);
+    await expect(app.sync.commit(app.S)).resolves.toBe(true);
+    const [first, retry] = ordersPushed(server);
+    expect(retry.data).toEqual(first.data);
+    expect(server.row('order', ORDER_ID).data).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID] });
+    expect(app.S.orders[0]).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID] });
+    expect(app.sync.pending).toBe(0);
+  });
+
+  it("an older server that stores what it is sent still keeps the deletion, and an older app's record is read as it is", async () => {
+    const server = seeded();
+    const app = await started(server);
+    core.removePayment(app.S.orders[0], { id: PAY_ID });
+    await app.sync.commit(app.S);
+    expect(server.row('order', ORDER_ID).data).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID], paymentStatus: 'unpaid' });
+    expect(app.S.orders[0]).toMatchObject({ payments: [], removedPaymentIds: [PAY_ID] });
+    // an iPhone 1.0 style deletion: the payment is simply missing and there is no list
+    server.put('order', ORDER_ID, { ...ORDER(), payments: [], paymentStatus: 'unpaid' });
+    await app.sync.pull(app.S);
+    expect(app.S.orders[0].payments).toEqual([]);
+    expect(app.S.orders[0]).not.toHaveProperty('removedPaymentIds');
   });
 });
