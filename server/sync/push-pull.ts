@@ -5,8 +5,11 @@
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 import type { Member } from "./permissions.ts";
-import { canPull, decidePush, type Entity } from "./record-access.ts";
-import { findRecord, pullRecords, writeRecordIfUnchanged, type RecordRow } from "./store.ts";
+import { canPull, decidePush, productAccess, type Entity, type PushDecision } from "./record-access.ts";
+import { gatherProductFacts, planStockForOrder } from "./stock-apply.ts";
+import { ledgerOf } from "./stock-ledger.ts";
+import { namesAnyOrder } from "./stock-merge.ts";
+import { findRecord, findRecordsByIds, pullRecords, writeAtomic, writeRecordIfUnchanged, type AtomicWrite, type RecordRow } from "./store.ts";
 import type { ChangeInput } from "./validate.ts";
 
 export interface Conflict {
@@ -38,6 +41,11 @@ const PULL_PAGE_SIZE = 500;
  * even a second attempt is rare. */
 const MAX_WRITE_ATTEMPTS = 5;
 
+export interface PushOptions {
+  /** The clock the server's own stock moves are stamped with (tests pin it). */
+  now?: () => Date;
+}
+
 /**
  * Applies every change in `changes`, in order, each one atomically on its own record — not wrapped in
  * one all-or-nothing SQL transaction, because the spec's own unit of atomicity is a single record
@@ -56,27 +64,79 @@ const MAX_WRITE_ATTEMPTS = 5;
  * any positive baseSeq at all — that can only mean the client thinks a server copy exists that doesn't)
  * is still applied (last writer wins) and reported in `conflicts` with that version's seq — also when
  * that version only appeared while this change was being applied.
+ *
+ * Order stock (third review, 3 Oct 2026, F1-F3): the orders of a batch are applied before the existing products
+ * whose stock moves name them (the batch is otherwise applied in its own order), so such an order is on the
+ * server when the move is judged (server/sync/stock-merge.ts), and an order's ledger has already moved the stock
+ * of its products (server/sync/order-stock.ts) when the phone's own copy of that move arrives and is ignored.
+ * Only those products move: customers and new products keep their place before the orders, because every
+ * write draws a seq and the phones apply a pull in seq order (Android drops an order whose customer, and
+ * leaves an order line unlinked from a product, that it does not have yet). Results are reported in the batch's
+ * own order. An order write whose record carries a ledger, and a product write that has stock bookkeeping to
+ * record, are single atomic units spanning several rows (store.ts writeAtomic) inside the same
+ * compare-and-swap retry.
  */
-export async function pushChanges(sql: SqlClient, shopId: string, member: Member, changes: ChangeInput[], updatedBy: string): Promise<PushResult> {
+export async function pushChanges(
+  sql: SqlClient,
+  shopId: string,
+  member: Member,
+  changes: ChangeInput[],
+  updatedBy: string,
+  options: PushOptions = {},
+): Promise<PushResult> {
+  const now = options.now ?? (() => new Date());
+  const outcomes = new Array<{ conflict?: Conflict; rejected?: Rejected }>(changes.length);
+
+  const later = await productsAfterTheirOrders(sql, shopId, changes);
+  const sequence = [...changes.keys()].filter((i) => !later.has(i)).concat([...later.keys()]);
+  for (const index of sequence) {
+    outcomes[index] = await applyChange(sql, shopId, member, changes[index]!, updatedBy, now, later.get(index));
+  }
+
   const conflicts: Conflict[] = [];
   const rejected: Rejected[] = [];
-
-  for (const change of changes) {
-    const outcome = await applyChange(sql, shopId, member, change, updatedBy);
+  for (const outcome of outcomes) {
     if (outcome.rejected) rejected.push(outcome.rejected);
     if (outcome.conflict) conflicts.push(outcome.conflict);
   }
-
   return { conflicts, rejected };
+}
+
+/** The changes to apply after every other change of the batch (index -> the product's seq before the batch): the
+ * pushes of EXISTING products whose stock moves name an order that is in the same batch (see pushChanges), in
+ * batch order. The seq is what such a push is checked for a conflict against: the order written before it moves
+ * the product's seq itself (the server's stock effect), which is not another phone's write. */
+async function productsAfterTheirOrders(sql: SqlClient, shopId: string, changes: ChangeInput[]): Promise<Map<number, number>> {
+  const orderIds = new Set(changes.filter((c) => c.entity === "order").map((c) => c.id));
+  if (orderIds.size === 0) return new Map();
+  const naming = [...changes.keys()].filter((i) => {
+    const c = changes[i]!;
+    return c.entity === "product" && !c.deleted && namesAnyOrder(c.data, orderIds);
+  });
+  if (naming.length === 0) return new Map();
+  const existing = new Map((await findRecordsByIds(sql, shopId, "product", naming.map((i) => changes[i]!.id))).filter((r) => !r.deleted).map((r) => [r.id, r.seq]));
+  return new Map(naming.filter((i) => existing.has(changes[i]!.id)).map((i) => [i, existing.get(changes[i]!.id)!]));
 }
 
 /** One change of pushChanges: read, decide and write, again from the read whenever the write finds the
  * record changed since. */
-async function applyChange(sql: SqlClient, shopId: string, member: Member, change: ChangeInput, updatedBy: string): Promise<{ conflict?: Conflict; rejected?: Rejected }> {
+async function applyChange(
+  sql: SqlClient,
+  shopId: string,
+  member: Member,
+  change: ChangeInput,
+  updatedBy: string,
+  now: () => Date,
+  seqBeforeBatch?: number,
+): Promise<{ conflict?: Conflict; rejected?: Rejected }> {
   for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
     const existing = await findRecord(sql, shopId, change.entity, change.id);
-    const stored = existing ? { data: existing.data, deleted: existing.deleted } : undefined;
-    const decision = decidePush(member, change.entity, change.id, change.data, change.deleted, stored);
+    const stored = existing ? { data: existing.data, deleted: existing.deleted, seq: existing.seq } : undefined;
+
+    // An existing live product takes the stock merge, judged against what the database says about its moves.
+    const liveProduct = change.entity === "product" && !change.deleted && existing !== undefined && !existing.deleted;
+    const stock = liveProduct && productAccess(member) !== "none" ? await gatherProductFacts(sql, shopId, change.id, existing.data, change.data) : undefined;
+    const decision = decidePush(member, change.entity, change.id, change.data, change.deleted, stored, { baseSeq: change.baseSeq, stock });
     if (!decision.allowed) {
       // The server's copy goes back only to a member allowed to pull it; for anyone else, the phone
       // drops its local copy (docs/sme-phase-2-cloud.md "Sync").
@@ -91,13 +151,51 @@ async function applyChange(sql: SqlClient, shopId: string, member: Member, chang
       };
     }
 
-    const written = await writeRecordIfUnchanged(sql, shopId, change.entity, change.id, decision.data, change.deleted, updatedBy, existing?.seq);
+    const written = await writeDecision(sql, shopId, change, decision, existing, updatedBy, now().toISOString());
     if (!written) continue; // Another write landed since the read: decide again on the record as it is now.
 
-    const previousSeq = existing?.seq ?? 0;
+    const previousSeq = seqBeforeBatch ?? existing?.seq ?? 0;
     return previousSeq > (change.baseSeq ?? 0) ? { conflict: { entity: change.entity, id: change.id, seq: previousSeq } } : {};
   }
   throw new Error(`sync push: a ${change.entity} record kept changing while it was written (${MAX_WRITE_ATTEMPTS} attempts)`);
+}
+
+/** Writes an allowed decision: as one atomic unit with its stock bookkeeping when it has any (a product push that
+ * applies, ignores or lists moves; an order whose ledger the products' stock must follow), as the plain
+ * compare-and-swap of one record otherwise. Undefined when the record, or anything the decision read, moved. */
+async function writeDecision(
+  sql: SqlClient,
+  shopId: string,
+  change: ChangeInput,
+  decision: Extract<PushDecision, { allowed: true }>,
+  existing: RecordRow | undefined,
+  updatedBy: string,
+  at: string,
+): Promise<RecordRow | undefined> {
+  const plain = () => writeRecordIfUnchanged(sql, shopId, change.entity, change.id, decision.data, change.deleted, updatedBy, existing?.seq);
+  const primary: AtomicWrite["primary"] = { entity: change.entity, id: change.id, expectSeq: existing?.seq, data: decision.data, deleted: change.deleted };
+  const none: Omit<AtomicWrite, "primary"> = { deps: [], effects: [], orderStock: [], ops: [], listed: [] };
+
+  const plan = decision.stock;
+  if (change.entity === "product" && plan) {
+    if (plan.ops.length === 0 && plan.orderStock.length === 0 && plan.deps.length === 0 && plan.listed.length === 0) return plain();
+    return writeAtomic(sql, shopId, updatedBy, {
+      primary,
+      ...none,
+      deps: plan.deps.map((d) => ({ entity: "order" as const, id: d.orderId, seq: d.seq })),
+      orderStock: plan.orderStock,
+      ops: plan.ops.map((o) => ({ opId: o.opId, productId: change.id, outcome: o.outcome })),
+      listed: plan.listed.map((opId) => ({ opId, productId: change.id })),
+    });
+  }
+
+  const ledger = change.entity === "order" && !change.deleted ? ledgerOf(decision.data) : undefined;
+  if (ledger) {
+    const stockPlan = await planStockForOrder(sql, shopId, change.id, decision.data, existing?.data, ledger, at);
+    if (stockPlan.orderStock.length === 0) return plain();
+    return writeAtomic(sql, shopId, updatedBy, { primary, ...none, effects: stockPlan.effects, orderStock: stockPlan.orderStock });
+  }
+  return plain();
 }
 
 export interface PullResult {

@@ -147,7 +147,7 @@ export function createSyncHandler(deps: SyncHandlerDeps): (req: Request) => Prom
     }
 
     const member: Member = { role: membership.role, permissions: membership.permissions };
-    const { conflicts, rejected } = await pushChanges(deps.sql, body.shopId, member, body.changes, userId);
+    const { conflicts, rejected } = await pushChanges(deps.sql, body.shopId, member, body.changes, userId, { now });
     const pulled = await pullForMember(deps.sql, body.shopId, member, body.cursor);
 
     log({ event: "sync", status: 200, pushed: body.changes.length, conflicts: conflicts.length, rejected: rejected.length, pulled: pulled.changes.length, more: pulled.more });
