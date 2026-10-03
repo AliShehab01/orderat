@@ -58,6 +58,15 @@ describe("validateSyncBody / sync", () => {
     expect(validateSyncBody(body)).toEqual({ ok: false, error: "too_large" });
   });
 
+  it("an order with the most removedPaymentIds one push may carry (500 UUIDs, about 20 KB) still fits the record limit", () => {
+    const uuid = (i: number) => `${String(i).padStart(8, "0")}-0000-4000-8000-000000000000`;
+    const removedPaymentIds = Array.from({ length: 500 }, (_, i) => uuid(i));
+    const data = { status: "confirmed", payments: [], changes: [], removedPaymentIds };
+    expect(new TextEncoder().encode(JSON.stringify(data)).length).toBeLessThan(MAX_RECORD_DATA_BYTES);
+    const body = JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 0, changes: [{ entity: "order", id: "o1", data, deleted: false, baseSeq: 3 }] });
+    expect(validateSyncBody(body)).toMatchObject({ ok: true });
+  });
+
   it("rejects more than the defensive per-request change cap", () => {
     const changes = Array.from({ length: MAX_CHANGES_PER_REQUEST + 1 }, (_, i) => ({ entity: "order", id: `o${i}`, data: {} }));
     expect(validateSyncBody(JSON.stringify({ action: "sync", shopId: SHOP_ID, cursor: 0, changes }))).toEqual({ ok: false, error: "invalid_body" });
