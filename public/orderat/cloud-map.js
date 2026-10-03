@@ -280,13 +280,27 @@
   // (older apps know no other value and keep this key as an unknown one); a record without the key reads
   // null and keeps it out until the web sets it.
   const OUT_FOR_DELIVERY = { read: v => iso(v) || null, write: v => iso(v) || null };
+  // What the order actually took out of each product's stock: { productId: whole units > 0 } (the
+  // phones' `stockDeducted`, docs/sme-phase-2-cloud.md). { } means it takes nothing now; a missing key
+  // (undefined on the web) is an order from before the ledger. Anything that is not an object reads as
+  // missing, an entry that is not a whole number above 0 is left out, and an unchanged ledger keeps its
+  // exact raw form. Written back only when the web changed it.
+  const LEDGER = {
+    read: v => {
+      if (!isObj(v)) return undefined;
+      const out = {};
+      Object.keys(v).forEach(pid => { if (pid && pid !== '__proto__' && Number.isInteger(v[pid]) && v[pid] > 0) out[pid] = v[pid]; });
+      return out;
+    },
+    write: v => (v === undefined ? undefined : LEDGER.read(v) || undefined),
+  };
   // The order's plain fields; the address area, items, payments and history are mapped below.
   const orderFields = (m, now) => [
     ['customerId', 'customerId', text], ['status', 'status', STATUS], ['fulfillment', 'fulfillmentType', FULFILLMENT],
     ['dueAt', 'dueAt', date(now)], ['deliveryFee', 'deliveryFeeMinor', m], ['notes', 'notes', optText], ['source', 'source', SOURCE],
     ['vatRateBps', 'vatRateBps', nullableInt], ['vatIncluded', 'vatIncluded', nullableFlag], ['vatMinor', 'vatMinor', nullableInt],
     ['invoiceNumber', 'invoiceNumber', anyValue], ['invoiceIdentifier', 'invoiceIdentifier', nullableText],
-    ['outForDeliveryAt', 'outForDeliveryAt', OUT_FOR_DELIVERY],
+    ['outForDeliveryAt', 'outForDeliveryAt', OUT_FOR_DELIVERY], ['stockDeducted', 'stockDeducted', LEDGER],
   ];
 
   // History for display in the web's shape, the cloud entry itself kept on `_c`.
@@ -301,6 +315,7 @@
 
   function orderToWeb(id, data, ctx) {
     const d = obj(data), m = money(decimalsOf(ctx)), web = readFields(orderFields(m, null), d, { id });
+    if (web.stockDeducted === undefined) delete web.stockDeducted; // a legacy order: no ledger key on the web either
     const addr = obj(d.address);
     web.area = AREA.read(addr.area);
     // The free-text address (what the shop link and the web write) and, read-only, the phones' block,

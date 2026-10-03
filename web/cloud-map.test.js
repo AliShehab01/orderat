@@ -421,6 +421,32 @@ describe('order', () => {
     expect(reopened.changes.at(-1)).toStrictEqual({ id: anId(), field: 'status', oldValue: 'confirmed', newValue: 'newOrder', at: '2026-09-29T07:52:00.000Z' });
   });
 
+  it('reads, writes and keeps the stock ledger stockDeducted (replaced wholesale, never merged)', () => {
+    const raw = frozen({ ...orderRecord(), status: 'confirmed', stockDeducted: { [PRODUCT_ID]: 2, [OTHER_PRODUCT_ID]: 1 } });
+    const web = map.orderToWeb(ORDER_ID, raw, BHD);
+    expect(web.stockDeducted).toEqual({ [PRODUCT_ID]: 2, [OTHER_PRODUCT_ID]: 1 });
+    expect(roundTrip('order', ORDER_ID, raw, BHD)).toStrictEqual(raw);
+    web.stockDeducted = { [PRODUCT_ID]: 5 }; // the web's own copy replaces the stored one
+    expect(map.orderToCloud(web, raw, BHD).stockDeducted).toStrictEqual({ [PRODUCT_ID]: 5 });
+    web.stockDeducted = {};
+    expect(map.orderToCloud(web, raw, BHD).stockDeducted).toStrictEqual({});
+    // a record without the key is a legacy order: no key on the web, none written until the web sets one
+    const legacy = frozen(orderRecord());
+    const lw = map.orderToWeb(ORDER_ID, legacy, BHD);
+    expect(lw).not.toHaveProperty('stockDeducted');
+    lw.notes = 'x';
+    expect(map.orderToCloud(lw, legacy, BHD)).not.toHaveProperty('stockDeducted');
+    lw.stockDeducted = {};
+    expect(map.orderToCloud(lw, legacy, BHD).stockDeducted).toStrictEqual({});
+    // an empty ledger from a phone stays valid and unchanged; junk entries are not read but kept when untouched
+    const empty = frozen({ ...orderRecord(), stockDeducted: {} });
+    expect(roundTrip('order', ORDER_ID, empty, BHD)).toStrictEqual(empty);
+    const junk = frozen({ ...orderRecord(), stockDeducted: { a: 0, b: 3, c: 'x' } });
+    expect(map.orderToWeb(ORDER_ID, junk, BHD).stockDeducted).toEqual({ b: 3 });
+    expect(roundTrip('order', ORDER_ID, junk, BHD)).toStrictEqual(junk);
+    expect(map.orderToWeb(ORDER_ID, { ...orderRecord(), stockDeducted: 'x' }, BHD)).not.toHaveProperty('stockDeducted');
+  });
+
   it("reads source as a known code: an unknown or malicious one shows as 'manual' and is kept on write", () => {
     for (const s of ['whatsapp', 'instagram', 'link', 'manual']) expect(map.orderToWeb(ORDER_ID, { ...orderRecord(), source: s }, BHD).source).toBe(s);
     const evil = '"><img src=x onerror=alert(1)>';
