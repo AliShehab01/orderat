@@ -634,6 +634,8 @@ const I18N = {
   'neworder.clear': ['Clear', 'مسح'],
   'neworder.clearConfirm': ['Clear this order?', 'مسح هذا الطلب؟'],
   'pay.overpay': ['More than the remaining {1}. Save anyway?', 'أكثر من المتبقي {1}. هل تريد الحفظ؟', 'أكثر من المتبقي {1}. هل تريدين الحفظ؟'],
+  // New order's deposit above the order's final total (items, delivery and VAT): refused in place, as on the phones.
+  'neworder.depositOverTotal': ['More than the order total {1}', 'أكثر من إجمالي الطلب {1}'],
   'pay.paidInFull': ['Paid in full', 'مدفوع بالكامل'],
   'pay.delete': ['Delete payment', 'حذف الدفعة'],
   'expense.delete': ['Delete expense', 'حذف المصروف'],

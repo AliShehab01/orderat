@@ -114,9 +114,21 @@ function loadState() {
   let s = null;
   try { s = JSON.parse(localStorage.getItem(STORE_KEY)); } catch { s = null; }
   if (!s || s.v !== 1) s = { v: 1, lang: 'ar', addressAs: 'male', theme: 'system', onboarded: false };
+  stampDemoVat(s);
   const lang = new URLSearchParams(location.search).get('lang');
   if (lang === 'ar' || lang === 'en') s.lang = lang;
   return s;
+}
+// The demo keeps VAT per order like the phones: the shop's VAT settings apply to new orders only. A demo
+// saved before that (or an imported backup) has no VAT on its orders, so once, each takes the VAT the demo
+// was showing for it, the shop's setting now; after that a settings change never touches an existing order.
+function stampDemoVat(state) {
+  if (!state || state.vatPerOrder || !Array.isArray(state.orders) || !state.shop) return state;
+  const rate = VAT_RATES[(CURRENCIES[state.shop.currency] || CURRENCIES.BHD)[1]] || 0;
+  const vat = { enabled: !!(state.vat && state.vat.enabled) && rate > 0, rateBps: Math.round(rate * 100), pricesInclude: !(state.vat && state.vat.pricesInclude === false) };
+  state.orders.forEach(o => { if (o && typeof o === 'object') OrderatLiveCore.applyVat(o, vat, state.shop.currency, () => ({})); });
+  state.vatPerOrder = true;
+  return state;
 }
 function save() {
   // The live shop (also while it opens or after it closed): device prefs here, the shop to the cloud,
@@ -126,6 +138,7 @@ function save() {
 }
 function seed(type) {
   S = Object.assign({ v: 1, lang: S.lang, addressAs: S.addressAs, theme: S.theme, onboarded: true }, makeDemoData(type));
+  stampDemoVat(S);
   D = null;
   save();
 }
@@ -191,21 +204,24 @@ const addressPlace = () => ({
   labels: { block: t('address.block'), road: t('address.road'), building: t('address.building'), flat: t('address.flat') },
 });
 const invoiceNo = o => (Live.on ? Live.invoiceNo(o) : `INV-${new Date(o.dueAt).getFullYear()}-${String(o.no || 0).padStart(4, '0')}`);
-// The VAT an order shows: its own snapshot in the live shop (like the phones), the shop setting in the demo.
-const orderVatRate = o => (Live.on ? Live.vatOf(o) : vatOn() ? vatRate() : 0);
-
-function totals(o) {
-  if (Live.on) return Live.totals(o);
-  const gross = sum(o.items, it => it.qty * it.price) + (o.deliveryFee || 0);
-  let subtotal = gross, vat = 0, total = gross;
-  if (vatOn()) {
-    const r = vatRate() / 100;
-    if (S.vat.pricesInclude) { vat = gross - gross / (1 + r); subtotal = gross - vat; }
-    else { vat = gross * r; total = gross + vat; }
-  }
-  const paid = sum(o.payments || [], p => p.amount);
-  return { subtotal: round(subtotal), vat: round(vat), total: round(total), paid: round(paid), due: Math.max(0, round(total - paid)) };
+// The VAT an order shows: its own snapshot (like the phones), never today's shop setting. Both modes.
+const orderVatRate = o => Live.vatOf(o);
+// What the shop's VAT settings give a NEW order: the live shop's own setting; the demo takes its country's rate.
+const newOrderVat = () => (Live.on ? S.vat : { enabled: vatOn(), rateBps: Math.round(vatRate() * 100), pricesInclude: S.vat.pricesInclude !== false });
+// A new order takes the shop's VAT as it is now, as a snapshot on the order (the live shop adds the invoice
+// number; the demo has none). An existing order never does: an edit goes through reapplyOrderVat.
+function snapshotOrderVat(order) {
+  if (Live.on) Live.applyOrderVat(order);
+  else OrderatLiveCore.applyVat(order, newOrderVat(), S.shop.currency, () => ({}));
 }
+// After any edit of an existing order: vatMinor again from the order's OWN rate and mode (live-core).
+const reapplyOrderVat = o => OrderatLiveCore.reapplyVat(o, S.shop.currency);
+
+// Subtotal, VAT, total, paid and due in major units, from the order's own VAT snapshot (both modes).
+function totals(o) {
+  return Live.totals(o);
+}
+const orderTotalMinor = o => OrderatLiveCore.orderMinor(o, currency()[0]).total;
 function payStatus(o) {
   const { paid, due } = totals(o);
   return due <= 0 ? 'paid' : paid > 0 ? 'deposit' : 'unpaid';
@@ -261,7 +277,8 @@ const errField = (label, control, error) => `<label class="field"><span>${esc(la
 function showDraftErrors(errors) {
   D.errors = errors;
   render();
-  const first = errors.name ? $('form[data-form="new-order"] input[name="name"]') : $('#d-items');
+  // The first one down the form: the name, the items, then the deposit.
+  const first = errors.name ? $('form[data-form="new-order"] input[name="name"]') : errors.items ? $('#d-items') : $('form[data-form="new-order"] input[name="deposit"]');
   if (!first) return;
   first.scrollIntoView({ block: 'center' });
   const focusable = first.matches('input') ? first : first.querySelector('input[data-f="name"]:placeholder-shown, button[data-act="item-pick"]');
@@ -681,14 +698,23 @@ function openEditOrder(o) {
 }
 // Only a mistaken order: still New (or cancelled), nothing paid on it.
 const canDeleteOrder = o => can('orders') && (o.status === 'new' || o.status === 'cancelled') && !(o.payments || []).length;
-// Stock follows the website's promise: auto-deduct on confirm, put back on cancel.
-function applyStock(o, sign) {
-  o.items.forEach(it => { const p = productOf(it.pid); if (p && p.track) p.qty = round(p.qty + sign * it.qty); });
+// Stock follows each order's own ledger `stockDeducted` (live-core.js "Stock"), in the live shop and the
+// demo alike, with the phones' stock moves: confirming takes the units of the products that track stock
+// (while the shop tracks stock), leaving confirmed gives back exactly what the order took, and editing the
+// items moves the difference. Neither the status alone nor today's tracking switches decide what comes back.
+// A demo order from before the ledger (a stockApplied flag) is read by ledgerFromFlag.
+const stockOptions = () => ({ shopTracking: !!S.stockEnabled, legacy: Live.on ? undefined : OrderatLiveCore.ledgerFromFlag });
+// Staff who may not move order stock (the server refuses their product pushes) leave it as it is.
+const mayMoveStock = () => OrderatLiveCore.canMoveOrderStock(can);
+function stockForStatus(o, status) {
+  if (mayMoveStock()) OrderatLiveCore.stockForStatus(S.products, o, o.status, status, new Date().toISOString(), OrderatCloudMap.newId, stockOptions());
+}
+// Call before the order's items are replaced by `items`.
+function stockForEdit(o, items) {
+  if (mayMoveStock()) OrderatLiveCore.stockForEdit(S.products, o, items, new Date().toISOString(), OrderatCloudMap.newId, stockOptions());
 }
 function setStatus(o, status) {
-  if (Live.on) Live.stockForStatus(o, status); // with the phones' stock moves
-  else if (S.stockEnabled && status === 'confirmed' && !o.stockApplied) { applyStock(o, -1); o.stockApplied = true; }
-  if ((status === 'cancelled' || status === 'new') && o.stockApplied) { applyStock(o, 1); o.stockApplied = false; }
+  stockForStatus(o, status);
   o.status = status;
   // Out for delivery belongs to Ready: delivered (collected), cancelled or any other status clears it.
   if (status !== 'ready' && o.outForDeliveryAt) o.outForDeliveryAt = null;
@@ -716,7 +742,16 @@ function openPayment(o, full) {
 // ---------- Items editor (New order and Edit items) ----------
 
 const itemList = p => (p === 'd' ? D.items : E.items);
-const rerenderItems = p => (p === 'd' ? render() : renderEditItems());
+// The deposit error names the order total, which an edit of the items or the delivery fee may change.
+function clearDepositError() {
+  if (!D || !D.errors || !D.errors.deposit) return;
+  delete D.errors.deposit;
+  const el = $('form[data-form="new-order"] input[name="deposit"]');
+  if (el) { el.removeAttribute('aria-invalid'); el.closest('.field')?.querySelector('.field-error')?.remove(); }
+}
+function rerenderItems(p) {
+  if (p === 'd') { clearDepositError(); render(); } else renderEditItems();
+}
 const qtyNum = v => Math.max(0, parseInt(v, 10) || 0);
 const itemsTotal = items => sum(items, it => qtyNum(it.qty) * (parseFloat(it.price) || 0));
 const lineName = it => (it.pid === 'custom' ? it.name : pName(productOf(it.pid) || { nameAr: it.name, nameEn: it.name }));
@@ -844,7 +879,14 @@ function setDraftFulfillment(value) {
   D.fee = next.fee;
   D.feeAuto = next.auto;
 }
-const draftTotal = () => totals({ items: D.items.map(it => ({ qty: qtyNum(it.qty), price: parseFloat(it.price) || 0 })), deliveryFee: D.fulfillment === 'delivery' ? parseFloat(D.fee) || 0 : 0 }).total;
+// A new order's items and delivery fee as the order it would be saved as, with the shop's VAT as it is now
+// (no invoice number is taken): what the save bar shows and what a deposit is checked against.
+function previewOrder(items, deliveryFee) {
+  const order = { items, deliveryFee, payments: [] };
+  OrderatLiveCore.applyVat(order, newOrderVat(), S.shop.currency, () => ({}));
+  return order;
+}
+const draftTotal = () => totals(previewOrder(D.items.map(it => ({ qty: qtyNum(it.qty), price: parseFloat(it.price) || 0 })), D.fulfillment === 'delivery' ? parseFloat(D.fee) || 0 : 0)).total;
 
 function examples() {
   const ps = S.products.filter(p => p.active);
@@ -914,7 +956,8 @@ function paymentChoice() {
   const choice = `<div>${seg('pay', ['later', 'full'], D.pay, k => (k === 'full' ? t('neworder.paidInFull') : later), 'draft-pay')}</div>`;
   if (D.pay === 'full') return `${choice}<div class="grid2">${method}</div>`;
   if (!D.depositOpen) return `${choice}<button type="button" class="link-btn pay-more" data-act="pay-deposit" data-v="1">${icon('plus')} ${esc(t('pay.partial'))}</button>`;
-  return `${choice}<div class="grid2">${field(t('pay.depositAmount'), `<input name="deposit" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.deposit)}">`)}${method}</div>
+  // The deposit is checked on Save against the order's final total, and its error shows right here.
+  return `${choice}<div class="grid2">${errField(t('pay.depositAmount'), `<input name="deposit" type="number" enterkeyhint="next" step="any" min="0" inputmode="decimal" data-live="draft" value="${esc(D.deposit)}"${D.errors?.deposit ? ' aria-invalid="true"' : ''}>`, D.errors?.deposit)}${method}</div>
     <button type="button" class="link-btn pay-more" data-act="pay-deposit" data-v="0">${icon('x')} ${esc(t('pay.noDeposit'))}</button>`;
 }
 
@@ -1684,11 +1727,13 @@ const ACTIONS = {
     let c = S.customers.find(x => samePhone(x.phone, w.phone));
     if (!c) { c = { id: uid(), name: w.name, nameEn: w.nameEn, phone: w.phone, area: delivery ? w.area || '' : '', notes: '' }; S.customers.push(c); }
     const items = w.items.map(it => { const p = productOf(it.pid); return p && { pid: p.id, nameAr: p.nameAr, nameEn: p.nameEn, qty: it.qty, price: p.price, cost: p.cost }; }).filter(Boolean);
-    S.orders.push({
+    const order = {
       id: uid(), no: S.nextOrderNo++, customerId: c.id, dueAt: w.dueAt, items, fulfillment: delivery ? 'delivery' : 'pickup', area: delivery ? w.area || c.area || '' : '',
       address: delivery ? w.address || '' : '', deliveryFee: delivery ? defaultFee() : 0, source: 'link', payments: [], notes: '',
       changes: [{ kind: 'created', at: new Date().toISOString() }], status: 'new', stockApplied: false,
-    });
+    };
+    snapshotOrderVat(order); // the shop's VAT as it is now, on this order
+    S.orders.push(order);
     S.webOrders = S.webOrders.filter(x => x !== w);
     save(); render(); toast(t('today.webOrderAdded'));
   },
@@ -1725,7 +1770,7 @@ const ACTIONS = {
   'delete-order'(el) {
     const o = orderById(el.dataset.id);
     if (!o || !canDeleteOrder(o) || !confirm(t('orders.deleteConfirm'))) return;
-    if (o.stockApplied) { if (Live.on) Live.stockForStatus(o, 'cancelled'); else applyStock(o, 1); o.stockApplied = false; }
+    // Only a new or cancelled order can be deleted, and neither holds any stock: nothing to give back.
     S.orders = S.orders.filter(x => x.id !== o.id);
     save();
     toast(t('common.saved'));
@@ -1773,7 +1818,7 @@ const ACTIONS = {
   'due-time'(el) { D.due = `${D.due.slice(0, 10)}T${el.dataset.v}`; render(); },
   'pay-deposit'(el) {
     D.depositOpen = el.dataset.v === '1';
-    if (!D.depositOpen) D.deposit = '';
+    if (!D.depositOpen) { D.deposit = ''; if (D.errors) delete D.errors.deposit; }
     render();
     if (D.depositOpen) $('form[data-form="new-order"] input[name="deposit"]')?.focus();
   },
@@ -1862,7 +1907,12 @@ const ACTIONS = {
 };
 
 const LIVE = {
-  'draft-pay'(el) { D.pay = el.value === 'full' ? 'full' : 'later'; if (D.errors?.name && D.pay === 'full') delete D.errors.name; render(); },
+  'draft-pay'(el) {
+    D.pay = el.value === 'full' ? 'full' : 'later';
+    // Paid in full needs no name, and has no deposit to check.
+    if (D.errors && D.pay === 'full') { delete D.errors.name; delete D.errors.deposit; }
+    render();
+  },
   'edit-order-fulfillment'(el) {
     const box = $('#eo-delivery');
     if (box) box.hidden = el.value !== 'delivery';
@@ -1880,7 +1930,7 @@ const LIVE = {
   draft(el) {
     D[el.name] = el.value;
     // A fee the seller typed is theirs: switching pickup and delivery no longer changes it.
-    if (el.name === 'fee') { D.feeTouched = true; D.feeAuto = false; $('#d-fee-hint')?.remove(); }
+    if (el.name === 'fee') { D.feeTouched = true; D.feeAuto = false; $('#d-fee-hint')?.remove(); clearDepositError(); }
     // A name that is exactly a known customer fills in their phone and area when those are still empty.
     if (el.name === 'name') {
       const c = customerNamed(el.value.trim());
@@ -1889,7 +1939,7 @@ const LIVE = {
     }
     if (D.errors && D.errors[el.name]) { delete D.errors[el.name]; el.removeAttribute('aria-invalid'); el.closest('.field')?.querySelector('.field-error')?.remove(); }
     if (el.name === 'text') { const b = $('[data-act="parse"]'); if (b) b.disabled = D.reading || !D.text.trim(); }
-    if (el.name === 'fulfillment') { setDraftFulfillment(el.value); render(); } else updateTotal('d');
+    if (el.name === 'fulfillment') { setDraftFulfillment(el.value); clearDepositError(); render(); } else updateTotal('d');
   },
   item(el) {
     const it = itemList(el.dataset.p)[+el.dataset.i];
@@ -1903,6 +1953,7 @@ const LIVE = {
       return;
     }
     it[el.dataset.f] = el.dataset.f === 'qty' ? qtyNum(el.value) : el.value;
+    if (el.dataset.p === 'd') clearDepositError();
     updateTotal(el.dataset.p);
   },
   shot(el) {
@@ -1946,6 +1997,7 @@ const LIVE = {
       const d = JSON.parse(txt).data;
       if (!d || !Array.isArray(d.orders) || !d.shop) throw new Error('not a backup');
       S = Object.assign(d, { v: 1, onboarded: true, lang: S.lang, theme: S.theme, addressAs: S.addressAs });
+      stampDemoVat(S); // a backup from before orders kept their own VAT
       D = null; save(); render(); toast(t('settings.imported'));
     }).catch(() => toast(t('settings.importError')));
   },
@@ -1986,6 +2038,17 @@ const FORMS = {
     else if (!items.length) errors.items = t('neworder.needItem');
     // Unpaid orders need a real name, so Who owes me never lumps strangers together.
     if (!name && D.pay !== 'full') errors.name = t('err.name');
+    // A deposit (the "Partial payment" field, when it is open and the order is not paid in full) is checked
+    // against the order's final total, items, delivery and the VAT it will be saved with, before any
+    // customer or order is touched: not a number above 0, or more than the total, stays on the form
+    // (live-core checkDeposit, like the phones).
+    const fee = D.fulfillment === 'delivery' ? parseFloat(D.fee) || 0 : 0;
+    let deposit = 0;
+    if (D.pay !== 'full' && D.depositOpen && !errors.items) {
+      const check = OrderatLiveCore.checkDeposit(D.deposit, orderTotalMinor(previewOrder(items, fee)), S.shop.currency);
+      if (check.ok) deposit = check.amount;
+      else errors.deposit = check.error === 'over' ? t('neworder.depositOverTotal', money(OrderatCloudMap.fromMinor(check.totalMinor, currency()[0]))) : t('err.amount');
+    }
     if (Object.keys(errors).length) { showDraftErrors(errors); return; }
     D.errors = null;
     const c = name ? draftCustomer(name) : walkIn();
@@ -1995,20 +2058,19 @@ const FORMS = {
     const due = new Date(D.due);
     const order = {
       id: nid(), no: Live.on ? undefined : S.nextOrderNo++, customerId: c.id, dueAt: (isNaN(due) ? new Date() : due).toISOString(), items,
-      fulfillment: D.fulfillment, area: delivery ? D.area || c.area || '' : '', address: delivery ? String(D.address || '').trim() : '', deliveryFee: delivery ? parseFloat(D.fee) || 0 : 0,
+      fulfillment: D.fulfillment, area: delivery ? D.area || c.area || '' : '', address: delivery ? String(D.address || '').trim() : '', deliveryFee: fee,
       source: D.source, payments: [], notes: D.notes.trim(), changes: [{ kind: 'created', at: now }], status: 'new', outForDeliveryAt: null, stockApplied: false,
     };
     if (Live.on) {
       delete order.no; // display numbers come from creation order
       order.createdAt = now;
-      Live.applyOrderVat(order); // the VAT snapshot and invoice number, like the phones
     }
-    // Paid in full: the total with its VAT, known only once the snapshot above is taken. A deposit only
-    // when its field is open.
-    const deposit = D.pay === 'full' ? totals(order).total : D.depositOpen ? parseFloat(D.deposit) : 0;
-    if (deposit > 0) {
-      order.payments.push({ amount: round(deposit), method: D.method, note: '', at: now });
-      order.changes.push({ kind: 'payment', value: round(deposit), at: now });
+    snapshotOrderVat(order); // the shop's VAT as it is now, on this order (the live shop adds the invoice number)
+    // Paid in full: the total with its VAT, known only once the snapshot above is taken.
+    const paid = D.pay === 'full' ? totals(order).total : deposit;
+    if (paid > 0) {
+      order.payments.push({ amount: round(paid), method: D.method, note: '', at: now });
+      order.changes.push({ kind: 'payment', value: round(paid), at: now });
     }
     S.orders.push(order);
     save();
@@ -2043,7 +2105,7 @@ const FORMS = {
       dueAt: isNaN(due) ? o.dueAt : due.toISOString(), fulfillment, area: delivery ? (fd.has('area') ? get('area') : o.area || '') : '',
       deliveryFee: delivery ? round(parseFloat(get('fee')) || 0) : 0, address: delivery ? get('address') : '', notes: get('notes'),
     };
-    const moved = next.dueAt !== o.dueAt, feeChanged = next.deliveryFee !== (o.deliveryFee || 0) || next.fulfillment !== o.fulfillment;
+    const moved = next.dueAt !== o.dueAt;
     if (!Object.keys(next).some(k => String(next[k] ?? '') !== String(o[k] ?? ''))) { closeModal(); return; }
     const wasOut = isOut(o);
     Object.assign(o, next);
@@ -2052,7 +2114,9 @@ const FORMS = {
       o.outForDeliveryAt = null;
       if (wasOut) o.changes.push({ kind: 'outForDelivery', value: null, at: new Date().toISOString() });
     }
-    if (feeChanged && Live.on) Live.applyOrderVat(o);
+    // The order keeps its own VAT whatever the shop's settings say now: vatMinor again from the order's
+    // own rate and mode (the delivery fee may have changed), never a new snapshot.
+    reapplyOrderVat(o);
     o.changes.push({ kind: 'edited', at: new Date().toISOString() });
     save(); closeModal(); render();
     const c = customerOf(o);
@@ -2065,15 +2129,9 @@ const FORMS = {
     if (E.items.some(it => it.pid === 'custom' && qtyNum(it.qty) > 0 && !String(it.name || '').trim())) { toast(t('items.nameCustom')); return; }
     const items = cleanItems(E.items);
     if (!items.length) { toast(t('neworder.needItem')); return; }
-    if (Live.on) {
-      Live.stockForEdit(o, items);
-      o.items = items;
-      Live.applyOrderVat(o);
-    } else {
-      if (o.stockApplied) applyStock(o, 1);
-      o.items = items;
-      if (o.stockApplied) applyStock(o, -1);
-    }
+    stockForEdit(o, items); // before the lines change: the difference follows the order's own stock ledger
+    o.items = items;
+    reapplyOrderVat(o); // the order's own VAT rate and mode on the new items, never the shop's settings now
     o.changes.push({ kind: 'items', at: new Date().toISOString() });
     save(); closeModal(); render();
   },

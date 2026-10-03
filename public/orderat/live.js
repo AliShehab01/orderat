@@ -520,16 +520,10 @@ const Live = (() => {
     const subtotal = o.vatIncluded === true ? m.itemsAndDelivery - m.vat : m.itemsAndDelivery;
     return { subtotal: subtotal / u, vat: m.vat / u, total: m.total / u, paid: m.paid / u, due: Math.max(0, m.due) / u };
   }
+  // A NEW order takes the shop's VAT as it is now, with an invoice number. Edits never come here: an
+  // existing order keeps its own VAT (live-core reapplyVat, app.js reapplyOrderVat).
   function applyOrderVat(o) {
     core().applyVat(o, S.vat, S.shop.currency, issueInvoice);
-  }
-  const deducted = s => ['confirmed', 'ready', 'collected'].includes(s);
-  function stockForStatus(o, status) {
-    if (S.stockEnabled && core().canMoveOrderStock(can)) core().stockForStatus(S.products, o, o.status, status, new Date().toISOString(), newId);
-    o.stockApplied = deducted(status);
-  }
-  function stockForEdit(o, items) {
-    if (S.stockEnabled && deducted(o.status) && core().canMoveOrderStock(can)) core().stockForEdit(S.products, o.items, items, o.id, new Date().toISOString(), newId);
   }
   function stockCorrection(p, qty) {
     const delta = Math.round(qty) - Math.round(p.qty || 0);
@@ -875,7 +869,7 @@ const Live = (() => {
   return {
     get on() { return on; },
     get deviceCode() { return deviceCode; },
-    boot, gate, save, can, access, newId, noOf, invoiceNo, vatOf, totals, applyOrderVat, stockForStatus, stockForEdit, stockCorrection,
+    boot, gate, save, can, access, newId, noOf, invoiceNo, vatOf, totals, applyOrderVat, stockCorrection,
     parseText, parseImage, ask, studioGenerate, studioUse, caption, afterRender, paywall, viewShopLink, viewTeam, settingsTop,
     actions, liveHandlers, forms,
   };
