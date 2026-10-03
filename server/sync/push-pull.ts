@@ -131,12 +131,12 @@ async function applyChange(
 ): Promise<{ conflict?: Conflict; rejected?: Rejected }> {
   for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
     const existing = await findRecord(sql, shopId, change.entity, change.id);
-    const stored = existing ? { data: existing.data, deleted: existing.deleted, seq: existing.seq } : undefined;
+    const stored = existing ? { data: existing.data, deleted: existing.deleted } : undefined;
 
     // An existing live product takes the stock merge, judged against what the database says about its moves.
     const liveProduct = change.entity === "product" && !change.deleted && existing !== undefined && !existing.deleted;
     const stock = liveProduct && productAccess(member) !== "none" ? await gatherProductFacts(sql, shopId, change.id, existing.data, change.data) : undefined;
-    const decision = decidePush(member, change.entity, change.id, change.data, change.deleted, stored, { baseSeq: change.baseSeq, stock });
+    const decision = decidePush(member, change.entity, change.id, change.data, change.deleted, stored, { stock });
     if (!decision.allowed) {
       // The server's copy goes back only to a member allowed to pull it; for anyone else, the phone
       // drops its local copy (docs/sme-phase-2-cloud.md "Sync").

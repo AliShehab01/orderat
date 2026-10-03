@@ -625,9 +625,12 @@ describe("newlyVisibleEntities (records to send again after a permission grant)"
   });
 });
 
-// Third review (3 Oct 2026), F4: payments from two devices both survive. A push whose copy is stale (its baseSeq is
-// behind the stored seq) keeps the stored payments it lacks; only an up-to-date copy may remove one.
-describe("decidePush / F4: payments of a stale copy", () => {
+
+// Payments are add-only (third review, F4; fourth review, 3 Oct 2026, R2 and R3). The absence of a payment in a pushed
+// order never removes it, whatever the baseSeq; a payment is removed by listing its id in the order's grow-only
+// `removedPaymentIds` (and, for the released iOS 1.0, by its history entry). The rules in isolation: payments-merge.test.ts;
+// through a real database and the push path: payments-push.test.ts.
+describe("decidePush / payments (add-only, removedPaymentIds)", () => {
   const order = (payments: unknown[], paymentStatus: string, extra: Record<string, unknown> = {}) => ({
     customerId: "c1",
     status: "confirmed",
@@ -642,75 +645,157 @@ describe("decidePush / F4: payments of a stale copy", () => {
   });
   const payA = { id: "payA", amountMinor: 2000, method: "cash", note: null, paidAt: AT };
   const payB = { id: "payB", amountMinor: 3000, method: "benefit", note: null, paidAt: AT };
-  const stored = order([payA], "deposit"); // A's 2,000 is on the server, at seq 12
-  const fromB = order([payB], "deposit"); // B's phone, based on seq 10, recorded 3,000
+  const stored = order([payA, payB], "deposit"); // 5,000 of 10,000 is on the server
   const paymentsOf = (decision: PushDecision) => (decision.allowed ? (decision.data.payments as { id: string }[]).map((p) => p.id) : decision);
+  const removedOf = (decision: PushDecision) => (decision.allowed ? decision.data.removedPaymentIds : decision);
+  /** Who may write payments: the owner, staff with `orders` (the whole record), staff with `money` (the money fields). */
+  const writers: [string, Member][] = [["owner", owner], ["orders", withOrders], ["money", withMoney], ["prepare + money", staff({ prepare: true, money: true })]];
 
-  it("whole-order pushes (owner, orders staff): a stale copy gets the union, a payment in both takes the pushed copy, the status is recomputed", () => {
-    for (const member of [owner, withOrders]) {
-      const decision = decidePush(member, "order", "o1", fromB, false, live(stored, 12), { baseSeq: 10 });
-      expect(paymentsOf(decision)).toEqual(["payA", "payB"]);
+  // The rules do not take the seq a push is based on at all (decidePush has no such argument): payments-push.test.ts runs
+  // the same pushes through the real push path with every kind of baseSeq.
+  it("absence never removes: a push that leaves a payment out keeps it, and the status follows what the order holds", () => {
+    for (const [name, member] of writers) {
+      const decision = decidePush(member, "order", "o1", order([payA], "deposit"), false, live(stored, 12));
+      expect(paymentsOf(decision), name).toEqual(["payA", "payB"]);
       expect(decision).toMatchObject({ allowed: true, data: { paymentStatus: "deposit" } }); // 5,000 of 10,000
-      // A payment present in both takes the incoming copy.
-      const edited = { ...payA, amountMinor: 2500, note: "corrected" };
-      const both = decidePush(member, "order", "o1", order([edited, payB], "deposit"), false, live(stored, 12), { baseSeq: 10 });
-      expect(both).toMatchObject({ allowed: true, data: { payments: [edited, payB] } });
+      expect(removedOf(decision)).toBeUndefined();
+      expect(paymentsOf(decidePush(member, "order", "o1", order([], "unpaid"), false, live(stored, 12))), `${name} with none`).toEqual(["payA", "payB"]);
     }
-    // The rest of the pushed order stands: the payments are the only thing merged.
-    expect(decidePush(owner, "order", "o1", { ...fromB, notes: "B's note" }, false, live(stored, 12), { baseSeq: 10 })).toMatchObject({ data: { notes: "B's note" } });
   });
 
-  it("the status follows the union: A's 2,000 and B's 3,000 on a 5,000 order are paid, not a deposit", () => {
+  it("two payments from the same base both survive: the union, the status follows it, a payment in both takes the pushed copy", () => {
     const small = (payments: unknown[], paymentStatus: string) => order(payments, paymentStatus, { items: [{ id: "i1", productId: "p1", nameSnapshot: "Cake", quantity: 1, unitPriceMinor: 5000, unitCostMinor: 2000 }] });
-    const decision = decidePush(owner, "order", "o1", small([payB], "deposit"), false, live(small([payA], "deposit"), 12), { baseSeq: 10 });
-    expect(decision).toMatchObject({ allowed: true, data: { paymentStatus: "paid" } });
-    expect(paymentsOf(decision)).toEqual(["payA", "payB"]);
+    for (const [name, member] of writers) {
+      const decision = decidePush(member, "order", "o1", small([payB], "deposit"), false, live(small([payA], "deposit"), 12));
+      expect(paymentsOf(decision), name).toEqual(["payA", "payB"]);
+      expect(decision).toMatchObject({ allowed: true, data: { paymentStatus: "paid" } }); // 2,000 + 3,000 on a 5,000 order: neither phone knew
+      const edited = { ...payA, amountMinor: 2500, note: "corrected" };
+      expect(decidePush(member, "order", "o1", order([edited, payB], "deposit"), false, live(stored, 12))).toMatchObject({ allowed: true, data: { payments: [edited, payB] } });
+    }
+    // The rest of a whole-order push stands: only the payments are merged.
+    expect(decidePush(owner, "order", "o1", { ...order([payB], "deposit"), notes: "B's note" }, false, live(order([payA], "deposit"), 12))).toMatchObject({ data: { notes: "B's note" } });
   });
 
-  it("an up-to-date copy is stored as sent: leaving a payment out is a deliberate removal", () => {
-    for (const member of [owner, withOrders]) {
-      expect(paymentsOf(decidePush(member, "order", "o1", order([], "unpaid"), false, live(stored, 12), { baseSeq: 12 }))).toEqual([]);
-      expect(paymentsOf(decidePush(member, "order", "o1", fromB, false, live(stored, 12), { baseSeq: 13 }))).toEqual(["payB"]);
+  it("R3: a removal lists the payment's id; the payment goes, the id is stored, and the pusher's own status stands", () => {
+    for (const [name, member] of writers) {
+      const decision = decidePush(member, "order", "o1", order([payB], "deposit", { removedPaymentIds: ["payA"] }), false, live(stored, 12));
+      expect(paymentsOf(decision), name).toEqual(["payB"]);
+      expect(removedOf(decision)).toEqual(["payA"]);
+      expect(decision).toMatchObject({ data: { paymentStatus: "deposit" } }); // 3,000 of 10,000
     }
   });
 
-  it("a stale copy cannot remove a payment: it stays; and a retry or a repeated stale push changes nothing", () => {
-    const decision = decidePush(owner, "order", "o1", order([], "unpaid"), false, live(stored, 12), { baseSeq: 3 });
-    expect(paymentsOf(decision)).toEqual(["payA"]);
-    expect(decision).toMatchObject({ data: { paymentStatus: "deposit" } });
-    const union = decidePush(owner, "order", "o1", fromB, false, live(stored, 12), { baseSeq: 10 });
-    expect(union.allowed && decidePush(owner, "order", "o1", fromB, false, live(union.data, 13), { baseSeq: 10 })).toMatchObject({ data: { payments: [payA, payB] } });
-    expect(union.allowed && decidePush(owner, "order", "o1", order([payA], "deposit"), false, live(union.data, 13), { baseSeq: 10 })).toMatchObject({ data: { payments: [payA, payB] } });
+  it("R3: an older phone that still holds a removed payment (a notes or status edit) does not bring it back; its status is recomputed", () => {
+    const afterRemoval = order([payB], "deposit", { removedPaymentIds: ["payA"] });
+    const olderPhone = order([payA, payB], "paid", { notes: "edited on the older phone", status: "ready" });
+    for (const [name, member] of writers) {
+      const decision = decidePush(member, "order", "o1", olderPhone, false, live(afterRemoval, 14));
+      expect(paymentsOf(decision), name).toEqual(["payB"]);
+      expect(removedOf(decision)).toEqual(["payA"]);
+      expect(decision).toMatchObject({ data: { paymentStatus: "deposit" } }); // its own "paid" counted the removed payment
+      if (member.permissions.orders || member.role === "owner") expect(decision).toMatchObject({ data: { notes: "edited on the older phone", status: "ready" } });
+    }
+    // With nothing else surviving, and with a payment that was added meanwhile.
+    const onlyRemoved = order([], "unpaid", { removedPaymentIds: ["payA"] });
+    expect(paymentsOf(decidePush(owner, "order", "o1", order([payA], "deposit"), false, live(onlyRemoved, 14)))).toEqual([]);
+    const payC = { id: "payC", amountMinor: 500, method: "cash", note: null, paidAt: AT };
+    expect(paymentsOf(decidePush(owner, "order", "o1", order([payA, payC], "deposit"), false, live(onlyRemoved, 14)))).toEqual(["payC"]);
   });
 
-  it("money-only staff: the same union and recomputed status; an up-to-date copy removes", () => {
-    const money = staff({ money: true });
-    const decision = decidePush(money, "order", "o1", fromB, false, live(stored, 12), { baseSeq: 10 });
-    expect(paymentsOf(decision)).toEqual(["payA", "payB"]);
-    expect(decision).toMatchObject({ data: { paymentStatus: "deposit", items: stored.items } });
-    expect(paymentsOf(decidePush(money, "order", "o1", order([], "unpaid"), false, live(stored, 12), { baseSeq: 12 }))).toEqual([]);
-    expect(paymentsOf(decidePush(money, "order", "o1", order([], "unpaid"), false, live(stored, 12), { baseSeq: 1 }))).toEqual(["payA"]);
-    // Prepare-only staff never touch payments, stale or not.
-    expect(paymentsOf(decidePush(withPrepare, "order", "o1", fromB, false, live(stored, 12), { baseSeq: 1 }))).toEqual(["payA"]);
+  it("removedPaymentIds is grow-only: the stored ids stay whatever a push says, and new ones are added", () => {
+    const base = order([payB], "deposit", { removedPaymentIds: ["payA", "payX"] });
+    const cases: [Record<string, unknown>, string[]][] = [
+      [{}, ["payA", "payX"]],
+      [{ removedPaymentIds: [] }, ["payA", "payX"]],
+      [{ removedPaymentIds: ["payZ"] }, ["payA", "payX", "payZ"]],
+      [{ removedPaymentIds: ["PAYA", "payZ", "payZ"] }, ["payA", "payX", "payZ"]],
+      [{ removedPaymentIds: "junk" }, ["payA", "payX"]],
+    ];
+    for (const [pushed, expected] of cases) {
+      for (const [name, member] of writers) {
+        expect(removedOf(decidePush(member, "order", "o1", order([payB], "deposit", pushed), false, live(base, 14))), `${name} ${JSON.stringify(pushed)}`).toEqual(expected);
+      }
+    }
   });
 
-  it("when the record lacks what the total needs, the pushed paymentStatus is kept; payments are still never lost", () => {
+  it("an invalid removedPaymentIds is ignored as a whole: not an array, a non-string, an empty string, 65 characters, 501 ids", () => {
+    const tooMany = Array.from({ length: 501 }, (_, i) => (i === 0 ? "payA" : `x${i}`));
+    for (const bad of ["payA", 7, ["payA", 1], ["payA", ""], ["x".repeat(65)], tooMany]) {
+      for (const [name, member] of writers) {
+        const decision = decidePush(member, "order", "o1", order([payB], "deposit", { removedPaymentIds: bad }), false, live(stored, 12));
+        expect(paymentsOf(decision), `${name} ${JSON.stringify(bad)?.slice(0, 30)}`).toEqual(["payA", "payB"]);
+        expect(decision).toMatchObject({ allowed: true });
+        expect(removedOf(decision)).toBeUndefined();
+      }
+    }
+  });
+
+  it("500 valid ids are accepted, and a 64-character id", () => {
+    const ids = Array.from({ length: 500 }, (_, i) => (i === 0 ? "payA" : `x${i}`));
+    for (const [name, member] of writers) {
+      const decision = decidePush(member, "order", "o1", order([payB], "deposit", { removedPaymentIds: ids }), false, live(stored, 12));
+      expect(paymentsOf(decision), name).toEqual(["payB"]);
+      expect(removedOf(decision)).toEqual(ids);
+    }
+    const long = "y".repeat(64);
+    const withLong = order([{ ...payA, id: long }], "deposit");
+    expect(paymentsOf(decidePush(owner, "order", "o1", order([], "unpaid", { removedPaymentIds: [long] }), false, live(withLong, 3)))).toEqual([]);
+  });
+
+  it("members who cannot write payments cannot add removal ids: prepare only keeps the stored payments and ids; with no permission the push is refused", () => {
+    const base = order([payA, payB], "deposit", { removedPaymentIds: ["old"] });
+    const forged = order([], "unpaid", { removedPaymentIds: ["payA", "payB"], status: "ready" });
+    const decision = decidePush(withPrepare, "order", "o1", forged, false, live(base, 12));
+    expect(decision).toMatchObject({ allowed: true, data: { status: "ready", payments: [payA, payB], paymentStatus: "deposit", removedPaymentIds: ["old"] } });
+    // The released iOS shape does not work for them either: a missing payment and a removal entry.
+    const legacy = order([payB], "deposit", { status: "ready", changes: [{ id: "h1", field: "payment", oldValue: "2000", newValue: "removed", note: null, at: AT }] });
+    expect(paymentsOf(decidePush(withPrepare, "order", "o1", legacy, false, live(order([payA, payB], "deposit"), 12)))).toEqual(["payA", "payB"]);
+    for (const member of [noPerms, withProducts]) {
+      expect(decidePush(member, "order", "o1", forged, false, live(base, 12))).toEqual(FORBIDDEN);
+    }
+  });
+
+  it("money-only staff write payments and removal ids, and nothing else of the order", () => {
+    const decision = decidePush(withMoney, "order", "o1", order([payB], "deposit", { removedPaymentIds: ["payA"], notes: "sneaky", status: "cancelled", items: [] }), false, live(stored, 12));
+    expect(decision).toEqual({ allowed: true, data: { ...stored, payments: [payB], removedPaymentIds: ["payA"], paymentStatus: "deposit" } });
+  });
+
+  it("the status is recomputed from the resulting payments when they differ from the push, from the order's lines and delivery fee", () => {
+    // Stored 2,000 against a 10,000 order; a stale push of 3,000 says paid; the union is a deposit.
+    expect(decidePush(owner, "order", "o1", order([payB], "paid"), false, live(order([payA], "deposit"), 12))).toMatchObject({ data: { paymentStatus: "deposit" } });
+    // The delivery fee is part of the total.
+    expect(decidePush(owner, "order", "o1", order([{ ...payB, amountMinor: 8000 }], "deposit", { deliveryFeeMinor: 500 }), false, live(order([{ ...payA, amountMinor: 2500 }], "deposit", { deliveryFeeMinor: 500 }), 12))).toMatchObject({ data: { paymentStatus: "paid" } });
+    // When the record lacks what the total needs, the pushed status is kept; payments are still never lost.
     const noLines = (payments: unknown[], paymentStatus: string) => ({ status: "confirmed", payments, paymentStatus });
-    const decision = decidePush(owner, "order", "o1", noLines([payB], "deposit"), false, live(noLines([payA], "deposit"), 12), { baseSeq: 10 });
+    const decision = decidePush(owner, "order", "o1", noLines([payB], "deposit"), false, live(noLines([payA], "deposit"), 12));
     expect(decision).toMatchObject({ allowed: true, data: { paymentStatus: "deposit" } });
     expect(paymentsOf(decision)).toEqual(["payA", "payB"]);
   });
 
-  it("a payment with no id is identified by its fields; ids are compared without case", () => {
-    const { id: _id, ...anonymous } = payA;
-    void _id;
-    expect(paymentsOf(decidePush(owner, "order", "o1", order([{ ...anonymous }], "deposit"), false, live(order([anonymous], "deposit"), 12), { baseSeq: 1 }))).toHaveLength(1);
-    const upper = { ...payA, id: "PAYA" };
-    expect(paymentsOf(decidePush(owner, "order", "o1", order([upper], "deposit"), false, live(stored, 12), { baseSeq: 1 }))).toEqual(["PAYA"]);
+  it("the released iOS 1.0 deletes by absence and logs `payment: <amount> -> removed`: that removes the payment and records its id; without the entry it stays", () => {
+    const removal = { id: "h7", field: "payment", oldValue: "2000", newValue: "removed", note: null, at: "2026-10-03T09:00:00.000Z" };
+    for (const [name, member] of writers) {
+      const decision = decidePush(member, "order", "o1", order([payB], "deposit", { changes: [removal] }), false, live(stored, 12));
+      expect(paymentsOf(decision), name).toEqual(["payB"]);
+      expect(removedOf(decision)).toEqual(["payA"]);
+      expect(paymentsOf(decidePush(member, "order", "o1", order([payB], "deposit"), false, live(stored, 12))), `${name} without the entry`).toEqual(["payA", "payB"]);
+    }
   });
 
-  it("a push that does not know its base (no baseSeq) or the record is new is not stale", () => {
-    expect(paymentsOf(decidePush(owner, "order", "o1", fromB, false, live(stored, 12)))).toEqual(["payB"]);
-    expect(paymentsOf(decidePush(owner, "order", "o1", fromB, false, undefined, { baseSeq: 0 }))).toEqual(["payB"]);
+  it("a payment with no id is identified by its fields, and ids are compared without case", () => {
+    const { id: _id, ...anonymous } = payA;
+    void _id;
+    expect(paymentsOf(decidePush(owner, "order", "o1", order([{ ...anonymous }], "deposit"), false, live(order([anonymous], "deposit"), 12)))).toHaveLength(1);
+    const upper = { ...payA, id: "PAYA" };
+    expect(paymentsOf(decidePush(owner, "order", "o1", order([upper], "deposit"), false, live(order([payA], "deposit"), 12)))).toEqual(["PAYA"]);
+    expect(paymentsOf(decidePush(owner, "order", "o1", order([], "unpaid", { removedPaymentIds: ["PAYA"] }), false, live(order([payA], "deposit"), 12)))).toEqual([]);
+  });
+
+  it("a new order is stored as sent (its removal ids too), and a deleted stored order contributes its removal ids but no payments", () => {
+    expect(decidePush(owner, "order", "o9", order([payA], "deposit"), false, undefined)).toEqual({ allowed: true, data: order([payA], "deposit") });
+    const tombstone = { data: order([payA], "deposit", { removedPaymentIds: ["payX"] }), deleted: true, seq: 5 };
+    const decision = decidePush(owner, "order", "o1", order([payB, { ...payA, id: "payX" }], "deposit"), false, tombstone);
+    expect(paymentsOf(decision)).toEqual(["payB"]);
+    expect(removedOf(decision)).toEqual(["payX"]);
   });
 });
