@@ -121,7 +121,8 @@ export function renderPage({ lang, slug, title, description, bodyHtml, jsonLd: e
 <script>if(location.hostname==='orderat-app.pages.dev'||location.hostname==='www.orderatweb.com')location.replace('https://orderatweb.com'+location.pathname+location.search+location.hash)</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="${escAttr(BRAND.themeColor)}">
-${headTags({ lang, slug, title, description, ogImage, noEnglish })}
+${STORE_LINKS.ios ? `<meta name="apple-itunes-app" content="app-id=${escAttr((STORE_LINKS.ios.match(/id(\d+)/) || [])[1] || "")}">
+` : ""}${headTags({ lang, slug, title, description, ogImage, noEnglish })}
 <link rel="icon" type="image/png" href="/assets/img/icons/favicon-32.png">
 <link rel="apple-touch-icon" href="/assets/img/icons/apple-touch-icon.png">
 <link rel="manifest" href="/site.webmanifest">

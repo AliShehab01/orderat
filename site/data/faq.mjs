@@ -15,11 +15,11 @@ export const FAQS = [
   {
     ar: {
       q: "هل اوردرات متوفر الآن على المتاجر؟",
-      a: "اوردرات قريباً على App Store و Google Play. تقدر تجرّب متجراً تجريبياً الآن بدون تسجيل لتشوف كيف تبدو تجربة عميلك.",
+      a: "نعم، اوردرات متوفر الآن على App Store للآيفون، وقريباً على Google Play. وتقدر تجرّب متجراً تجريبياً الآن بدون تسجيل لتشوف كيف تبدو تجربة عميلك.",
     },
     en: {
       q: "Is Orderat available now?",
-      a: "Orderat is launching soon on the App Store and Google Play. You can try a demo shop right now, no sign-up, to see what your customers will experience.",
+      a: "Yes. Orderat is on the App Store for iPhone now, and coming soon to Google Play. You can also try a demo shop right now, no sign-up, to see what your customers will experience.",
     },
   },
   {

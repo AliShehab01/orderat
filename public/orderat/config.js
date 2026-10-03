@@ -7,4 +7,6 @@ window.ORDERAT_CONFIG = {
   googleClientId: '799835600648-rj4qq9ia615jfob5eg6k4lgop3aq3i6l.apps.googleusercontent.com',
   appleServicesId: 'com.ams.orderat.web',
   appleRedirectUri: location.origin + '/app/',
+  // Store pages. null shows "Coming soon" instead of a download button.
+  storeLinks: { ios: 'https://apps.apple.com/app/id6816299089', android: null },
 };
