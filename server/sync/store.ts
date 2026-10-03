@@ -225,6 +225,36 @@ export async function markInviteUsed(sql: SqlClient, inviteId: string, usedByUse
   await sql.query(`update orderat.invites set used_at = $2, used_by_user_id = $3 where id = $1`, [inviteId, now.toISOString(), usedByUserId]);
 }
 
+export type InviteClaim =
+  | { outcome: "invalid" }
+  | { outcome: "staff_limit" }
+  | { outcome: "joined" | "already_member"; shopId: string; role: Role; permissions: Permissions };
+
+/**
+ * Claims the active invite for `codeHash` for `userId` and creates the staff membership, in ONE call
+ * (orderat.claim_invite, db/migrations/0010_order_stock.sql; third review, 3 Oct 2026, F5): the invite is locked, so
+ * two accounts racing for one code get exactly one membership and the other the plain "invalid" answer, and the
+ * staff count is read under a lock on the shop, so the limit holds when two different invites race for the last
+ * seat. "joined": a new staff member; "already_member": the user already belongs to the shop (the invite is
+ * used up, nothing is added, the existing role comes back); "staff_limit": the shop is full and the invite stays
+ * unused; "invalid": no unused, unexpired invite with that code.
+ */
+export async function claimInvite(
+  sql: SqlClient,
+  input: { codeHash: string; userId: string; now: Date; permissions: Permissions; maxStaff: number },
+): Promise<InviteClaim> {
+  const rows = await sql.query<{ result: Record<string, unknown> }>(
+    `select orderat.claim_invite($1, $2::uuid, $3::timestamptz, $4::text::jsonb, $5::int) as result`,
+    [input.codeHash, input.userId, input.now.toISOString(), JSON.stringify(input.permissions), input.maxStaff],
+  );
+  const result = rows[0]?.result;
+  const outcome = result?.outcome;
+  if (outcome === "joined" || outcome === "already_member") {
+    return { outcome, shopId: String(result!.shopId), role: result!.role as Role, permissions: normalizePermissions(result!.permissions) };
+  }
+  return { outcome: outcome === "staff_limit" ? "staff_limit" : "invalid" };
+}
+
 // --- Records -------------------------------------------------------------------------------------
 
 export interface RecordRow {
@@ -253,6 +283,75 @@ export async function findRecord(sql: SqlClient, shopId: string, entity: Entity,
   const rows = await sql.query<Record<string, unknown>>(
     `select ${RECORD_COLUMNS} from orderat.records where shop_id = $1 and entity = $2 and id = $3`,
     [shopId, entity, id],
+  );
+  return rows[0] ? toRecordRow(rows[0]) : undefined;
+}
+
+/** The records of `entity` with these ids (those that exist, deleted or not), in one read. */
+export async function findRecordsByIds(sql: SqlClient, shopId: string, entity: Entity, ids: string[]): Promise<RecordRow[]> {
+  if (ids.length === 0) return [];
+  const rows = await sql.query<Record<string, unknown>>(
+    `select ${RECORD_COLUMNS} from orderat.records where shop_id = $1 and entity = $2 and id in (select jsonb_array_elements_text($3::text::jsonb))`,
+    [shopId, entity, JSON.stringify(ids)],
+  );
+  return rows.map(toRecordRow);
+}
+
+/** The server's applied stock allocations (db/migrations/0010_order_stock.sql order_stock) of these orders. */
+export async function findOrderStock(sql: SqlClient, shopId: string, orderIds: string[]): Promise<{ orderId: string; productId: string; units: number }[]> {
+  if (orderIds.length === 0) return [];
+  const rows = await sql.query<{ order_id: string; product_id: string; units: number }>(
+    `select order_id, product_id, units from orderat.order_stock where shop_id = $1 and order_id in (select jsonb_array_elements_text($2::text::jsonb))`,
+    [shopId, JSON.stringify(orderIds)],
+  );
+  return rows.map((r) => ({ orderId: r.order_id, productId: r.product_id, units: Number(r.units) }));
+}
+
+/** Which of these stock move keys stock_ops already holds (applied or ignored before). */
+export async function findStockOps(sql: SqlClient, shopId: string, opIds: string[]): Promise<Set<string>> {
+  if (opIds.length === 0) return new Set();
+  const rows = await sql.query<{ op_id: string }>(
+    `select op_id from orderat.stock_ops where shop_id = $1 and op_id in (select jsonb_array_elements_text($2::text::jsonb))`,
+    [shopId, JSON.stringify(opIds)],
+  );
+  return new Set(rows.map((r) => r.op_id));
+}
+
+/** One record write together with the stock bookkeeping that must commit with it (see writeAtomic). */
+export interface AtomicWrite {
+  primary: { entity: Entity; id: string; /** The seq it was decided on; undefined: it must not exist yet. */ expectSeq: number | undefined; data: Record<string, unknown>; deleted: boolean };
+  /** Records read but not written (the orders a product push's stock moves were judged against), with the seq read. */
+  deps: { entity: Entity; id: string; seq: number }[];
+  /** Relative stock updates of products, each with a server-made move (see sync_apply). */
+  effects: { productId: string; orderId: string; delta: number; reason: string; at: string }[];
+  orderStock: { orderId: string; productId: string; expect: number | null; units: number; write: boolean }[];
+  ops: { opId: string; productId: string | null; outcome: "applied" | "ignored" }[];
+  listed: { opId: string; productId: string | null }[];
+}
+
+/**
+ * The sync push's multi-record compare-and-swap (orderat.sync_apply, db/migrations/0010_order_stock.sql): writes
+ * the primary record only while it, and everything the decision read, is still as read, together with its stock
+ * effects, allocation rows and stock_ops rows, all or nothing. ONE call, so it is atomic for the transaction
+ * pooler and both SQL drivers without a client-side transaction, exactly as writeRecordIfUnchanged is for one
+ * record. Returns the primary record as stored (with its fresh seq), or undefined when anything moved
+ * meanwhile and nothing was written: the caller reads and decides again (server/sync/push-pull.ts).
+ */
+export async function writeAtomic(sql: SqlClient, shopId: string, updatedBy: string, write: AtomicWrite): Promise<RecordRow | undefined> {
+  const { primary } = write;
+  const rows = await sql.query<Record<string, unknown>>(
+    `select entity, id, data, deleted, seq, updated_at
+       from orderat.sync_apply($1::uuid, $2::uuid, $3::text::jsonb, $4::text::jsonb, $5::text::jsonb, $6::text::jsonb, $7::text::jsonb, $8::text::jsonb)`,
+    [
+      shopId,
+      updatedBy,
+      JSON.stringify({ entity: primary.entity, id: primary.id, expect_seq: primary.expectSeq ?? null, data: primary.data, deleted: primary.deleted }),
+      JSON.stringify(write.deps),
+      JSON.stringify(write.effects.map((e) => ({ product_id: e.productId, order_id: e.orderId, delta: e.delta, reason: e.reason, at: e.at }))),
+      JSON.stringify(write.orderStock.map((o) => ({ order_id: o.orderId, product_id: o.productId, expect: o.expect, units: o.units, write: o.write }))),
+      JSON.stringify(write.ops.map((o) => ({ op_id: o.opId, product_id: o.productId, outcome: o.outcome }))),
+      JSON.stringify(write.listed.map((o) => ({ op_id: o.opId, product_id: o.productId }))),
+    ],
   );
   return rows[0] ? toRecordRow(rows[0]) : undefined;
 }
@@ -332,6 +431,25 @@ export async function writeRecordIfUnchanged(
         [shopId, entity, id, JSON.stringify(data), deleted, updatedBy, expectedSeq],
       );
   return rows[0] ? toRecordRow(rows[0]) : undefined;
+}
+
+/**
+ * Gives one record a fresh seq, nothing else of it touched (data, deleted, updated_at and updated_by stay), but only while it
+ * still has `expectedSeq`: a compare-and-swap like writeRecordIfUnchanged, so a record another write has changed since is left
+ * exactly as that write made it. Returns the new seq, or undefined when the record had moved on.
+ *
+ * Fourth review, R1: the order a push wrote is given its seq again after the products of its lines, so a pull in seq order
+ * delivers the products first (server/sync/push-pull.ts orderAfterItsProducts).
+ */
+export async function resequenceRecordIfUnchanged(sql: SqlClient, shopId: string, entity: Entity, id: string, expectedSeq: number): Promise<number | undefined> {
+  const rows = await sql.query<{ seq: number }>(
+    `update orderat.records
+        set seq = nextval(pg_get_serial_sequence('orderat.records', 'seq'))
+      where shop_id = $1 and entity = $2 and id = $3 and seq = $4
+      returning seq`,
+    [shopId, entity, id, expectedSeq],
+  );
+  return rows[0] ? Number(rows[0].seq) : undefined;
 }
 
 /**

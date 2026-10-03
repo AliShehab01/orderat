@@ -18,8 +18,7 @@ import { pullForMember, pushChanges } from "./push-pull.ts";
 import { bumpSyncRateLimit, MAX_SYNCS_PER_MINUTE } from "./rate-limit.ts";
 import { canPull, newlyVisibleEntities } from "./record-access.ts";
 import {
-  countStaff,
-  findActiveInviteByCodeHash,
+  claimInvite,
   findMembership,
   findShopCloudById,
   hasActiveInviteWithCodeHash,
@@ -28,7 +27,6 @@ import {
   insertShopCloud,
   listMembers,
   listShopsForUser,
-  markInviteUsed,
   removeMembership,
   resequenceRecords,
   updateMembershipPermissions,
@@ -149,7 +147,7 @@ export function createSyncHandler(deps: SyncHandlerDeps): (req: Request) => Prom
     }
 
     const member: Member = { role: membership.role, permissions: membership.permissions };
-    const { conflicts, rejected } = await pushChanges(deps.sql, body.shopId, member, body.changes, userId);
+    const { conflicts, rejected } = await pushChanges(deps.sql, body.shopId, member, body.changes, userId, { now });
     const pulled = await pullForMember(deps.sql, body.shopId, member, body.cursor);
 
     log({ event: "sync", status: 200, pushed: body.changes.length, conflicts: conflicts.length, rejected: rejected.length, pulled: pulled.changes.length, more: pulled.more });
@@ -193,31 +191,24 @@ export function createSyncHandler(deps: SyncHandlerDeps): (req: Request) => Prom
     return jsonResponse({ code, expiresAt: expiresAt.toISOString() }, 200);
   }
 
+  /** One invite, one member (third review, 3 Oct 2026, F5): the invite is claimed and the membership created in a
+   * single database call (store.ts claimInvite -> orderat.claim_invite), the staff limit inside it. Two accounts
+   * racing for one code get exactly one membership; the other gets the plain invalid answer. */
   async function handleInviteJoin(userId: string, body: InviteJoinBody): Promise<Response> {
     const codeHash = await sha256HexOfString(body.code);
-    const invite = await findActiveInviteByCodeHash(deps.sql, codeHash, now());
-    if (!invite) {
+    const claim = await claimInvite(deps.sql, { codeHash, userId, now: now(), permissions: DEFAULT_STAFF_PERMISSIONS, maxStaff: MAX_STAFF_PER_SHOP });
+    if (claim.outcome === "invalid") {
       log({ event: "sync_invite_join", status: 404 });
       return jsonResponse({ error: "invalid_code" }, 404);
     }
-
-    const existingMembership = await findMembership(deps.sql, invite.shopId, userId);
-    if (!existingMembership) {
-      const staffCount = await countStaff(deps.sql, invite.shopId);
-      if (staffCount >= MAX_STAFF_PER_SHOP) {
-        log({ event: "sync_invite_join", status: 403, reason: "staff_limit" });
-        return jsonResponse({ error: "staff_limit" }, 403);
-      }
-      await insertMembership(deps.sql, { shopId: invite.shopId, userId, role: "staff", permissions: DEFAULT_STAFF_PERMISSIONS });
+    if (claim.outcome === "staff_limit") {
+      log({ event: "sync_invite_join", status: 403, reason: "staff_limit" });
+      return jsonResponse({ error: "staff_limit" }, 403);
     }
-    await markInviteUsed(deps.sql, invite.id, userId, now());
 
-    const shop = await findShopCloudById(deps.sql, invite.shopId);
-    const role = existingMembership?.role ?? "staff";
-    const permissions = existingMembership?.permissions ?? DEFAULT_STAFF_PERMISSIONS;
-
-    log({ event: "sync_invite_join", status: 200, alreadyMember: !!existingMembership });
-    return jsonResponse({ shop: { id: shop!.id, name: shop!.name }, role, permissions }, 200);
+    const shop = await findShopCloudById(deps.sql, claim.shopId);
+    log({ event: "sync_invite_join", status: 200, alreadyMember: claim.outcome === "already_member" });
+    return jsonResponse({ shop: { id: shop!.id, name: shop!.name }, role: claim.role, permissions: claim.permissions }, 200);
   }
 
   async function handleMembersList(userId: string, body: MembersListBody): Promise<Response> {

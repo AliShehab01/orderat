@@ -31,19 +31,26 @@
 //     `updatedAt` and new payment history entries — and full write of expenses.
 //   - `products`: full write of products and stock moves (and photo uploads, server/sync/handler.ts).
 //     Staff with `orders` or `prepare` but not `products` may push an *existing* product to add
-//     order-driven stock moves (mergeProductStock) — so stock stays right when staff confirm or cancel
-//     orders; nothing else of the product they send is stored.
+//     order-driven stock moves (planProductPush) — so stock stays right when staff confirm or cancel
+//     orders; nothing else of the product they send is stored, and a move only counts when the order it
+//     names allows it (server/sync/stock-merge.ts, third review F2).
 //   - Stock moves are merged, never lost and never refused for being stale (second review, 3 Oct 2026, L2,
 //     server/sync/stock-merge.ts): a product push whose copy lacks moves the stored one has is rebased onto
-//     the stored quantity and moves, applying only the moves the stored copy lacks.
-//   - A whole-order push (owner, `orders`) that leaves out `stockDeducted` keeps the stored ledger (L1).
+//     the stored quantity and moves, applying only the moves the stored copy lacks, each once (stock_ops).
+//   - A whole-order push (owner, `orders`) that leaves out `stockDeducted` keeps the stored ledger (L1); one
+//     whose ledger does not fit its own lines is treated as leaving it out (F1).
+//   - Payments are add-only (third review F4, fourth review R2 and R3, server/sync/payments-merge.ts): the absence
+//     of a payment in a pushed order never removes it, whatever the `baseSeq`; a payment is removed by listing its
+//     id in the order's grow-only `removedPaymentIds` (or, for the released iOS 1.0, by its history entry). Only
+//     the owner and staff with `orders` or `money` write payments and removal ids.
 //   Everything else is refused, and comes back to the phone as a `rejected` entry (server/sync/
 //   push-pull.ts), with the server's copy when the member may pull it.
 
 import { ISO_DATE_RE, isPlainObject, sameJson } from "./json-equal.ts";
 import { hasPermission, type Member } from "./permissions.ts";
-import { acceptPreparedLedger, keepStoredLedger } from "./stock-ledger.ts";
-import { mayMoveOrderStock, mergeProductStock } from "./stock-merge.ts";
+import { applyPaymentRules } from "./payments-merge.ts";
+import { acceptPreparedLedger, resolveWholeOrderLedger, settleLedgerForStatus } from "./stock-ledger.ts";
+import { mayMoveOrderStock, NO_FACTS, planProductPush, type ProductPlan, type StockFacts } from "./stock-merge.ts";
 
 export const ENTITIES = ["shop", "product", "customer", "order", "expense", "occasion", "stock_move", "setting"] as const;
 export type Entity = (typeof ENTITIES)[number];
@@ -52,13 +59,21 @@ export type Entity = (typeof ENTITIES)[number];
 const SUBSCRIPTION_SETTING_ID = "subscription";
 
 export type PushDecision =
-  | { allowed: true; data: Record<string, unknown> }
+  /** `stock` is the stock bookkeeping of a product push that goes with `data` (stock-merge.ts planProductPush). */
+  | { allowed: true; data: Record<string, unknown>; stock?: ProductPlan }
   | { allowed: false; reason: "forbidden" };
 
 /** A record as currently stored, handed to decidePush — undefined when the push would create it. */
 export interface StoredRecord {
   data: Record<string, unknown>;
   deleted: boolean;
+}
+
+/** What else a push is decided on: the facts a product push's stock moves are judged against (read by
+ * server/sync/stock-apply.ts). The seq a pushing device's copy is based on decides nothing here: payments are add-only
+ * whatever it is (fourth review, R2), and stock is merged by move ids. */
+export interface PushContext {
+  stock?: StockFacts;
 }
 
 const FORBIDDEN: PushDecision = { allowed: false, reason: "forbidden" };
@@ -125,14 +140,15 @@ export function newlyVisibleEntities(before: Member, after: Member): Entity[] {
 export function decidePush(
   member: Member,
   entity: Entity,
-  _id: string,
+  id: string,
   incomingData: Record<string, unknown>,
   deleted: boolean,
   existing: StoredRecord | undefined,
+  context: PushContext = {},
 ): PushDecision {
   if (member.role === "owner") {
-    if (entity === "product") return decideProduct(true, incomingData, deleted, existing);
-    if (entity === "order") return allow(keepStoredLedger(incomingData, existing?.data));
+    if (entity === "product") return decideProduct(true, id, incomingData, deleted, existing, context);
+    if (entity === "order") return allow(wholeOrder(incomingData, existing));
     return allow(incomingData);
   }
   switch (entity) {
@@ -147,34 +163,58 @@ export function decidePush(
     case "stock_move":
       return hasPermission(member, "products") ? allow(incomingData) : FORBIDDEN;
     case "product":
-      if (hasPermission(member, "products")) return decideProduct(true, incomingData, deleted, existing);
-      if (mayMoveOrderStock(member)) return decideProduct(false, incomingData, deleted, existing);
+      if (hasPermission(member, "products")) return decideProduct(true, id, incomingData, deleted, existing, context);
+      if (mayMoveOrderStock(member)) return decideProduct(false, id, incomingData, deleted, existing, context);
       return FORBIDDEN;
     case "order":
-      if (hasPermission(member, "orders")) return allow(keepStoredLedger(incomingData, existing?.data));
+      if (hasPermission(member, "orders")) return allow(wholeOrder(incomingData, existing));
       return mergeOrderFields(member, incomingData, deleted, existing);
     default:
       return FORBIDDEN;
   }
 }
 
-/** A product push. An existing live product takes the stock merge (stock-merge.ts): a copy that is stale for
- * stock is rebased onto the stored quantity and moves, and staff without `products` store only the stock
- * moves their copy adds. Anything else (a new product, a deletion, a tombstone coming back) is a plain write
- * for a member who may edit products, and refused for staff who only handle orders: they never create,
- * delete or bring back a product. */
-function decideProduct(mayEditProduct: boolean, incoming: Record<string, unknown>, deleted: boolean, existing: StoredRecord | undefined): PushDecision {
+/** Who may push a product, as far as an existing live one goes: `edit` (the owner, `products` staff: the
+ * product as sent, its stock merged), `orderStock` (staff with `orders` or `prepare`: only the stock moves of
+ * their copy, judged by the orders they name), or `none`. */
+export function productAccess(member: Member): "edit" | "orderStock" | "none" {
+  if (hasPermission(member, "products")) return "edit";
+  return mayMoveOrderStock(member) ? "orderStock" : "none";
+}
+
+/** A product push. An existing live product takes the stock merge (stock-merge.ts planProductPush): a copy that
+ * is stale for stock is rebased onto the stored quantity and moves, only moves not applied before count, and
+ * staff without `products` store only the stock moves their copy adds. Anything else (a new product, a deletion,
+ * a tombstone coming back) is a plain write for a member who may edit products, and refused for staff who only
+ * handle orders: they never create, delete or bring back a product. The decision carries the stock bookkeeping
+ * (`stock`) that must be committed with the product (server/sync/store.ts writeAtomic). */
+function decideProduct(
+  mayEditProduct: boolean,
+  id: string,
+  incoming: Record<string, unknown>,
+  deleted: boolean,
+  existing: StoredRecord | undefined,
+  context: PushContext,
+): PushDecision {
   const live = existing && !existing.deleted ? existing : undefined;
   if (deleted || !live) return mayEditProduct ? allow(incoming) : FORBIDDEN;
-  const data = mergeProductStock(live.data, incoming, mayEditProduct);
-  return data ? allow(data) : FORBIDDEN;
+  const plan = planProductPush(id, live.data, incoming, mayEditProduct, context.stock ?? NO_FACTS);
+  if (!plan) return FORBIDDEN;
+  const bookkeeping = plan.ops.length > 0 || plan.listed.length > 0 || plan.orderStock.length > 0 || plan.deps.length > 0;
+  return bookkeeping ? { allowed: true, data: plan.data, stock: plan } : allow(plan.data);
+}
+
+/** A whole-order push (the owner, staff with `orders`): the record as sent, with the stored ledger kept when it
+ * sent none or one that does not fit its lines (L1, F1), a ledger of an order that holds no stock settled to {}, and
+ * the payment rules applied (add-only payments, grow-only removal ids: payments-merge.ts). */
+function wholeOrder(incoming: Record<string, unknown>, existing: StoredRecord | undefined): Record<string, unknown> {
+  return applyPaymentRules(resolveWholeOrderLedger(incoming, existing?.data), existing, incoming);
 }
 
 // ---------- Order fields for `prepare` and `money` ----------
 
 const isString = (v: unknown) => typeof v === "string";
 const isIsoDateOrNull = (v: unknown) => v === null || (typeof v === "string" && ISO_DATE_RE.test(v) && Number.isFinite(Date.parse(v)));
-const isListOfObjects = (v: unknown) => Array.isArray(v) && v.every(isPlainObject);
 
 interface FieldRule {
   valid: (value: unknown) => boolean;
@@ -191,8 +231,8 @@ const PREPARE_FIELDS: Record<string, FieldRule> = {
   outForDeliveryAt: { valid: isIsoDateOrNull, optional: true },
   updatedAt: { valid: isString, optional: false },
 };
+// `payments` and `removedPaymentIds` are not here: the payment rules merge them (payments-merge.ts), never a plain copy.
 const MONEY_FIELDS: Record<string, FieldRule> = {
-  payments: { valid: isListOfObjects, optional: false },
   paymentStatus: { valid: isString, optional: false },
   updatedAt: { valid: isString, optional: false },
 };
@@ -214,7 +254,7 @@ function mergeOrderFields(member: Member, incoming: Record<string, unknown>, del
   const fields: Record<string, FieldRule> = { ...(prepare ? PREPARE_FIELDS : {}), ...(money ? MONEY_FIELDS : {}) };
   const history = new Set([...(prepare ? PREPARE_HISTORY : []), ...(money ? MONEY_HISTORY : [])]);
 
-  const data: Record<string, unknown> = { ...existing.data };
+  let data: Record<string, unknown> = { ...existing.data };
   for (const [key, rule] of Object.entries(fields)) {
     if (key in incoming) {
       if (rule.valid(incoming[key])) data[key] = incoming[key];
@@ -222,6 +262,9 @@ function mergeOrderFields(member: Member, incoming: Record<string, unknown>, del
       delete data[key];
     }
   }
+  // Payments (R2, R3): added by id, removed only by the grow-only `removedPaymentIds` (or the released iOS 1.0's history
+  // entry); only staff with `money` write them. Prepare-only staff keep the stored payments and removal ids as they are.
+  if (money) data = applyPaymentRules(data, existing, incoming);
   if (prepare) {
     // What the order took out of stock (3 Oct 2026, integrity review R3): staff who confirm or cancel an
     // order write the ledger along with the status. Never cleared by leaving it out (L1), and taken only when
@@ -231,7 +274,7 @@ function mergeOrderFields(member: Member, incoming: Record<string, unknown>, del
   }
   const changes = mergeHistory(existing.data.changes, incoming.changes, history);
   if (changes !== undefined) data.changes = changes;
-  return allow(data);
+  return allow(prepare ? settleLedgerForStatus(data) : data);
 }
 
 /**

@@ -328,6 +328,145 @@ describe("createSyncHandler / invites", () => {
   });
 });
 
+// Third review (3 Oct 2026), F5: one staff invite could be redeemed by two accounts at once. The join read the invite, counted
+// the staff, inserted the membership and only then marked the invite used, as separate statements: two accounts racing for one
+// code both passed the read and both became staff. The claim and the membership are now one database call (orderat.claim_invite,
+// the staff limit inside it), through the real HTTP handler.
+describe("createSyncHandler / F5: one invite, one member", () => {
+  const staffRows = async (shopId: string) => (await sql.query<{ user_id: string }>(`select user_id from orderat.shop_members where shop_id = $1 and role = 'staff' order by joined_at`, [shopId])).map((r) => r.user_id);
+  const inviteRow = async (shopId: string) => (await sql.query<{ used_at: Date | null; used_by_user_id: string | null }>(`select used_at, used_by_user_id from orderat.invites where shop_id = $1 order by created_at`, [shopId]));
+  async function shopWithInvite(handler: (req: Request) => Promise<Response>) {
+    const owner = await signUp("owner-1");
+    const shopId = crypto.randomUUID();
+    await handler(post({ action: "create_shop", shopId, name: "Sara's Cakes" }, owner.session));
+    const { code } = await (await handler(post({ action: "invite_create", shopId }, owner.session))).json();
+    return { owner, shopId, code: code as string };
+  }
+
+  /** A handler whose first query matching `window` (the invite read, or the staff count, of the old multi-statement join; the one
+   * claim call of the new one) is followed by `otherJoin` before it comes back: another account's whole join lands exactly there. */
+  function handlerWithJoinIn(window: RegExp, otherJoin: () => Promise<Response>) {
+    let left = 1;
+    const result: { other?: Response } = {};
+    const racing: SqlClient = {
+      async query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> {
+        const rows = await sql.query<T>(text, params);
+        if (left > 0 && window.test(text)) {
+          left--;
+          result.other = await otherJoin();
+        }
+        return rows;
+      },
+    };
+    return { handler: createSyncHandler({ sql: racing, uploadPhoto: async () => true, getSignedPhotoUrl: async () => undefined, now: () => NOW, log: () => {} }), result };
+  }
+  const INVITE_READ_OR_CLAIM = /claim_invite|from orderat\.invites where code_hash/;
+  const STAFF_COUNT_OR_CLAIM = /claim_invite|from orderat\.shop_members where shop_id = \$1 and role = 'staff'/;
+
+  it("two accounts redeem one code, the second one landing in the middle of the first one's join: exactly one membership, the other gets the normal invalid answer", async () => {
+    const plain = makeHandler();
+    const { shopId, code } = await shopWithInvite(plain);
+    const a = await signUp("staff-a");
+    const b = await signUp("staff-b");
+
+    const { handler, result } = handlerWithJoinIn(INVITE_READ_OR_CLAIM, () => plain(post({ action: "invite_join", code }, b.session)));
+    const resA = await handler(post({ action: "invite_join", code }, a.session));
+    const resB = result.other!;
+    expect([resA.status, resB.status].sort()).toEqual([200, 404]);
+    expect(await (resA.status === 404 ? resA : resB).json()).toEqual({ error: "invalid_code" });
+
+    const members = await staffRows(shopId);
+    expect(members).toHaveLength(1);
+    const [invite] = await inviteRow(shopId);
+    expect(invite!.used_at).not.toBeNull();
+    expect(invite!.used_by_user_id).toBe(members[0]);
+    // The loser keeps no access: it is not a member of the shop.
+    const loserSession = resA.status === 404 ? a.session : b.session;
+    expect((await plain(post({ action: "sync", shopId, cursor: 0, changes: [] }, loserSession))).status).toBe(403);
+  });
+
+  it("two accounts redeem one code at the same moment (both requests in flight): exactly one membership", async () => {
+    const handler = makeHandler();
+    const { shopId, code } = await shopWithInvite(handler);
+    const a = await signUp("staff-a");
+    const b = await signUp("staff-b");
+    const [resA, resB] = await Promise.all([handler(post({ action: "invite_join", code }, a.session)), handler(post({ action: "invite_join", code }, b.session))]);
+    expect([resA.status, resB.status].sort()).toEqual([200, 404]);
+    expect(await staffRows(shopId)).toHaveLength(1);
+  });
+
+  it("the whole join is one database call: no separate read of the invite, count of the staff, insert of the member or mark of the invite", async () => {
+    const texts: string[] = [];
+    const spy: SqlClient = { async query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> { texts.push(text); return sql.query<T>(text, params); } };
+    const handler = createSyncHandler({ sql: spy, uploadPhoto: async () => true, getSignedPhotoUrl: async () => undefined, now: () => NOW, log: () => {} });
+    const { shopId, code } = await shopWithInvite(handler);
+    const staff = await signUp("staff-a");
+    texts.length = 0;
+    expect((await handler(post({ action: "invite_join", code }, staff.session))).status).toBe(200);
+    expect(texts.filter((t) => /claim_invite/.test(t))).toHaveLength(1);
+    expect(texts.filter((t) => /orderat\.(invites|shop_members)\b/.test(t))).toEqual([]);
+    expect(await staffRows(shopId)).toEqual([staff.userId]);
+  });
+
+  it("the 5-staff limit holds when another account's join lands in the middle of the last seat's join: one joins, the other is refused with staff_limit and keeps its invite", async () => {
+    const plain = makeHandler();
+    const { owner, shopId, code } = await shopWithInvite(plain);
+    for (let i = 0; i < 3; i++) {
+      const { code: more } = await (await plain(post({ action: "invite_create", shopId }, owner.session))).json();
+      expect((await plain(post({ action: "invite_join", code: more }, (await signUp(`staff-${i}`)).session))).status).toBe(200);
+    }
+    expect((await plain(post({ action: "invite_join", code }, (await signUp("staff-3")).session))).status).toBe(200);
+    expect(await staffRows(shopId)).toHaveLength(4);
+    // Two codes, two accounts, one seat left.
+    const { code: codeX } = await (await plain(post({ action: "invite_create", shopId }, owner.session))).json();
+    const { code: codeY } = await (await plain(post({ action: "invite_create", shopId }, owner.session))).json();
+    const x = await signUp("staff-x");
+    const y = await signUp("staff-y");
+
+    const { handler, result } = handlerWithJoinIn(STAFF_COUNT_OR_CLAIM, () => plain(post({ action: "invite_join", code: codeY }, y.session)));
+    const resX = await handler(post({ action: "invite_join", code: codeX }, x.session));
+    const resY = result.other!;
+    expect([resX.status, resY.status].sort()).toEqual([200, 403]);
+    expect(await (resX.status === 403 ? resX : resY).json()).toEqual({ error: "staff_limit" });
+    expect(await staffRows(shopId)).toHaveLength(5);
+    // The refused account's invite was not consumed.
+    expect((await inviteRow(shopId)).filter((r) => r.used_at === null)).toHaveLength(1);
+  });
+
+  it("someone who already belongs to the shop uses the code up and gets their role back; no second membership appears", async () => {
+    const handler = makeHandler();
+    const { owner, shopId, code } = await shopWithInvite(handler);
+    const res = await handler(post({ action: "invite_join", code }, owner.session));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ shop: { id: shopId }, role: "owner" });
+    expect(await staffRows(shopId)).toEqual([]);
+    expect((await handler(post({ action: "invite_join", code }, (await signUp("late")).session))).status).toBe(404); // used up
+  });
+
+  it("an expired invite and a code that never existed give the same answer as a used one, and add nobody", async () => {
+    let clock = NOW;
+    const handler = makeHandler(() => clock);
+    const { shopId, code } = await shopWithInvite(handler);
+    clock = new Date(NOW.getTime() + 48 * 60 * 60 * 1000 + 1);
+    const staff = await signUp("staff-a");
+    for (const tried of [code, "000000"]) {
+      const res = await handler(post({ action: "invite_join", code: tried }, staff.session));
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "invalid_code" });
+    }
+    expect(await staffRows(shopId)).toEqual([]);
+  });
+
+  it("a retry of the same account after it joined (a dropped response) finds the code used: invalid, and still exactly one membership", async () => {
+    const handler = makeHandler();
+    const { shopId, code } = await shopWithInvite(handler);
+    const staff = await signUp("staff-a");
+    expect((await handler(post({ action: "invite_join", code }, staff.session))).status).toBe(200);
+    expect((await handler(post({ action: "invite_join", code }, staff.session))).status).toBe(404);
+    expect(await staffRows(shopId)).toEqual([staff.userId]);
+  });
+});
+
 describe("createSyncHandler / members", () => {
   async function setUpShopWithStaff() {
     const handler = makeHandler();
