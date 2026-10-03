@@ -669,6 +669,10 @@ a trimmed confirm move. No data backfill beyond listing the move ids already sto
   order has a ledger: the ledger decides) and the stock stays too high by that order's units. It is never made up.
   Cancels by a release are covered (the ledger settles to `{}`). Closing the rest needs the release to write a
   ledger or the server to derive one from tracking switches it does not hold reliably.
+- **Two released phones that make the same edit-down of an order** (3 -> 2 units, each with its own move) give the
+  difference back twice, within the order's units: a move's id says nothing about which transition it is, and only
+  a ledger tells identical edits apart. Two released phones that confirm or cancel the same order are covered (the
+  order's units are the cap, zero the floor).
 - **An iOS phone that edits an order while its own sync is in flight can still drop another phone's payment.**
   iOS refreshes its recorded `seq` for a pulled record even when it skips applying it (the order was edited
   meanwhile), so the re-push carries a current `baseSeq` and its own, older, payments list; the server cannot tell

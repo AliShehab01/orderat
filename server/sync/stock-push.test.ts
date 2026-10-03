@@ -442,6 +442,20 @@ describe("released apps / no ledger, order-driven moves on the product: still de
     });
   }
 
+  it("two released phones confirm the same order from the same copy (different move ids): the order's own units cap what can be taken, so stock is taken once; a double cancel gives back once", async () => {
+    await push(ownerPhone, releasedConfirm("mA", "oA", 3, 1));
+    expect(await stockNow()).toBe(7);
+    // B's copy is stale and its move has another id: taking 3 more would put 6 units against an order of 3.
+    await push(preparePhone, releasedConfirm("mB", "oA", 3, 2));
+    expect(await stockNow()).toBe(7);
+    expect(await rowsNow("oA")).toEqual({ p1: 3 });
+    expect(await opsNow("id:mB")).toEqual({}); // judged and refused: not applied, not recorded
+    await push(ownerPhone, await releasedCancel("cA", "oA", 3, 3));
+    await push(preparePhone, await releasedCancel("cB", "oA", 3, 4)); // nothing left to give back
+    expect(await stockNow()).toBe(10);
+    expect(await rowsNow("oA")).toEqual({ p1: 0 });
+  });
+
   it("a new order created and confirmed offline in one batch: the order is applied first, so the move naming it counts (not lost for being early)", async () => {
     const batch = [
       ch("product", "p1", PRODUCT(7, [mv("m9", -3, "orderConfirmed", "oNew", 1)]), base.p1),
