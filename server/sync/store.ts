@@ -434,6 +434,25 @@ export async function writeRecordIfUnchanged(
 }
 
 /**
+ * Gives one record a fresh seq, nothing else of it touched (data, deleted, updated_at and updated_by stay), but only while it
+ * still has `expectedSeq`: a compare-and-swap like writeRecordIfUnchanged, so a record another write has changed since is left
+ * exactly as that write made it. Returns the new seq, or undefined when the record had moved on.
+ *
+ * Fourth review, R1: the order a push wrote is given its seq again after the products of its lines, so a pull in seq order
+ * delivers the products first (server/sync/push-pull.ts orderAfterItsProducts).
+ */
+export async function resequenceRecordIfUnchanged(sql: SqlClient, shopId: string, entity: Entity, id: string, expectedSeq: number): Promise<number | undefined> {
+  const rows = await sql.query<{ seq: number }>(
+    `update orderat.records
+        set seq = nextval(pg_get_serial_sequence('orderat.records', 'seq'))
+      where shop_id = $1 and entity = $2 and id = $3 and seq = $4
+      returning seq`,
+    [shopId, entity, id, expectedSeq],
+  );
+  return rows[0] ? Number(rows[0].seq) : undefined;
+}
+
+/**
  * Gives every record of `entity` in `shopId` a fresh seq — data, deleted, updated_at and updated_by
  * untouched — so every device of the shop pulls them again from wherever its cursor is. For
  * server/sync/handler.ts's members_update: records a staff member was not allowed to pull went past

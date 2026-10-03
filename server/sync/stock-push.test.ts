@@ -4,7 +4,6 @@
 // landing between a push's read and its write made explicit with `racingOn`), each with retries.
 // Pure rules: stock-merge.test.ts, order-stock.test.ts. The SQL function itself: atomic-write.test.ts.
 
-import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SqlClient } from "../agent/postgres-store.ts";
 import { upsertUser } from "../auth/store.ts";
@@ -66,11 +65,10 @@ const opsNow = async (...keys: string[]) => {
   const rows = await sql.query<{ op_id: string; outcome: string }>(`select op_id, outcome from orderat.stock_ops where shop_id = $1 order by op_id`, [SHOP_ID]);
   return Object.fromEntries(rows.filter((r) => keys.includes(r.op_id)).map((r) => [r.op_id, r.outcome]));
 };
-/** The id the server gives its own move: deterministic in the order id, the accepted order seq and the product id. */
-const serverMoveId = (orderId: string, orderSeq: number, productId = "p1") => {
-  const h = createHash("md5").update(`${orderId}:${orderSeq}:${productId}`).digest("hex");
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-};
+/** The id the server gives its own move is a UUID derived from the order id, the seq the order's atomic write drew and the product id
+ * (atomic-write.test.ts checks the formula). The order is written again after its products at the end of a batch (fourth review, R1),
+ * so its final seq is not the one in the id: tests read the id off the product. */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const moveIds = async () => (await productNow()).stockMoves.map((m) => m.id);
 
 /** The first `times` reads matching `match` through this client each run `otherWrite` (another device's push, say) before
@@ -127,19 +125,19 @@ describe("F1 / two devices doing the same order transition take its stock once",
         // The first phone's own push is no conflict: the server's stock effect on its product is not another phone's write.
         expect(firstResult).toEqual({ conflicts: [], rejected: [] });
         expect(await stockNow()).toBe(7);
-        const acceptedSeq = await seqOf("order", "oA");
+        const serverMove = (await productNow()).stockMoves[0]!; // the server's own move for the accepted order version
         const secondResult = await batches[second]();
         expect(secondResult.rejected).toEqual([]);
         expect(secondResult.conflicts.map((c) => `${c.entity}/${c.id}`).sort()).toEqual(["order/oA", "product/p1"]); // stale copies: reported, applied
 
         // Stock = opening - the order's units, not minus 3 twice; the list shows the server's one move, never the phones' two.
         expect(await stockNow()).toBe(7);
-        expect(await moveIds()).toEqual([serverMoveId("oA", acceptedSeq)]);
-        expect((await productNow()).stockMoves[0]).toEqual({ id: serverMoveId("oA", acceptedSeq), delta: -3, reason: "orderConfirmed", orderId: "oA", note: null, at: SERVER_NOW.toISOString() });
+        expect(await moveIds()).toEqual([serverMove.id]);
+        expect(serverMove).toEqual({ id: expect.stringMatching(UUID_SHAPE), delta: -3, reason: "orderConfirmed", orderId: "oA", note: null, at: SERVER_NOW.toISOString() });
         expect(await rowsNow("oA")).toEqual({ p1: 3 });
         expect((await orderNow("oA")).stockDeducted).toEqual({ p1: 3 });
         expect(await opsNow("id:ma", "id:mb")).toEqual({ "id:ma": "ignored", "id:mb": "ignored" });
-        expect(await opsNow(`id:${serverMoveId("oA", acceptedSeq)}`)).toEqual({ [`id:${serverMoveId("oA", acceptedSeq)}`]: "applied" }); // the server's own move is recorded too
+        expect(await opsNow(`id:${serverMove.id}`)).toEqual({ [`id:${serverMove.id}`]: "applied" }); // the server's own move is recorded too
 
         // Both phones cancel from their copy of the confirmed order (each with its own give-back move): restored once.
         const cancel = (phone: Phone, moveId: string, minute: number) =>
@@ -219,7 +217,7 @@ describe("F1 / two devices doing the same order transition take its stock once",
     await push(ownerPhone, confirmBatch("mA", "oA", 3, 1));
     for (const member of [ownerPhone.member, preparePhone.member, ordersPhone.member]) {
       const pulled = (await pullForMember(sql, SHOP_ID, member, cursor)).changes;
-      expect(pulled.map((c) => `${c.entity}/${c.id}`)).toEqual(["order/oA", "product/p1"]); // the order first, then the product its move names
+      expect(pulled.map((c) => `${c.entity}/${c.id}`)).toEqual(["product/p1", "order/oA"]); // the product first, then the order that moved it (fourth review, R1)
       const product = pulled.find((c) => c.entity === "product")!;
       expect(product.data.stockQuantity).toBe(7);
       expect((product.data.stockMoves as { orderId: string }[]).map((m) => m.orderId)).toEqual(["oA"]);
@@ -464,9 +462,10 @@ describe("released apps / no ledger, order-driven moves on the product: still de
     expect(await push(ownerPhone, batch)).toEqual({ conflicts: [], rejected: [] });
     expect(await stockNow()).toBe(7);
     expect(await rowsNow("oNew")).toEqual({ p1: 3 });
-    // The phones apply a pull in seq order; the order must come before the product whose move names it, and customers/new products stay in front.
+    // The phones apply a pull in seq order, and an installed Android app keeps a null link for an order line whose product it
+    // has not got yet (fourth review, R1): the product comes before the order whose line names it, however the batch was applied.
     const pulled = (await pullForMember(sql, SHOP_ID, ownerPhone.member, 0)).changes.map((c) => `${c.entity}/${c.id}`);
-    expect(pulled.indexOf("order/oNew")).toBeLessThan(pulled.indexOf("product/p1"));
+    expect(pulled.indexOf("product/p1")).toBeLessThan(pulled.indexOf("order/oNew"));
   });
 
   it("customers and new products keep their place before the orders of the same batch (the phones apply a pull in seq order)", async () => {
@@ -478,7 +477,8 @@ describe("released apps / no ledger, order-driven moves on the product: still de
       ch("order", "oC", ORDER("confirmed", 3, 1, undefined, { customerId: "cNew" }), 0),
     ]);
     const order = (await pullForMember(sql, SHOP_ID, ownerPhone.member, cursor)).changes.map((c) => `${c.entity}/${c.id}`);
-    expect(order).toEqual(["product/pNew", "customer/cNew", "order/oC", "product/p1"]);
+    // The order was applied first in the batch (its move had to be judged against it), then written again after p1 (R1).
+    expect(order).toEqual(["product/pNew", "customer/cNew", "product/p1", "order/oC"]);
   });
 
   it("an iOS-shaped push (uppercase ids everywhere) is deducted and restored once, and its replay is known by the lowercase key", async () => {
@@ -904,5 +904,164 @@ describe("L2 / different orders on stale devices, retries, order before product,
     await expect(pushChanges(racingOn(ONE_RECORD_READ, keepsEditing, 100), SHOP_ID, preparePhone.member, [ch("product", "p1", PRODUCT(8, [b]), base.p1)], STAFF_ID, { now: serverNow })).rejects.toThrow(/kept changing/);
     expect(await stockNow()).toBe(10);
     expect(await opsNow("id:b")).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Fourth review (3 Oct 2026), R1, server side: the phones apply a pull in seq order, and an installed Android app keeps a null
+// link for an order line whose product it has not got yet (a fresh join or a reinstall pulls everything). So the products an
+// order moved are given their seqs BEFORE the order: inside the atomic write (sync_apply), and, for the phone that pushes the
+// product in the same batch (it is written after the order so its move is judged against it), by writing the order's seq again
+// once the batch is done. Conflicts and everything else keep their meaning. The Android fix (links kept and resolved later) is
+// the real one; this only stops the new server from making the unlucky order routine.
+describe("R1 / a pull delivers the product an order moved before the order", () => {
+  const RETOUCH = /update orderat\.records\s+set seq = nextval[\s\S]*and seq = \$4/;
+  const kinds = async (cursor: number, member: Member = ownerPhone.member) => (await pullForMember(sql, SHOP_ID, member, cursor)).changes.map((c) => `${c.entity}/${c.id}`);
+  const cursorNow = async () => (await pullForMember(sql, SHOP_ID, ownerPhone.member, 0)).cursor;
+  /** Counts the statements that give a record a fresh seq without writing it (the order written again after its products). */
+  function counting(onRetouch?: () => Promise<unknown>): { client: SqlClient; retouches: () => number } {
+    let n = 0;
+    return {
+      client: {
+        async query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> {
+          if (RETOUCH.test(text)) {
+            n += 1;
+            if (onRetouch) await onRetouch();
+          }
+          return sql.query<T>(text, params);
+        },
+      },
+      retouches: () => n,
+    };
+  }
+
+  it("an order pushed alone (a phone that pushes no product): the order's own atomic write moves the product first", async () => {
+    const cursor = await cursorNow();
+    expect(await push(preparePhone, [ch("order", "oA", ORDER("confirmed", 3, 1, { p1: 3 }), base.oA)])).toEqual({ conflicts: [], rejected: [] });
+    expect(await stockNow()).toBe(7);
+    expect(await kinds(cursor)).toEqual(["product/p1", "order/oA"]);
+    expect(await seqOf("product", "p1")).toBeLessThan(await seqOf("order", "oA"));
+  });
+
+  for (const phone of [ownerPhone, ordersPhone, preparePhone]) {
+    it(`${phone.name}: the confirm batch a phone really pushes (its product, then the order) pulls the product first, to every device and on a fresh pull`, async () => {
+      const cursor = await cursorNow();
+      expect(await push(phone, confirmBatch("mA", "oA", 3, 1))).toEqual({ conflicts: [], rejected: [] }); // no conflict with itself
+      expect(await stockNow()).toBe(7);
+      for (const member of [ownerPhone.member, preparePhone.member, ordersPhone.member]) {
+        expect(await kinds(cursor, member)).toEqual(["product/p1", "order/oA"]);
+      }
+      const all = await kinds(0);
+      expect(all.indexOf("product/p1")).toBeLessThan(all.indexOf("order/oA")); // a reinstall pulls the product first
+      // The phone that pushed it applies the pull and carries on: its next push of the order is based on the seq it pulled.
+      const pulledOrder = (await pullForMember(sql, SHOP_ID, phone.member, cursor)).changes.find((c) => c.entity === "order")!;
+      expect(pulledOrder.seq).toBe(await seqOf("order", "oA"));
+      const next = await push(phone, [ch("order", "oA", ORDER("confirmed", 3, 5, { p1: 3 }, { notes: "later" }), pulledOrder.seq)]);
+      expect(next).toEqual({ conflicts: [], rejected: [] });
+    });
+  }
+
+  it("a second phone's confirm of the same order (no stock to move: its product push only rewrites the product): still the product first", async () => {
+    await push(ownerPhone, confirmBatch("mA", "oA", 3, 1));
+    const cursor = await cursorNow();
+    const second = await push(preparePhone, confirmBatch("mB", "oA", 3, 2));
+    expect(second.conflicts.map((c) => `${c.entity}/${c.id}`).sort()).toEqual(["order/oA", "product/p1"]); // stale copies: reported as before
+    expect(await stockNow()).toBe(7);
+    expect(await kinds(cursor)).toEqual(["product/p1", "order/oA"]);
+  });
+
+  it("a released phone's batch (no ledger: its move is applied by the product push): the product first as well", async () => {
+    const cursor = await cursorNow();
+    await push(ownerPhone, [ch("product", "p1", PRODUCT(7, [mv("m1", -3, "orderConfirmed", "oA", 1)]), base.p1), ch("order", "oA", ORDER("confirmed", 3, 1), base.oA)]);
+    expect(await stockNow()).toBe(7);
+    expect(await kinds(cursor)).toEqual(["product/p1", "order/oA"]);
+  });
+
+  it("two orders on one product in one batch: both come after the product, in the batch's order", async () => {
+    const cursor = await cursorNow();
+    await push(ownerPhone, [
+      ch("product", "p1", PRODUCT(5, [mv("mB", -2, "orderConfirmed", "oB", 2), mv("mA", -3, "orderConfirmed", "oA", 1)]), base.p1),
+      ch("order", "oA", ORDER("confirmed", 3, 1, { p1: 3 }), base.oA),
+      ch("order", "oB", ORDER("confirmed", 2, 2, { p1: 2 }), base.oB),
+    ]);
+    expect(await stockNow()).toBe(5);
+    expect(await kinds(cursor)).toEqual(["product/p1", "order/oA", "order/oB"]);
+  });
+
+  it("a cancel, and an item edit while confirmed, behave the same way", async () => {
+    await push(ownerPhone, confirmBatch("mA", "oA", 3, 1));
+    for (const [units, minute] of [[5, 2], [0, 3]] as const) {
+      const cursor = await cursorNow();
+      const status = units === 0 ? "cancelled" : "confirmed";
+      const ledger: Record<string, number> = units === 0 ? {} : { p1: units };
+      await push(preparePhone, [
+        ch("product", "p1", PRODUCT(10 - units, [mv(`e${minute}`, units === 0 ? 3 : -2, units === 0 ? "orderCancelled" : "orderEdited", "oA", minute)]), await seqOf("product", "p1")),
+        ch("order", "oA", ORDER(status, Math.max(units, 3), minute, ledger), await seqOf("order", "oA")),
+      ]);
+      expect(await kinds(cursor)).toEqual(["product/p1", "order/oA"]);
+    }
+    expect(await stockNow()).toBe(10);
+  });
+
+  it("customers and new products keep their place before the orders, and an existing product named by the order comes before it too", async () => {
+    const cursor = await cursorNow();
+    await push(ownerPhone, [
+      ch("product", "p1", PRODUCT(7, [mv("m1", -3, "orderConfirmed", "oC", 1)]), base.p1),
+      { entity: "product", id: "pNew", data: PRODUCT(4), deleted: false, baseSeq: 0 },
+      { entity: "customer", id: "cNew", data: { name: "Noora", phone: "+97333000001" }, deleted: false, baseSeq: 0 },
+      ch("order", "oC", ORDER("confirmed", 3, 1, undefined, { customerId: "cNew" }), 0),
+    ]);
+    expect(await kinds(cursor)).toEqual(["product/pNew", "customer/cNew", "product/p1", "order/oC"]);
+  });
+
+  it("an order whose products were all written before it needs nothing: a first upload writes no extra seq", async () => {
+    const { client, retouches } = counting();
+    await pushChanges(client, SHOP_ID, ownerPhone.member, [
+      { entity: "customer", id: "c9", data: { name: "x" }, deleted: false, baseSeq: 0 },
+      { entity: "product", id: "p9", data: PRODUCT(5), deleted: false, baseSeq: 0 },
+      { entity: "order", id: "o9", data: { ...ORDER("newOrder", 1, 0), items: [{ id: "i1", productId: "p9", nameSnapshot: "Cake", quantity: 1, unitPriceMinor: 6500, unitCostMinor: 2500 }] }, deleted: false, baseSeq: 0 },
+    ], OWNER_ID, { now: serverNow });
+    expect(retouches()).toBe(0);
+    const all = await kinds(0);
+    expect(all.indexOf("product/p9")).toBeLessThan(all.indexOf("order/o9"));
+    // An order with no product lines, or lines with no product, has nothing to be after.
+    const none = counting();
+    await pushChanges(none.client, SHOP_ID, ownerPhone.member, [{ entity: "order", id: "o10", data: { ...ORDER("newOrder", 1, 0), items: [{ id: "i1", productId: null, nameSnapshot: "Custom", quantity: 1, unitPriceMinor: 100, unitCostMinor: 0 }] }, deleted: false, baseSeq: 0 }], OWNER_ID, { now: serverNow });
+    expect(none.retouches()).toBe(0);
+  });
+
+  it("the seq is the only thing written again: the order's data, updated_by and updated_at stay as the push wrote them", async () => {
+    await push(ownerPhone, confirmBatch("mA", "oA", 3, 1));
+    const [row] = await sql.query<{ updated_by: string; updated_at: Date; data: Record<string, unknown> }>(`select updated_by, updated_at, data from orderat.records where shop_id = $1 and entity = 'order' and id = 'oA'`, [SHOP_ID]);
+    expect(row!.updated_by).toBe(OWNER_ID);
+    expect(row!.data).toMatchObject({ status: "confirmed", stockDeducted: { p1: 3 } });
+    const pulled = (await pullForMember(sql, SHOP_ID, ownerPhone.member, 0)).changes.find((c) => c.entity === "order" && c.id === "oA")!;
+    expect(new Date(pulled.updatedAt).getTime()).toBe(row!.updated_at.getTime());
+  });
+
+  it("another phone's write to the order that lands just before the order is written again is never overwritten: the seq is only moved while the order is as this push left it", async () => {
+    const other = async () => {
+      expect((await push(ordersPhone, [ch("order", "oA", ORDER("confirmed", 3, 9, { p1: 3 }, { notes: "another phone" }), await seqOf("order", "oA"))])).rejected).toEqual([]);
+    };
+    const { client, retouches } = counting(other);
+    await pushChanges(client, SHOP_ID, ownerPhone.member, confirmBatch("mA", "oA", 3, 1), OWNER_ID, { now: serverNow });
+    expect(retouches()).toBe(1);
+    expect(await orderNow("oA")).toMatchObject({ notes: "another phone", stockDeducted: { p1: 3 } }); // its write stands
+    expect(await stockNow()).toBe(7);
+    // That write carried no product, but it is after the product anyway: a pull still lists the product first.
+    const all = await kinds(0);
+    expect(all.indexOf("product/p1")).toBeLessThan(all.indexOf("order/oA"));
+  });
+
+  it("the stock and the ledgers are what they were: two devices, retries and a cancel (F1 acceptance) end where they did", async () => {
+    await push(ownerPhone, confirmBatch("mA", "oA", 3, 1));
+    await push(preparePhone, confirmBatch("mB", "oA", 3, 2));
+    await push(ownerPhone, confirmBatch("mA", "oA", 3, 1));
+    expect(await stockNow()).toBe(7);
+    expect(await rowsNow("oA")).toEqual({ p1: 3 });
+    await push(ownerPhone, [ch("order", "oA", ORDER("cancelled", 3, 3, {}), await seqOf("order", "oA")), ch("product", "p1", PRODUCT(10, [mv("cA", 3, "orderCancelled", "oA", 3)]), await seqOf("product", "p1"))]);
+    expect(await stockNow()).toBe(10);
+    expect((await orderNow("oA")).stockDeducted).toEqual({});
+    expect(await moveIds()).toHaveLength(2);
   });
 });

@@ -5,11 +5,12 @@
 
 import type { SqlClient } from "../agent/postgres-store.ts";
 import type { Member } from "./permissions.ts";
+import { isPlainObject } from "./json-equal.ts";
 import { canPull, decidePush, productAccess, type Entity, type PushDecision } from "./record-access.ts";
 import { gatherProductFacts, planStockForOrder } from "./stock-apply.ts";
 import { ledgerOf } from "./stock-ledger.ts";
 import { namesAnyOrder } from "./stock-merge.ts";
-import { findRecord, findRecordsByIds, pullRecords, writeAtomic, writeRecordIfUnchanged, type AtomicWrite, type RecordRow } from "./store.ts";
+import { findRecord, findRecordsByIds, pullRecords, resequenceRecordIfUnchanged, writeAtomic, writeRecordIfUnchanged, type AtomicWrite, type RecordRow } from "./store.ts";
 import type { ChangeInput } from "./validate.ts";
 
 export interface Conflict {
@@ -75,6 +76,13 @@ export interface PushOptions {
  * own order. An order write whose record carries a ledger, and a product write that has stock bookkeeping to
  * record, are single atomic units spanning several rows (store.ts writeAtomic) inside the same
  * compare-and-swap retry.
+ *
+ * Seq order of an order and its products (fourth review, R1): an installed Android app applies a pull in seq order and
+ * keeps a null link for an order line whose product it has not got yet, so the products of an order must have lower seqs
+ * than the order. The atomic write of an order draws its products' seqs first (sync_apply). The product a phone pushes
+ * in the same batch is written after the order (above), so once the batch is done every order it wrote whose products
+ * now have a higher seq is given a fresh seq again (orderAfterItsProducts), and a pull delivers the products first.
+ * Conflicts are reported exactly as before: they are decided when each change is applied.
  */
 export async function pushChanges(
   sql: SqlClient,
@@ -85,12 +93,19 @@ export async function pushChanges(
   options: PushOptions = {},
 ): Promise<PushResult> {
   const now = options.now ?? (() => new Date());
-  const outcomes = new Array<{ conflict?: Conflict; rejected?: Rejected }>(changes.length);
+  const outcomes = new Array<AppliedChange>(changes.length);
 
   const later = await productsAfterTheirOrders(sql, shopId, changes);
   const sequence = [...changes.keys()].filter((i) => !later.has(i)).concat([...later.keys()]);
+  const writtenOrders = new Map<string, RecordRow>();
   for (const index of sequence) {
-    outcomes[index] = await applyChange(sql, shopId, member, changes[index]!, updatedBy, now, later.get(index));
+    const outcome = await applyChange(sql, shopId, member, changes[index]!, updatedBy, now, later.get(index));
+    outcomes[index] = outcome;
+    if (outcome.written && changes[index]!.entity === "order" && !changes[index]!.deleted) writtenOrders.set(outcome.written.id, outcome.written);
+  }
+  // One order alone has its products' seqs below its own already (its atomic write); more than that needs a look.
+  if (writtenOrders.size > 1 || (writtenOrders.size === 1 && changes.some((c) => c.entity === "product"))) {
+    await orderAfterItsProducts(sql, shopId, [...writtenOrders.values()]);
   }
 
   const conflicts: Conflict[] = [];
@@ -118,6 +133,35 @@ async function productsAfterTheirOrders(sql: SqlClient, shopId: string, changes:
   return new Map(naming.filter((i) => existing.has(changes[i]!.id)).map((i) => [i, existing.get(changes[i]!.id)!]));
 }
 
+/** The product ids on an order's lines, each once (a line with no product, or with a product id that is not text, has none). */
+function lineProductIds(items: unknown): string[] {
+  if (!Array.isArray(items)) return [];
+  return [...new Set(items.filter(isPlainObject).map((line) => line.productId).filter((id): id is string => typeof id === "string" && id.length > 0))];
+}
+
+/** Gives each of these orders (as this batch wrote them) a fresh seq, nothing else of it touched, when a product on one of its
+ * lines now has a higher seq: the product the phone pushed in the same batch (written after the order so its stock move is
+ * judged against it), or a product another order of the batch moved. Only while the order is still as the batch left it: an
+ * order another write changed since keeps that write and its seq (which is later than the products' anyway). */
+async function orderAfterItsProducts(sql: SqlClient, shopId: string, orders: RecordRow[]): Promise<void> {
+  const linked = new Map(orders.map((order) => [order.id, lineProductIds(order.data.items)]));
+  const productIds = [...new Set([...linked.values()].flat())];
+  if (productIds.length === 0) return;
+  const seqs = new Map((await findRecordsByIds(sql, shopId, "product", productIds)).filter((record) => !record.deleted).map((record) => [record.id, record.seq]));
+  for (const order of orders) {
+    if (linked.get(order.id)!.some((productId) => (seqs.get(productId) ?? 0) > order.seq)) {
+      await resequenceRecordIfUnchanged(sql, shopId, "order", order.id, order.seq);
+    }
+  }
+}
+
+/** What applying one change came to: a refusal, or the row as written (with the conflict it was written over, if any). */
+interface AppliedChange {
+  conflict?: Conflict;
+  rejected?: Rejected;
+  written?: RecordRow;
+}
+
 /** One change of pushChanges: read, decide and write, again from the read whenever the write finds the
  * record changed since. */
 async function applyChange(
@@ -128,7 +172,7 @@ async function applyChange(
   updatedBy: string,
   now: () => Date,
   seqBeforeBatch?: number,
-): Promise<{ conflict?: Conflict; rejected?: Rejected }> {
+): Promise<AppliedChange> {
   for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
     const existing = await findRecord(sql, shopId, change.entity, change.id);
     const stored = existing ? { data: existing.data, deleted: existing.deleted } : undefined;
@@ -155,7 +199,7 @@ async function applyChange(
     if (!written) continue; // Another write landed since the read: decide again on the record as it is now.
 
     const previousSeq = seqBeforeBatch ?? existing?.seq ?? 0;
-    return previousSeq > (change.baseSeq ?? 0) ? { conflict: { entity: change.entity, id: change.id, seq: previousSeq } } : {};
+    return previousSeq > (change.baseSeq ?? 0) ? { conflict: { entity: change.entity, id: change.id, seq: previousSeq }, written } : { written };
   }
   throw new Error(`sync push: a ${change.entity} record kept changing while it was written (${MAX_WRITE_ATTEMPTS} attempts)`);
 }
