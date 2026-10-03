@@ -128,6 +128,11 @@ function isOrderLinked(m: Json): boolean {
   return typeof m.reason === "string" && ORDER_STOCK_REASONS.has(m.reason) && typeof m.orderId === "string" && m.orderId.length > 0;
 }
 
+/** Whether an order-driven move is a whole, non-zero step in the direction its reason has (a confirm takes, a cancel gives back). */
+function isWholeStep(m: Json): boolean {
+  return typeof m.delta === "number" && Number.isInteger(m.delta) && m.delta !== 0 && hasReasonDirection(m);
+}
+
 /** The direction each order reason moves stock: a confirm takes, a cancel gives back, an edit either way. */
 function hasReasonDirection(m: Json): boolean {
   const delta = m.delta as number;
@@ -281,6 +286,21 @@ export function planProductPush(productId: string, stored: Json, incoming: Json,
   const orderStock = new Map<string, OrderStockWrite>();
   let delta = 0;
 
+  // What the moves of one order and product in this push come to (pairKey -> the applied units after all of them). A phone that was
+  // offline, or edited twice inside the sync debounce, pushes every move since its last sync together with the order as it is NOW:
+  // [confirm -3, edit +2] on an order that now holds 1 unit passes through 3 and ends at 1. What stock may move for an order is bounded by
+  // what the order holds, and that bound is on the state the moves come to, not on each state on the way (the net is all that reaches
+  // the stock). A pair whose moves come to a state within the order is applied whole; one that does not is judged move by move, below.
+  const comesTo = new Map<string, number>();
+  for (const move of fresh) {
+    const key = moveKey(move);
+    if (!storable(key) || facts.knownOps.has(key) || !isOrderLinked(move)) continue;
+    const order = facts.orders.get(move.orderId as string);
+    if (!order || order.ledgerBacked || !isWholeStep(move)) continue;
+    const pair = pairKey(move.orderId as string, productId);
+    comesTo.set(pair, (comesTo.get(pair) ?? facts.applied.get(pair) ?? netTakenByMoves(storedMoves, move.orderId as string)) - (move.delta as number));
+  }
+
   for (const move of fresh) {
     const key = moveKey(move);
     if (!storable(key)) continue; // A key no index row can hold: skipped, not applied and not recorded.
@@ -302,18 +322,20 @@ export function planProductPush(productId: string, stored: Json, incoming: Json,
       ops.push({ opId: key, outcome: "ignored" }); // The server owns this order's stock.
       continue;
     }
-    if (typeof move.delta !== "number" || !Number.isInteger(move.delta) || move.delta === 0 || !hasReasonDirection(move)) continue;
+    if (!isWholeStep(move)) continue;
 
     const pair = pairKey(orderId, productId);
     const before = state.get(pair) ?? facts.applied.get(pair) ?? netTakenByMoves(storedMoves, orderId);
-    const after = before - move.delta;
-    if (after < 0 || after > (order.units.get(productId) ?? 0)) continue; // Not what this order can have taken.
+    const after = before - (move.delta as number);
+    const room = order.units.get(productId) ?? 0;
+    const within = (units: number | undefined) => units !== undefined && units >= 0 && units <= room;
+    if (!within(after) && !within(comesTo.get(pair))) continue; // Not what this order can have taken, on the way or in the end.
 
     state.set(pair, after);
     deps.set(orderId, order.seq);
     applied.push(move);
     ops.push({ opId: key, outcome: "applied" });
-    delta += move.delta;
+    delta += move.delta as number;
     orderStock.set(pair, { orderId, productId, expect: facts.applied.get(pair) ?? null, units: after, write: true });
   }
 

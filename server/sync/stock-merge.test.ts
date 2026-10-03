@@ -259,6 +259,73 @@ describe("planProductPush / F2: an order-driven move only counts when its order 
     expect(ids(tight.data)).toEqual(["c"]);
   });
 
+  // Final verification, 3 Oct 2026: a released phone that was offline (or edited twice inside the sync debounce) pushes every move
+  // since its last sync together with the order's FINAL lines. What the server may take or give back for the order is bounded by what
+  // the order holds, and that bound is on the state the moves come to, not on every state on the way: [confirm -3, edit +2] on an
+  // order that now holds 1 unit passes through 3 and ends at 1.
+  describe("the moves of one order and product in one push are judged by the state they come to", () => {
+    const m = (id: string, delta: number, minute: number, reason: string, orderId = "o-c") => move(id, delta, minute, reason, orderId);
+    const run = (moves: Json[], units: number, extra: { applied?: Record<string, number>; stored?: Json } = {}, mayEdit = false) =>
+      plan(extra.stored ?? product(10, []), product(0, [...moves].reverse()), mayEdit, facts({ orders: { "o-c": { units } }, applied: extra.applied }))!;
+
+    it("confirm 3 then edit down to 1 (+2): the order holds 1, so 1 is taken, not 0", () => {
+      const result = run([m("c", -3, 1, "orderConfirmed"), m("e", 2, 2, "orderEdited")], 1);
+      expect(result.data.stockQuantity).toBe(9);
+      expect(ids(result.data)).toEqual(["e", "c"]);
+      expect(result.orderStock).toEqual([{ orderId: "o-c", productId: "p1", expect: null, units: 1, write: true }]);
+      expect(result.ops.map((o) => o.outcome)).toEqual(["applied", "applied"]);
+    });
+
+    it("an order that holds 2 (applied) edited up to 5 and down to 3 in one push: 3 are taken in all", () => {
+      const result = run([m("up", -3, 1, "orderEdited"), m("down", 2, 2, "orderEdited")], 3, { applied: { "o-c": 2 }, stored: product(8, []) });
+      expect(result.data.stockQuantity).toBe(7);
+      expect(result.orderStock).toEqual([{ orderId: "o-c", productId: "p1", expect: 2, units: 3, write: true }]);
+    });
+
+    it("confirm 3, edit down to 2, cancel in one push: everything comes back; a staff member who only prepares gets the same", () => {
+      const moves = [m("c", -3, 1, "orderConfirmed"), m("e", 1, 2, "orderEdited"), m("x", 2, 3, "orderCancelled")];
+      for (const mayEdit of [true, false]) expect(run(moves, 2, {}, mayEdit).data.stockQuantity).toBe(10);
+    });
+
+    it("an intermediate state beyond the order is fine, a final one is not: [-1000, +998] on an order of 2 nets to the 2 it holds; [-1000, +900] does not", () => {
+      const fine = run([m("big", -1000, 1, "orderConfirmed"), m("back", 998, 2, "orderCancelled")], 2);
+      expect(fine.data.stockQuantity).toBe(8); // the net, 2, is what stock moves by
+      const inflated = run([m("big", -1000, 1, "orderConfirmed"), m("back", 900, 2, "orderCancelled")], 2);
+      expect(inflated.data.stockQuantity).toBe(10); // 100 would be taken for an order of 2: judged move by move as before: neither fits
+      expect(inflated.ops).toEqual([]);
+    });
+
+    it("a state that comes to less than nothing, or more than the order holds, is judged move by move as before", () => {
+      // Net -2 for an order of 1 unit: the first move fits (1 <= 1)... confirm -1 lands, the edit -1 would take it to 2 and does not.
+      const tight = run([m("c", -1, 1, "orderConfirmed"), m("e", -1, 2, "orderEdited")], 1);
+      expect(tight.data.stockQuantity).toBe(9);
+      expect(ids(tight.data)).toEqual(["c"]);
+      // A cancel of more than was taken: nothing to give back.
+      expect(run([m("x", 3, 1, "orderCancelled")], 5).data.stockQuantity).toBe(10);
+    });
+
+    it("moves of different orders and products are judged each on its own state, in the order they came", () => {
+      const other = move("o2", -2, 3, "orderConfirmed", "o-d");
+      const f = facts({ orders: { "o-c": { units: 1 }, "o-d": { units: 2 } } });
+      const result = planProductPush("p1", product(10, []), product(0, [other, m("e", 2, 2, "orderEdited"), m("c", -3, 1, "orderConfirmed")]), false, f)!;
+      expect(result.data.stockQuantity).toBe(7); // -1 for o-c, -2 for o-d
+      expect(ids(result.data)).toEqual(["o2", "e", "c"]);
+    });
+
+    it("a move whose direction is wrong for its reason does not take part: [confirm -3, confirm +1 (invalid), edit +2]", () => {
+      const result = run([m("c", -3, 1, "orderConfirmed"), m("bad", 1, 2, "orderConfirmed"), m("e", 2, 3, "orderEdited")], 1);
+      expect(result.data.stockQuantity).toBe(9);
+      expect(ids(result.data)).toEqual(["e", "c"]);
+    });
+
+    it("a ledger-backed order is untouched by this: its moves are still ignored and the server owns its stock", () => {
+      const f = facts({ orders: { "o-c": { units: 1, ledger: true, seq: 7 } } });
+      const result = planProductPush("p1", product(10, []), product(0, [m("e", 2, 2, "orderEdited"), m("c", -3, 1, "orderConfirmed")]), false, f)!;
+      expect(result.data.stockQuantity).toBe(10);
+      expect(result.ops.map((o) => o.outcome)).toEqual(["ignored", "ignored"]);
+    });
+  });
+
   it("an order from before the server's own books (no allocation row): what the product's stored moves say is the start", () => {
     const earlier = move("old", -3, 1, "orderConfirmed", "o-x");
     const withIt = product(7, [earlier]);
