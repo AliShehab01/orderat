@@ -516,6 +516,87 @@ describe("R3 / the order stock ledger through a real push", () => {
     expect((await pushChanges(sql, SHOP_ID, owner, [change({ entity: "order", id: "o1", data: fromOlderPhone })], OWNER_ID)).rejected).toEqual([]);
     expect(await orderNow()).toEqual({ ...edited, notes: "Edited on an older phone" });
   });
+
+  // Second review (3 Oct 2026), L1: a missing ledger never clears a stored one.
+  it("L1 acceptance: stored {p1: 3}, a prepare-only 'ready' push without the key leaves it, and a later cancel gives back exactly 3", async () => {
+    const member = staff({ prepare: true });
+    const confirmed = { ...ORDER, status: "confirmed", changes: [statusEntry("h1", "newOrder", "confirmed")], stockDeducted: { p1: 3 }, updatedAt: "2026-10-03T08:01:00.000Z" };
+    const took = { ...PRODUCT, stockQuantity: 7, stockMoves: [move("m1", -3, "orderConfirmed")] };
+    expect(await pushChanges(sql, SHOP_ID, member, [await fresh("product", "p1", took), await fresh("order", "o1", confirmed)], STAFF_ID)).toEqual({ conflicts: [], rejected: [] });
+
+    // An older app (or a stale copy) moves the order on: it does not know the ledger and sends none.
+    const { stockDeducted: _unknown, ...withoutLedger } = confirmed;
+    void _unknown;
+    const ready = { ...withoutLedger, status: "ready", changes: [...confirmed.changes, statusEntry("h2", "confirmed", "ready")], updatedAt: "2026-10-03T08:02:00.000Z" };
+    expect((await pushChanges(sql, SHOP_ID, member, [await fresh("order", "o1", ready)], STAFF_ID)).rejected).toEqual([]);
+    expect(await orderNow()).toEqual({ ...ready, stockDeducted: { p1: 3 } });
+
+    // The cancel gives back exactly 3, and writes {}.
+    const cancelled = { ...ready, status: "cancelled", stockDeducted: {}, changes: [...ready.changes, statusEntry("h3", "ready", "cancelled")], updatedAt: "2026-10-03T08:03:00.000Z" };
+    const gaveBack = { ...took, stockQuantity: 10, stockMoves: [move("m2", 3, "orderCancelled"), ...took.stockMoves] };
+    expect(await pushChanges(sql, SHOP_ID, member, [await fresh("product", "p1", gaveBack), await fresh("order", "o1", cancelled)], STAFF_ID)).toEqual({ conflicts: [], rejected: [] });
+    expect((await orderNow()).stockDeducted).toEqual({});
+    expect((await productNow()).stockQuantity).toBe(10);
+  });
+
+  it("L1: a whole-order push (owner, orders staff) that leaves the key out keeps the stored ledger; an explicit {} clears it", async () => {
+    const confirmed = { ...ORDER, status: "confirmed", stockDeducted: { p1: 3 } };
+    await pushChanges(sql, SHOP_ID, owner, [change({ entity: "order", id: "o1", data: confirmed })], OWNER_ID);
+    for (const [member, by] of [[owner, OWNER_ID], [staff({ orders: true }), STAFF_ID]] as const) {
+      const { stockDeducted: _unknown, ...fromOlderApp } = confirmed;
+      void _unknown;
+      const edit = { ...fromOlderApp, notes: `Edited by ${by}` };
+      expect((await pushChanges(sql, SHOP_ID, member, [await fresh("order", "o1", edit)], by)).rejected).toEqual([]);
+      expect(await orderNow()).toEqual({ ...edit, stockDeducted: { p1: 3 } });
+    }
+    expect((await pushChanges(sql, SHOP_ID, owner, [await fresh("order", "o1", { ...confirmed, status: "cancelled", stockDeducted: {} })], OWNER_ID)).rejected).toEqual([]);
+    expect((await orderNow()).stockDeducted).toEqual({});
+  });
+
+  // L3: a prepare-only push may only write a ledger that fits the stored order.
+  it("L3 acceptance: {p1: 3} to an unrelated 1,000,000 by prepare-only staff leaves {p1: 3}, and the rest of the push is still handled", async () => {
+    const member = staff({ prepare: true });
+    const confirmed = { ...ORDER, status: "confirmed", changes: [statusEntry("h1", "newOrder", "confirmed")], stockDeducted: { p1: 3 }, updatedAt: "2026-10-03T08:01:00.000Z" };
+    await pushChanges(sql, SHOP_ID, owner, [change({ entity: "order", id: "o1", data: confirmed })], OWNER_ID);
+
+    // Nothing but the ledger differs, and it fits no rule: the stored order is what comes back out.
+    const forged = { ...confirmed, stockDeducted: { unrelated: 1_000_000 } };
+    expect((await pushChanges(sql, SHOP_ID, member, [await fresh("order", "o1", forged)], STAFF_ID)).rejected).toEqual([]);
+    expect(await orderNow()).toEqual(confirmed);
+
+    // The status moves on in the same push: that is handled as today, the forged ledger is not.
+    const ready = { ...forged, status: "ready", changes: [...confirmed.changes, statusEntry("h2", "confirmed", "ready")], updatedAt: "2026-10-03T08:02:00.000Z" };
+    expect((await pushChanges(sql, SHOP_ID, member, [await fresh("order", "o1", ready)], STAFF_ID)).rejected).toEqual([]);
+    expect(await orderNow()).toEqual({ ...ready, stockDeducted: { p1: 3 } });
+  });
+
+  it("L3: inflated quantities are ignored on confirm; a ledger that fits the stored order is taken", async () => {
+    const member = staff({ prepare: true });
+    const inflated = { ...ORDER, status: "confirmed", changes: [statusEntry("h1", "newOrder", "confirmed")], stockDeducted: { p1: 1_000_000 } };
+    expect((await pushChanges(sql, SHOP_ID, member, [await fresh("order", "o1", inflated)], STAFF_ID)).rejected).toEqual([]);
+    const afterInflated = await orderNow();
+    expect(afterInflated.status).toBe("confirmed");
+    expect("stockDeducted" in afterInflated).toBe(false);
+    // A legacy order (no ledger) staying deducted may get the ledger the phone derived, when it fits the lines.
+    const derived = { ...inflated, status: "ready", stockDeducted: { p1: 3 }, changes: [...inflated.changes, statusEntry("h2", "confirmed", "ready")] };
+    expect((await pushChanges(sql, SHOP_ID, member, [await fresh("order", "o1", derived)], STAFF_ID)).rejected).toEqual([]);
+    expect((await orderNow()).stockDeducted).toEqual({ p1: 3 });
+  });
+
+  it("L3: restore after tracking was switched off still works: the order took 3, the product no longer tracks, cancel gives them back", async () => {
+    const member = staff({ prepare: true });
+    const confirmed = { ...ORDER, status: "confirmed", changes: [statusEntry("h1", "newOrder", "confirmed")], stockDeducted: { p1: 3 }, updatedAt: "2026-10-03T08:01:00.000Z" };
+    const took = { ...PRODUCT, stockQuantity: 7, stockMoves: [move("m1", -3, "orderConfirmed")] };
+    await pushChanges(sql, SHOP_ID, member, [await fresh("product", "p1", took), await fresh("order", "o1", confirmed)], STAFF_ID);
+    // The owner switches the product's tracking off (stock stays 7), then someone cancels the order.
+    const untracked = { ...took, trackStock: false };
+    await pushChanges(sql, SHOP_ID, owner, [await fresh("product", "p1", untracked)], OWNER_ID);
+    const cancelled = { ...confirmed, status: "cancelled", stockDeducted: {}, changes: [...confirmed.changes, statusEntry("h2", "confirmed", "cancelled")], updatedAt: "2026-10-03T08:03:00.000Z" };
+    const gaveBack = { ...untracked, stockQuantity: 10, stockMoves: [move("m2", 3, "orderCancelled"), ...took.stockMoves] };
+    expect(await pushChanges(sql, SHOP_ID, member, [await fresh("product", "p1", gaveBack), await fresh("order", "o1", cancelled)], STAFF_ID)).toEqual({ conflicts: [], rejected: [] });
+    expect(await orderNow()).toEqual(cancelled);
+    expect((await productNow()).stockQuantity).toBe(10);
+  });
 });
 
 describe("pullForMember / pagination", () => {

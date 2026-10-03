@@ -23,7 +23,8 @@
 //   - `orders`: full write of orders, customers and occasions (create, edit, delete).
 //   - `prepare` (without `orders`): an *existing* order's status fields only — `status`,
 //     `outForDeliveryAt`, `updatedAt`, the stock ledger `stockDeducted` (confirming and cancelling an
-//     order moves stock, and the ledger records how much), and new `changes` entries about the status
+//     order moves stock, and the ledger records how much; taken only when it fits the stored order,
+//     server/sync/stock-ledger.ts, second review L3), and new `changes` entries about the status
 //     fields. Every other field is kept from the stored record, never trusted from the payload. No
 //     creating or deleting orders.
 //   - `money` (without `orders`): an existing order's money fields only — `payments`, `paymentStatus`,
@@ -32,10 +33,13 @@
 //     Staff with `orders` or `prepare` but not `products` may push an *existing* product when, next to
 //     the stored copy, only its stock changed (isOrderStockUpdate) — so stock stays right when staff
 //     confirm or cancel orders.
+//   - A whole-order push (owner, `orders`) that leaves out `stockDeducted` keeps the stored ledger (L1).
 //   Everything else is refused, and comes back to the phone as a `rejected` entry (server/sync/
 //   push-pull.ts), with the server's copy when the member may pull it.
 
+import { ISO_DATE_RE, isPlainObject, sameJson } from "./json-equal.ts";
 import { hasPermission, type Member } from "./permissions.ts";
+import { acceptPreparedLedger, keepStoredLedger } from "./stock-ledger.ts";
 
 export const ENTITIES = ["shop", "product", "customer", "order", "expense", "occasion", "stock_move", "setting"] as const;
 export type Entity = (typeof ENTITIES)[number];
@@ -122,7 +126,10 @@ export function decidePush(
   deleted: boolean,
   existing: StoredRecord | undefined,
 ): PushDecision {
-  if (member.role === "owner") return allow(incomingData);
+  if (member.role === "owner") {
+    if (entity === "order") return allow(keepStoredLedger(incomingData, existing?.data));
+    return allow(incomingData);
+  }
   switch (entity) {
     case "shop":
     case "setting":
@@ -141,7 +148,7 @@ export function decidePush(
       }
       return FORBIDDEN;
     case "order":
-      if (hasPermission(member, "orders")) return allow(incomingData);
+      if (hasPermission(member, "orders")) return allow(keepStoredLedger(incomingData, existing?.data));
       return mergeOrderFields(member, incomingData, deleted, existing);
     default:
       return FORBIDDEN;
@@ -150,30 +157,9 @@ export function decidePush(
 
 // ---------- Order fields for `prepare` and `money` ----------
 
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T/;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 const isString = (v: unknown) => typeof v === "string";
 const isIsoDateOrNull = (v: unknown) => v === null || (typeof v === "string" && ISO_DATE_RE.test(v) && Number.isFinite(Date.parse(v)));
 const isListOfObjects = (v: unknown) => Array.isArray(v) && v.every(isPlainObject);
-
-/** An order's stock ledger `stockDeducted` (what the order actually took out of each product's stock):
- * { "<productId>": units } with at most 200 keys, each a non-empty string of up to 64 characters, and
- * every value a whole number from 0 to 1,000,000. An empty object is valid: the order takes nothing now. */
-const MAX_LEDGER_KEYS = 200;
-const MAX_LEDGER_KEY_CHARS = 64;
-const MAX_LEDGER_UNITS = 1_000_000;
-const isStockLedger = (v: unknown) => {
-  if (!isPlainObject(v)) return false;
-  const entries = Object.entries(v);
-  return (
-    entries.length <= MAX_LEDGER_KEYS &&
-    entries.every(([key, units]) => key.length >= 1 && key.length <= MAX_LEDGER_KEY_CHARS && typeof units === "number" && Number.isInteger(units) && units >= 0 && units <= MAX_LEDGER_UNITS)
-  );
-};
 
 interface FieldRule {
   valid: (value: unknown) => boolean;
@@ -188,9 +174,6 @@ const PREPARE_FIELDS: Record<string, FieldRule> = {
   // "Out for delivery" (tester feedback, 1 Oct 2026): status stays "ready" on the wire and this key holds
   // when the order left; null or absent once it moves on.
   outForDeliveryAt: { valid: isIsoDateOrNull, optional: true },
-  // What the order took out of stock (3 Oct 2026, integrity review R3): staff who confirm or cancel an
-  // order write the ledger along with the status; owners and `orders` staff store the whole record.
-  stockDeducted: { valid: isStockLedger, optional: true },
   updatedAt: { valid: isString, optional: false },
 };
 const MONEY_FIELDS: Record<string, FieldRule> = {
@@ -223,6 +206,13 @@ function mergeOrderFields(member: Member, incoming: Record<string, unknown>, del
     } else if (rule.optional) {
       delete data[key];
     }
+  }
+  if (prepare) {
+    // What the order took out of stock (3 Oct 2026, integrity review R3): staff who confirm or cancel an
+    // order write the ledger along with the status. Never cleared by leaving it out (L1), and taken only when
+    // it fits the stored order (L3); otherwise the stored ledger stays (stock-ledger.ts).
+    const ledger = acceptPreparedLedger(existing.data, incoming.stockDeducted, data.status);
+    if (ledger !== undefined) data.stockDeducted = ledger;
   }
   const changes = mergeHistory(existing.data.changes, incoming.changes, history);
   if (changes !== undefined) data.changes = changes;
@@ -269,31 +259,6 @@ const STOCK_KEYS = new Set(["stockQuantity", "qty", "stockMoves", "updatedAt"]);
 const ORDER_STOCK_REASONS = new Set(["orderConfirmed", "orderCancelled", "orderEdited"]);
 /** The phones keep the last 50 stock moves (docs/sme-phase-2-cloud.md's product row). */
 const MAX_STOCK_MOVES = 50;
-
-/** Deep equality of JSON values, lenient only where clients legitimately differ in spelling: a missing
- * key equals null, and two ISO date strings are equal when they name the same instant. */
-function sameJson(a: unknown, b: unknown): boolean {
-  if (a === undefined) a = null;
-  if (b === undefined) b = null;
-  if (typeof a === "string" && typeof b === "string") {
-    if (a === b) return true;
-    if (ISO_DATE_RE.test(a) && ISO_DATE_RE.test(b)) {
-      const ta = Date.parse(a), tb = Date.parse(b);
-      return Number.isFinite(ta) && ta === tb;
-    }
-    return false;
-  }
-  if (Array.isArray(a) || Array.isArray(b)) {
-    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => sameJson(x, b[i]));
-  }
-  if (isPlainObject(a) || isPlainObject(b)) {
-    if (!isPlainObject(a) || !isPlainObject(b)) return false;
-    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-    for (const k of keys) if (!sameJson(a[k], b[k])) return false;
-    return true;
-  }
-  return a === b;
-}
 
 function quantityOf(data: Record<string, unknown>): number {
   const v = data.stockQuantity ?? data.qty;
