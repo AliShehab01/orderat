@@ -812,3 +812,56 @@ pending order that survives restarts); the server's part is a mitigation for app
 - **A move trimmed off a product's list before migration 0010 ran** is still unknown to `stock_ops` (nothing can recover
   it); moves in a list when the migration runs, and every move since, are known.
 - **`stock_ops` is durable and uncapped,** one small row per applied or listed move for the life of the shop.
+
+## Final check, 3 Oct 2026 (the last gate before the deploy)
+
+An independent end-to-end check of the merged server (`main` at `b0485a2`) before its first deploy. Phones of every kind are
+simulated against the real HTTP handler on a real (WASM) Postgres: the released iOS 1.0 (its wire shapes and sync rules taken from
+its source at `54abcd9`), the released Android, the live web, and the new iOS, Android and web. The tests are
+`server/sync/verify/` and run with the rest of the suite (`VERIFY_SEEDS=60 npx vitest run server/sync/verify/mixed-fleet.test.ts`
+runs a longer soak). They compare the server and every phone with what the users did (stock, payments, statuses), not with the
+server's own reasoning.
+
+**Fixed: several stock moves of one order in one push (released apps).** The server judged each order-driven move of an app that
+writes no ledger (iOS 1.0, Android 1.5.5, the live web) against the order's FINAL lines, one move at a time. A phone that was
+offline, or edited twice inside the 5-second debounce, pushes every move since its last sync together with the order as it is
+now: confirm 3, then edit down to 1, passes through 3 and ends at 1, and the first move was refused for going beyond the order.
+The server then took the wrong part of it out of stock, and its merged copy replaced the phone's correct count on the same
+sync's pull: one iPhone alone could end with the stock 1 to 3 units too high. The bound now applies to the state the moves of
+one order and product come to; a pair that ends outside 0 and the order's units is judged move by move as before, so a forged or
+inflated move still changes nothing (F2). Before the fix 6 of 150 random one-phone walks failed (released kinds only), none after.
+
+**Checked, nothing found** (each against the real handler, with retries, stale copies and offline stretches):
+- iOS 1.0: first upload of a whole shop (also sent twice), a day of use on two phones (new order, confirm, ready, collect, cancel,
+  un-cancel, edit items up, down, added and removed lines, payments recorded and deleted, product edits, deletes, a mid-sync
+  edit), a staff phone with each of the 16 permission mixes; after every step the second phone holds what the first holds,
+  nothing is rejected, nothing conflicts where nobody wrote concurrently, idle syncs move nothing.
+- Migration 0010 applied the way `hosting-migrate` applies it, by a NON-superuser migration role, with Supabase's `anon`,
+  `authenticated` and `service_role` present (the `if exists (... 'anon')` branches had never run before), on a database filled
+  by the frozen previous server (orders in every status, a product at the 50-move cap, moves without ids, tombstones):
+  records unchanged, `stock_ops` exactly the runtime's keys, idempotent, tables owned by `orderat_app`, functions executable only
+  by `orderat_app` and running as the caller, the new server run as `orderat_app`, old and new phones and invites served on the
+  migrated data, the R4 acceptance on the real file, and a rollback to the previous server and forward again.
+- Deploy order: the new function before the migration answers 500 only for the requests that need it, the phones keep
+  everything dirty and the next sync after the migration goes through once.
+- Mixed fleet: 300+ random walks (six kinds of phone, offline stretches; today's fleet; the next fleet; the new apps with
+  real concurrency) against an oracle for stock, payments and statuses; paging with page sizes 1, 2, 3 and 500 while others
+  write; 1,800 malformed records answering 200; the atomic function returning no row five times and raising inside.
+- Cost: a 200-change push is 2.0 SQL statements per change for plain records (as before), 4 to 5 for stock work, linear in
+  the size of the push and independent of the size of the shop; the first upload of 1,913 records is 3,991 statements against
+  3,876 before; one confirm is 15 statements against 9.
+
+**Found and left (low).** Two records make `orderat.sync_apply` or the stock plan throw, so the request answers 500 on every
+retry (the batch's other records are applied; only that phone's sync is blocked): an order line of more than 2,147,483,647
+units with a move that names it (`order_stock.units` is an integer), and a product whose id is `__proto__` (or another name an
+object already has) named by an order that carries a ledger. No app writes either (iOS caps a quantity at 9,999, the web at 99,
+every id is a UUID); only a hand-made request can. Clamping the units and keying the ledger by a `Map` would close both.
+
+**Rollout notes.**
+- Ship the new web app before, or with, the server: the live web deletes a payment by leaving it out, which the new server does
+  not honour (the payment comes back on its next pull) until the web writes `removedPaymentIds`. iOS 1.0 is not affected.
+- Apply the migration, then deploy `orderat-sync` straight after. Ask any phone that has been offline for a long time to sync
+  first: a move the previous server had already trimmed off a product's list, held by such a phone, is applied again when it
+  pushes (measured: two trimmed `+2` moves came back as `+4`; see "What remains" above).
+- `shops_list` reports `name: null` for a shop an iPhone created (its ids are uppercase UUIDs, the join compares them as lowercase
+  text). Not part of these rounds and cosmetic: the restore picker has no name to show.
