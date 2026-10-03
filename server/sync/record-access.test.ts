@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STAFF_PERMISSIONS, type Member, type Permissions } from "./permissions.ts";
-import { canPull, decidePush, ENTITIES, isOrderStockUpdate, newlyVisibleEntities, type Entity } from "./record-access.ts";
+import { canPull, decidePush, ENTITIES, newlyVisibleEntities, type Entity } from "./record-access.ts";
 
 const staff = (flags: Partial<Permissions>): Member => ({ role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, ...flags } });
 const owner: Member = { role: "owner", permissions: DEFAULT_STAFF_PERMISSIONS }; // Deliberately empty permissions: role alone should be enough.
@@ -171,7 +171,9 @@ describe("decidePush / prepare", () => {
 });
 
 // Staff who confirm or cancel orders without the products permission still move stock (review finding
-// 3 of 29 Sep): a product push that only adds order-driven stock moves and moves the quantity by their sum.
+// 3 of 29 Sep): a product push adds order-driven stock moves. Since the second review (3 Oct, L2) the push is
+// merged onto the stored copy, never refused for being stale (more in stock-merge.test.ts): staff store the
+// stored product plus the order-driven moves their copy adds, and nothing else of what they send.
 describe("decidePush / product stock from staff handling orders", () => {
   const oldMove = { id: "m0", delta: 5, reason: "received", orderId: null, note: null, at: "2026-09-29T10:00:00.000Z" };
   const stored = { nameAr: "كيك", nameEn: null, priceMinor: 5000, trackStock: true, stockQuantity: 10, lowStockThreshold: 3, stockMoves: [oldMove], createdAt: "2026-09-01T00:00:00.000Z" };
@@ -189,10 +191,13 @@ describe("decidePush / product stock from staff handling orders", () => {
     const { nameEn: _omit, ...withoutNameEn } = stored;
     void _omit;
     const incoming = { ...withoutNameEn, createdAt: "2026-09-01T00:00:00Z", stockQuantity: 12, stockMoves: [back, oldMove], updatedAt: "2026-09-30T11:00:00.000Z" };
-    expect(isOrderStockUpdate(stored, incoming)).toBe(true);
+    expect(decidePush(withPrepare, "product", "p1", incoming, false, live(stored))).toEqual({
+      allowed: true,
+      data: { ...stored, stockQuantity: 12, stockMoves: [back, oldMove], updatedAt: "2026-09-30T11:00:00.000Z" },
+    });
   });
 
-  it("still rejects staff without orders or prepare, a new product, a deletion and a deleted product", () => {
+  it("still refuses staff without orders or prepare, a new product, a deletion and a deleted product", () => {
     expect(decidePush(noPerms, "product", "p1", pushed(), false, live(stored))).toEqual(FORBIDDEN);
     expect(decidePush(withMoney, "product", "p1", pushed(), false, live(stored))).toEqual(FORBIDDEN);
     expect(decidePush(withOrders, "product", "p1", pushed(), false, undefined)).toEqual(FORBIDDEN);
@@ -201,26 +206,52 @@ describe("decidePush / product stock from staff handling orders", () => {
     expect(decidePush(withOrders, "product", "p1", pushed(), false, { data: stored, deleted: true })).toEqual(FORBIDDEN);
   });
 
-  it("rejects any change beyond stock: price, name, tracking", () => {
+  it("stores nothing of a price, name or tracking change: those fields stay as stored, the stock moves land", () => {
     for (const change of [{ priceMinor: 1 }, { nameAr: "x" }, { trackStock: false }, { lowStockThreshold: 0 }]) {
-      expect(decidePush(withOrders, "product", "p1", pushed(change), false, live(stored))).toEqual(FORBIDDEN);
+      expect(decidePush(withOrders, "product", "p1", pushed(change), false, live(stored)), JSON.stringify(change)).toEqual({ allowed: true, data: pushed() });
     }
   });
 
-  it("rejects a quantity that does not match the new moves, and manual reasons", () => {
-    expect(isOrderStockUpdate(stored, pushed({ stockQuantity: 100 }))).toBe(false);
-    expect(isOrderStockUpdate(stored, { ...stored, stockQuantity: 100 })).toBe(false);
-    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [{ ...confirm(), reason: "correction" }, oldMove] }))).toBe(false);
-    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [{ ...confirm(), orderId: null }, oldMove] }))).toBe(false);
-    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [{ ...confirm(), delta: -2.5 }, oldMove], stockQuantity: 7.5 }))).toBe(false);
+  it("with no new move there is nothing to store: a change beyond stock is refused as before, a stock-only difference changes nothing", () => {
+    expect(decidePush(withOrders, "product", "p1", { ...stored, priceMinor: 1 }, false, live(stored))).toEqual(FORBIDDEN);
+    expect(decidePush(withOrders, "product", "p1", { ...stored, stockQuantity: 100, priceMinor: 1 }, false, live(stored))).toEqual(FORBIDDEN);
+    expect(decidePush(withOrders, "product", "p1", { ...stored, stockQuantity: 100 }, false, live(stored))).toEqual({ allowed: true, data: stored });
   });
 
-  it("rejects rewriting or dropping stored moves (unless the list is full)", () => {
-    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [confirm(), { ...oldMove, delta: 50 }] }))).toBe(false);
-    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [confirm()] }))).toBe(false);
-    const full = Array.from({ length: 50 }, (_, i) => ({ ...oldMove, id: `h${i}`, delta: 1 }));
+  it("the quantity is the stored one plus the new moves, never the pushed one", () => {
+    expect(decidePush(withOrders, "product", "p1", pushed({ stockQuantity: 100 }), false, live(stored))).toEqual({ allowed: true, data: pushed() });
+    expect(decidePush(withOrders, "product", "p1", pushed({ stockQuantity: 0 }), false, live(stored))).toEqual({ allowed: true, data: pushed() });
+  });
+
+  it("refuses a move that is not order-driven: a manual reason, no order id, no id, a fractional or zero delta", () => {
+    const bad = [
+      { ...confirm(), reason: "correction" },
+      { ...confirm(), orderId: null },
+      { ...confirm(), orderId: "" },
+      { ...confirm(), id: undefined },
+      { ...confirm(), delta: -2.5 },
+      { ...confirm(), delta: 0 },
+      { ...confirm(), delta: "2" },
+    ];
+    for (const move of bad) {
+      expect(decidePush(withOrders, "product", "p1", pushed({ stockMoves: [move, oldMove] }), false, live(stored)), JSON.stringify(move)).toEqual(FORBIDDEN);
+    }
+  });
+
+  it("stored moves stay as stored: a rewritten or dropped one changes nothing, a full list drops its oldest", () => {
+    expect(decidePush(withOrders, "product", "p1", pushed({ stockMoves: [confirm(), { ...oldMove, delta: 50 }] }), false, live(stored))).toEqual({ allowed: true, data: pushed() });
+    expect(decidePush(withOrders, "product", "p1", pushed({ stockMoves: [confirm()] }), false, live(stored))).toEqual({ allowed: true, data: pushed() });
+    const full = Array.from({ length: 50 }, (_, i) => ({ ...oldMove, id: `h${i}`, delta: 1, at: `2026-09-29T09:${String(59 - i).padStart(2, "0")}:00.000Z` }));
     const fullStored = { ...stored, stockMoves: full };
-    expect(isOrderStockUpdate(fullStored, { ...fullStored, stockQuantity: 8, stockMoves: [confirm(), ...full.slice(0, 49)] })).toBe(true);
+    const decision = decidePush(withOrders, "product", "p1", { ...fullStored, stockQuantity: 8, stockMoves: [confirm(), ...full.slice(0, 49)] }, false, live(fullStored));
+    expect(decision).toEqual({ allowed: true, data: { ...fullStored, stockQuantity: 8, stockMoves: [confirm(), ...full.slice(0, 49)] } });
+  });
+
+  it("the owner and staff with products write the product as sent while their copy is up to date for stock", () => {
+    const edited = pushed({ priceMinor: 6000, nameAr: "كيك كبير" });
+    for (const member of [owner, withProducts]) {
+      expect(decidePush(member, "product", "p1", edited, false, live(stored))).toEqual({ allowed: true, data: edited });
+    }
   });
 });
 
@@ -303,39 +334,115 @@ describe("decidePush / prepare: an existing order's status fields only", () => {
 
 // Integrity review R3 (3 Oct 2026): each order records what it actually took out of stock, in
 // `stockDeducted` { productId: units }, and gives back exactly that. Staff who only prepare orders confirm
-// and cancel them, so the ledger is one of the fields their push may set.
+// and cancel them, so the ledger is one of the fields their push may set. Second review (3 Oct 2026): L1 a
+// missing ledger never clears a stored one; L3 a prepare-only push may only write a ledger that fits the
+// stored order.
 describe("decidePush / prepare: the stock ledger stockDeducted", () => {
-  const ledgerPush = (stockDeducted: unknown, extra: Record<string, unknown> = {}) => ({ ...storedOrder, status: "confirmed", stockDeducted, ...extra });
-  const prepared = (stockDeducted: unknown) => decidePush(withPrepare, "order", "o1", ledgerPush(stockDeducted), false, live(storedOrder));
+  const fresh = { ...storedOrder, status: "newOrder" }; // a new order, items: p1 x 2
+  const confirmedWith = (ledger: Record<string, number>) => ({ ...storedOrder, status: "confirmed", stockDeducted: ledger });
+  const push = (stored: Record<string, unknown>, status: string, stockDeducted: unknown, extra: Record<string, unknown> = {}) => {
+    const { stockDeducted: _stored, ...rest } = stored;
+    void _stored;
+    return decidePush(withPrepare, "order", "o1", { ...rest, status, stockDeducted, ...extra }, false, live(stored));
+  };
+  /** What the stored order becomes when only the status moves and the ledger stays as stored. */
+  const statusOnly = (stored: Record<string, unknown>, status: string) => ({ allowed: true, data: { ...stored, status } });
 
-  it("takes a ledger along with the status; every other field stays as stored", () => {
-    const incoming = ledgerPush({ p1: 2, p2: 1 }, { customerId: "someone-else", deliveryFeeMinor: 0, items: [] });
-    expect(decidePush(withPrepare, "order", "o1", incoming, false, live(storedOrder))).toEqual({
-      allowed: true,
-      data: { ...storedOrder, status: "confirmed", stockDeducted: { p1: 2, p2: 1 } },
-    });
+  it("confirming takes a ledger that fits the order's lines, along with the status; every other field stays as stored", () => {
+    const incoming = { ...fresh, status: "confirmed", stockDeducted: { p1: 2 }, customerId: "someone-else", deliveryFeeMinor: 0, items: [] };
+    expect(decidePush(withPrepare, "order", "o1", incoming, false, live(fresh))).toEqual({ allowed: true, data: { ...fresh, status: "confirmed", stockDeducted: { p1: 2 } } });
+    // Less than the order's units (a product that tracks stock only in part) and nothing at all are fine too.
+    expect(push(fresh, "confirmed", { p1: 1 })).toEqual({ allowed: true, data: { ...fresh, status: "confirmed", stockDeducted: { p1: 1 } } });
+    expect(push(fresh, "confirmed", { p1: 0 })).toEqual({ allowed: true, data: { ...fresh, status: "confirmed", stockDeducted: { p1: 0 } } });
+    expect(push(fresh, "confirmed", {})).toEqual({ allowed: true, data: { ...fresh, status: "confirmed", stockDeducted: {} } });
+    for (const into of ["ready", "collected"]) {
+      expect(push(fresh, into, { p1: 2 })).toEqual({ allowed: true, data: { ...fresh, status: into, stockDeducted: { p1: 2 } } });
+    }
   });
 
-  it("takes an empty ledger (the order takes nothing now), and replaces a stored one", () => {
-    expect(prepared({})).toEqual({ allowed: true, data: { ...storedOrder, status: "confirmed", stockDeducted: {} } });
-    const withLedger = { ...storedOrder, status: "confirmed", stockDeducted: { p1: 2 } };
-    expect(decidePush(withPrepare, "order", "o1", { ...withLedger, status: "cancelled", stockDeducted: {} }, false, live(withLedger))).toEqual({
-      allowed: true,
-      data: { ...withLedger, status: "cancelled", stockDeducted: {} },
-    });
+  it("sums several lines of the same product, and every key must be a product of the stored order", () => {
+    const twoLines = { ...fresh, items: [...fresh.items, { id: "i2", productId: "p1", nameSnapshot: "Cake", quantity: 3, unitPriceMinor: 5000, unitCostMinor: 2000 }, { id: "i3", productId: null, nameSnapshot: "Free text", quantity: 9 }] };
+    expect(push(twoLines, "confirmed", { p1: 5 })).toMatchObject({ data: { stockDeducted: { p1: 5 } } });
+    expect(push(twoLines, "confirmed", { p1: 6 })).toEqual(statusOnly(twoLines, "confirmed"));
+    for (const unrelated of [{ p2: 1 }, { p1: 2, p2: 0 }, { unrelated: 1_000_000 }, { null: 1 }]) {
+      expect(push(fresh, "confirmed", unrelated), JSON.stringify(unrelated)).toEqual(statusOnly(fresh, "confirmed"));
+    }
   });
 
-  it("accepts the edges: units 0 and 1,000,000, a 64-character product id, 200 products", () => {
-    expect(prepared({ p1: 0 })).toMatchObject({ allowed: true, data: { stockDeducted: { p1: 0 } } });
-    expect(prepared({ p1: 1_000_000 })).toMatchObject({ allowed: true, data: { stockDeducted: { p1: 1_000_000 } } });
+  it("a ledger with inflated quantities is ignored: the order's status is handled, the ledger stays as stored", () => {
+    expect(push(fresh, "confirmed", { p1: 3 })).toEqual(statusOnly(fresh, "confirmed"));
+    expect(push(fresh, "confirmed", { p1: 1_000_000 })).toEqual(statusOnly(fresh, "confirmed"));
+    const withLedger = confirmedWith({ p1: 2 });
+    expect(push(withLedger, "ready", { p1: 99 })).toEqual(statusOnly(withLedger, "ready"));
+  });
+
+  it("acceptance: stored {p:3}, a prepare push may not rewrite it to an unrelated product, and may not change it with no move", () => {
+    const order = { ...storedOrder, items: [{ id: "i1", productId: "p", nameSnapshot: "Cake", quantity: 3, unitPriceMinor: 5000, unitCostMinor: 2000 }], status: "confirmed", stockDeducted: { p: 3 } };
+    expect(push(order, "confirmed", { unrelated: 1_000_000 })).toEqual({ allowed: true, data: order });
+    expect(push(order, "ready", { unrelated: 1_000_000 })).toEqual(statusOnly(order, "ready"));
+    expect(push(order, "ready", { p: 2 })).toEqual(statusOnly(order, "ready"));
+    expect(push(order, "ready", { p: 3 })).toEqual(statusOnly(order, "ready"));
+  });
+
+  it("cancelling (or back to new) writes {} when the stock came back; any other ledger on the way out is ignored", () => {
+    const withLedger = confirmedWith({ p1: 2 });
+    for (const out of ["cancelled", "newOrder"]) {
+      expect(push(withLedger, out, {})).toEqual({ allowed: true, data: { ...withLedger, status: out, stockDeducted: {} } });
+      expect(push(withLedger, out, { p1: 1 }), out).toEqual(statusOnly(withLedger, out));
+      expect(push(withLedger, out, { unrelated: 5 }), out).toEqual(statusOnly(withLedger, out));
+    }
+    // A legacy order (no ledger) cancelled: the phone derived and restored it, and writes {}.
+    expect(push(storedOrder, "cancelled", {})).toEqual({ allowed: true, data: { ...storedOrder, status: "cancelled", stockDeducted: {} } });
+  });
+
+  it("an order that took nothing ({}) is cancelled and confirmed again with a ledger that fits", () => {
+    const tookNothing = confirmedWith({});
+    expect(push(tookNothing, "cancelled", {})).toEqual({ allowed: true, data: { ...tookNothing, status: "cancelled" } });
+    const cancelled = { ...storedOrder, status: "cancelled", stockDeducted: {} };
+    expect(push(cancelled, "confirmed", { p1: 2 })).toEqual({ allowed: true, data: { ...cancelled, status: "confirmed", stockDeducted: { p1: 2 } } });
+    expect(push(cancelled, "confirmed", { p1: 3 })).toEqual(statusOnly(cancelled, "confirmed"));
+  });
+
+  it("moving on between deducted statuses keeps the ledger: the same ledger is taken, a different one is not", () => {
+    const withLedger = confirmedWith({ p1: 2 });
+    expect(push(withLedger, "ready", { p1: 2 })).toEqual(statusOnly(withLedger, "ready"));
+    expect(push(withLedger, "ready", { p1: 1 })).toEqual(statusOnly(withLedger, "ready"));
+    expect(push(withLedger, "ready", {})).toEqual(statusOnly(withLedger, "ready"));
+  });
+
+  it("a legacy order (no ledger) that stays in a deducted status may get the ledger the phone derived, when it fits", () => {
+    expect(push(storedOrder, "collected", { p1: 2 })).toEqual({ allowed: true, data: { ...storedOrder, status: "collected", stockDeducted: { p1: 2 } } });
+    expect(push(storedOrder, "collected", {})).toEqual({ allowed: true, data: { ...storedOrder, status: "collected", stockDeducted: {} } });
+    expect(push(storedOrder, "collected", { p1: 9 })).toEqual(statusOnly(storedOrder, "collected"));
+    expect(push(storedOrder, "collected", { p2: 1 })).toEqual(statusOnly(storedOrder, "collected"));
+  });
+
+  it("a ledger on an order that is not (and does not become) deducted is ignored: new, cancelled", () => {
+    expect(push(fresh, "cancelled", { p1: 2 })).toEqual(statusOnly(fresh, "cancelled"));
+    const cancelled = { ...storedOrder, status: "cancelled", stockDeducted: {} };
+    expect(push(cancelled, "newOrder", { p1: 2 })).toEqual(statusOnly(cancelled, "newOrder"));
+    expect(push(cancelled, "cancelled", { p1: 2 })).toEqual(statusOnly(cancelled, "cancelled"));
+  });
+
+  it("an unknown status takes no stock: confirming from it is a move into a deducted status", () => {
+    const odd = { ...storedOrder, status: "somethingNew" };
+    expect(push(odd, "confirmed", { p1: 2 })).toEqual({ allowed: true, data: { ...odd, status: "confirmed", stockDeducted: { p1: 2 } } });
+  });
+
+  it("accepts the edges: units 1,000,000, a 64-character product id, 200 products (when the order has them)", () => {
+    const line = (productId: string, quantity: number) => ({ id: `i-${productId}`, productId, nameSnapshot: "x", quantity, unitPriceMinor: 1, unitCostMinor: 0 });
+    const big = { ...fresh, items: [line("p1", 1_000_000)] };
+    expect(push(big, "confirmed", { p1: 1_000_000 })).toMatchObject({ allowed: true, data: { stockDeducted: { p1: 1_000_000 } } });
     const longKey = "k".repeat(64);
-    expect(prepared({ [longKey]: 3 })).toMatchObject({ allowed: true, data: { stockDeducted: { [longKey]: 3 } } });
+    const longOrder = { ...fresh, items: [line(longKey, 3)] };
+    expect(push(longOrder, "confirmed", { [longKey]: 3 })).toMatchObject({ allowed: true, data: { stockDeducted: { [longKey]: 3 } } });
     const twoHundred = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`p${i}`, 1]));
-    expect(prepared(twoHundred)).toMatchObject({ allowed: true, data: { stockDeducted: twoHundred } });
+    const many = { ...fresh, items: Array.from({ length: 200 }, (_, i) => line(`p${i}`, 1)) };
+    expect(push(many, "confirmed", twoHundred)).toMatchObject({ allowed: true, data: { stockDeducted: twoHundred } });
   });
 
   it("ignores an invalid ledger like any other bad prepare field: the stored one stays", () => {
-    const stored = { ...storedOrder, stockDeducted: { p1: 2 } };
+    const stored = confirmedWith({ p1: 2 });
     const tooMany = Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`p${i}`, 1]));
     const bad: unknown[] = [
       "p1:2", 7, true, [{ p1: 2 }], [], // not a plain object
@@ -344,22 +451,31 @@ describe("decidePush / prepare: the stock ledger stockDeducted", () => {
       tooMany, // more than 200 products
     ];
     for (const value of bad) {
-      const decision = decidePush(withPrepare, "order", "o1", { ...stored, status: "confirmed", stockDeducted: value }, false, live(stored));
-      expect(decision, JSON.stringify(value)).toEqual({ allowed: true, data: { ...stored, status: "confirmed" } });
+      expect(push(stored, "confirmed", value), JSON.stringify(value)).toEqual({ allowed: true, data: stored });
     }
     // null is not a ledger either (unlike outForDeliveryAt, where null clears it)
-    expect(decidePush(withPrepare, "order", "o1", { ...stored, status: "confirmed", stockDeducted: null }, false, live(stored))).toEqual({ allowed: true, data: { ...stored, status: "confirmed" } });
+    expect(push(stored, "confirmed", null)).toEqual({ allowed: true, data: stored });
   });
 
   it("an invalid ledger on an order that has none leaves it without one", () => {
-    expect(prepared({ p1: -2 })).toEqual({ allowed: true, data: { ...storedOrder, status: "confirmed" } });
+    expect(push(fresh, "confirmed", { p1: -2 })).toEqual(statusOnly(fresh, "confirmed"));
   });
 
-  it("leaving the key out clears the stored ledger (an optional field, like outForDeliveryAt): the order is a legacy order again", () => {
-    const stored = { ...storedOrder, stockDeducted: { p1: 2 } };
+  it("L1: leaving the key out never clears the stored ledger: the order keeps what it took, and a later cancel can give it back", () => {
+    const stored = confirmedWith({ p1: 2 });
     const { stockDeducted: _omit, ...withoutKey } = stored;
     void _omit;
-    expect(decidePush(withPrepare, "order", "o1", { ...withoutKey, status: "confirmed" }, false, live(stored))).toEqual({ allowed: true, data: { ...withoutKey, status: "confirmed" } });
+    // An older app, or a stale copy, moves the order on (confirmed -> ready) without knowing the ledger.
+    expect(decidePush(withPrepare, "order", "o1", { ...withoutKey, status: "ready" }, false, live(stored))).toEqual(statusOnly(stored, "ready"));
+    const ready = { ...stored, status: "ready" };
+    // The later cancel finds {p1: 2} to give back, and writes {}.
+    expect(push(ready, "cancelled", {})).toEqual({ allowed: true, data: { ...ready, status: "cancelled", stockDeducted: {} } });
+  });
+
+  it("L1: only an explicit value changes the ledger: {} clears it on the way out, and a missing key on an order without one adds none", () => {
+    const stored = confirmedWith({ p1: 2 });
+    expect(push(stored, "cancelled", {})).toMatchObject({ data: { stockDeducted: {} } });
+    expect(decidePush(withPrepare, "order", "o1", { ...storedOrder, status: "collected" }, false, live(storedOrder))).toEqual(statusOnly(storedOrder, "collected"));
   });
 
   it("only staff who prepare may set it without orders: money alone keeps the stored ledger", () => {
@@ -371,23 +487,38 @@ describe("decidePush / prepare: the stock ledger stockDeducted", () => {
   });
 
   it("prepare with money takes the ledger as well; orders (and the owner) store the whole record as sent", () => {
-    const incoming = ledgerPush({ p1: 3 }, { notes: "changed" });
-    expect(decidePush(staff({ prepare: true, money: true }), "order", "o1", incoming, false, live(storedOrder))).toEqual({
+    const incoming = { ...fresh, status: "confirmed", stockDeducted: { p1: 2 }, notes: "changed" };
+    expect(decidePush(staff({ prepare: true, money: true }), "order", "o1", incoming, false, live(fresh))).toEqual({
       allowed: true,
-      data: { ...storedOrder, status: "confirmed", stockDeducted: { p1: 3 } },
+      data: { ...fresh, status: "confirmed", stockDeducted: { p1: 2 } },
     });
-    expect(decidePush(withOrders, "order", "o1", incoming, false, live(storedOrder))).toEqual({ allowed: true, data: incoming });
+    expect(decidePush(withOrders, "order", "o1", incoming, false, live(fresh))).toEqual({ allowed: true, data: incoming });
     // Owners and orders staff are not held to the prepare rules: their record is stored as they send it.
-    const odd = ledgerPush({ p1: -1 });
-    expect(decidePush(owner, "order", "o1", odd, false, live(storedOrder))).toEqual({ allowed: true, data: odd });
-    expect(decidePush(withOrders, "order", "o1", odd, false, live(storedOrder))).toEqual({ allowed: true, data: odd });
+    const odd = { ...fresh, status: "confirmed", stockDeducted: { p1: -1 } };
+    expect(decidePush(owner, "order", "o1", odd, false, live(fresh))).toEqual({ allowed: true, data: odd });
+    expect(decidePush(withOrders, "order", "o1", odd, false, live(fresh))).toEqual({ allowed: true, data: odd });
   });
 
-  it("the order stock moves staff push on products still pass isOrderStockUpdate: a restore on a product that no longer tracks stock", () => {
+  it("L1, whole-record pushes: a record without the key keeps the stored ledger; an explicit value, {} included, replaces it", () => {
+    const stored = confirmedWith({ p1: 2 });
+    const { stockDeducted: _omit, ...withoutKey } = stored;
+    void _omit;
+    for (const member of [owner, withOrders]) {
+      expect(decidePush(member, "order", "o1", { ...withoutKey, notes: "edited on an older app" }, false, live(stored))).toEqual({ allowed: true, data: { ...stored, notes: "edited on an older app" } });
+      expect(decidePush(member, "order", "o1", { ...stored, stockDeducted: null }, false, live(stored))).toEqual({ allowed: true, data: stored });
+      expect(decidePush(member, "order", "o1", { ...stored, stockDeducted: {} }, false, live(stored))).toEqual({ allowed: true, data: { ...stored, stockDeducted: {} } });
+      expect(decidePush(member, "order", "o1", { ...stored, stockDeducted: { p1: 1 } }, false, live(stored))).toEqual({ allowed: true, data: { ...stored, stockDeducted: { p1: 1 } } });
+    }
+    // Nothing stored, nothing to keep: a new order, a stored order without a ledger, or a ledger that is not valid.
+    expect(decidePush(owner, "order", "o9", withoutKey, false, undefined)).toEqual({ allowed: true, data: withoutKey });
+    expect(decidePush(owner, "order", "o1", withoutKey, false, live(withoutKey))).toEqual({ allowed: true, data: withoutKey });
+    expect(decidePush(owner, "order", "o1", withoutKey, false, live({ ...withoutKey, stockDeducted: "junk" }))).toEqual({ allowed: true, data: withoutKey });
+  });
+
+  it("the order stock moves staff push on products still pass: a restore on a product that no longer tracks stock", () => {
     const stored = { nameAr: "كيك", priceMinor: 5000, trackStock: false, stockQuantity: 10, lowStockThreshold: 3, stockMoves: [] };
     const back = { id: "m9", delta: 3, reason: "orderCancelled", orderId: "o1", note: null, at: "2026-10-03T09:00:00.000Z" };
     const incoming = { ...stored, stockQuantity: 13, stockMoves: [back], updatedAt: "2026-10-03T09:00:00.000Z" };
-    expect(isOrderStockUpdate(stored, incoming)).toBe(true);
     expect(decidePush(withPrepare, "product", "p1", incoming, false, live(stored))).toEqual({ allowed: true, data: incoming });
   });
 });

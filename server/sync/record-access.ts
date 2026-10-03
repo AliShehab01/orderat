@@ -23,19 +23,27 @@
 //   - `orders`: full write of orders, customers and occasions (create, edit, delete).
 //   - `prepare` (without `orders`): an *existing* order's status fields only — `status`,
 //     `outForDeliveryAt`, `updatedAt`, the stock ledger `stockDeducted` (confirming and cancelling an
-//     order moves stock, and the ledger records how much), and new `changes` entries about the status
+//     order moves stock, and the ledger records how much; taken only when it fits the stored order,
+//     server/sync/stock-ledger.ts, second review L3), and new `changes` entries about the status
 //     fields. Every other field is kept from the stored record, never trusted from the payload. No
 //     creating or deleting orders.
 //   - `money` (without `orders`): an existing order's money fields only — `payments`, `paymentStatus`,
 //     `updatedAt` and new payment history entries — and full write of expenses.
 //   - `products`: full write of products and stock moves (and photo uploads, server/sync/handler.ts).
-//     Staff with `orders` or `prepare` but not `products` may push an *existing* product when, next to
-//     the stored copy, only its stock changed (isOrderStockUpdate) — so stock stays right when staff
-//     confirm or cancel orders.
+//     Staff with `orders` or `prepare` but not `products` may push an *existing* product to add
+//     order-driven stock moves (mergeProductStock) — so stock stays right when staff confirm or cancel
+//     orders; nothing else of the product they send is stored.
+//   - Stock moves are merged, never lost and never refused for being stale (second review, 3 Oct 2026, L2,
+//     server/sync/stock-merge.ts): a product push whose copy lacks moves the stored one has is rebased onto
+//     the stored quantity and moves, applying only the moves the stored copy lacks.
+//   - A whole-order push (owner, `orders`) that leaves out `stockDeducted` keeps the stored ledger (L1).
 //   Everything else is refused, and comes back to the phone as a `rejected` entry (server/sync/
 //   push-pull.ts), with the server's copy when the member may pull it.
 
+import { ISO_DATE_RE, isPlainObject, sameJson } from "./json-equal.ts";
 import { hasPermission, type Member } from "./permissions.ts";
+import { acceptPreparedLedger, keepStoredLedger } from "./stock-ledger.ts";
+import { mayMoveOrderStock, mergeProductStock } from "./stock-merge.ts";
 
 export const ENTITIES = ["shop", "product", "customer", "order", "expense", "occasion", "stock_move", "setting"] as const;
 export type Entity = (typeof ENTITIES)[number];
@@ -122,7 +130,11 @@ export function decidePush(
   deleted: boolean,
   existing: StoredRecord | undefined,
 ): PushDecision {
-  if (member.role === "owner") return allow(incomingData);
+  if (member.role === "owner") {
+    if (entity === "product") return decideProduct(true, incomingData, deleted, existing);
+    if (entity === "order") return allow(keepStoredLedger(incomingData, existing?.data));
+    return allow(incomingData);
+  }
   switch (entity) {
     case "shop":
     case "setting":
@@ -135,45 +147,34 @@ export function decidePush(
     case "stock_move":
       return hasPermission(member, "products") ? allow(incomingData) : FORBIDDEN;
     case "product":
-      if (hasPermission(member, "products")) return allow(incomingData);
-      if ((hasPermission(member, "orders") || hasPermission(member, "prepare")) && !deleted && existing && !existing.deleted && isOrderStockUpdate(existing.data, incomingData)) {
-        return allow(incomingData);
-      }
+      if (hasPermission(member, "products")) return decideProduct(true, incomingData, deleted, existing);
+      if (mayMoveOrderStock(member)) return decideProduct(false, incomingData, deleted, existing);
       return FORBIDDEN;
     case "order":
-      if (hasPermission(member, "orders")) return allow(incomingData);
+      if (hasPermission(member, "orders")) return allow(keepStoredLedger(incomingData, existing?.data));
       return mergeOrderFields(member, incomingData, deleted, existing);
     default:
       return FORBIDDEN;
   }
 }
 
-// ---------- Order fields for `prepare` and `money` ----------
-
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T/;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/** A product push. An existing live product takes the stock merge (stock-merge.ts): a copy that is stale for
+ * stock is rebased onto the stored quantity and moves, and staff without `products` store only the stock
+ * moves their copy adds. Anything else (a new product, a deletion, a tombstone coming back) is a plain write
+ * for a member who may edit products, and refused for staff who only handle orders: they never create,
+ * delete or bring back a product. */
+function decideProduct(mayEditProduct: boolean, incoming: Record<string, unknown>, deleted: boolean, existing: StoredRecord | undefined): PushDecision {
+  const live = existing && !existing.deleted ? existing : undefined;
+  if (deleted || !live) return mayEditProduct ? allow(incoming) : FORBIDDEN;
+  const data = mergeProductStock(live.data, incoming, mayEditProduct);
+  return data ? allow(data) : FORBIDDEN;
 }
+
+// ---------- Order fields for `prepare` and `money` ----------
 
 const isString = (v: unknown) => typeof v === "string";
 const isIsoDateOrNull = (v: unknown) => v === null || (typeof v === "string" && ISO_DATE_RE.test(v) && Number.isFinite(Date.parse(v)));
 const isListOfObjects = (v: unknown) => Array.isArray(v) && v.every(isPlainObject);
-
-/** An order's stock ledger `stockDeducted` (what the order actually took out of each product's stock):
- * { "<productId>": units } with at most 200 keys, each a non-empty string of up to 64 characters, and
- * every value a whole number from 0 to 1,000,000. An empty object is valid: the order takes nothing now. */
-const MAX_LEDGER_KEYS = 200;
-const MAX_LEDGER_KEY_CHARS = 64;
-const MAX_LEDGER_UNITS = 1_000_000;
-const isStockLedger = (v: unknown) => {
-  if (!isPlainObject(v)) return false;
-  const entries = Object.entries(v);
-  return (
-    entries.length <= MAX_LEDGER_KEYS &&
-    entries.every(([key, units]) => key.length >= 1 && key.length <= MAX_LEDGER_KEY_CHARS && typeof units === "number" && Number.isInteger(units) && units >= 0 && units <= MAX_LEDGER_UNITS)
-  );
-};
 
 interface FieldRule {
   valid: (value: unknown) => boolean;
@@ -188,9 +189,6 @@ const PREPARE_FIELDS: Record<string, FieldRule> = {
   // "Out for delivery" (tester feedback, 1 Oct 2026): status stays "ready" on the wire and this key holds
   // when the order left; null or absent once it moves on.
   outForDeliveryAt: { valid: isIsoDateOrNull, optional: true },
-  // What the order took out of stock (3 Oct 2026, integrity review R3): staff who confirm or cancel an
-  // order write the ledger along with the status; owners and `orders` staff store the whole record.
-  stockDeducted: { valid: isStockLedger, optional: true },
   updatedAt: { valid: isString, optional: false },
 };
 const MONEY_FIELDS: Record<string, FieldRule> = {
@@ -223,6 +221,13 @@ function mergeOrderFields(member: Member, incoming: Record<string, unknown>, del
     } else if (rule.optional) {
       delete data[key];
     }
+  }
+  if (prepare) {
+    // What the order took out of stock (3 Oct 2026, integrity review R3): staff who confirm or cancel an
+    // order write the ledger along with the status. Never cleared by leaving it out (L1), and taken only when
+    // it fits the stored order (L3); otherwise the stored ledger stays (stock-ledger.ts).
+    const ledger = acceptPreparedLedger(existing.data, incoming.stockDeducted, data.status);
+    if (ledger !== undefined) data.stockDeducted = ledger;
   }
   const changes = mergeHistory(existing.data.changes, incoming.changes, history);
   if (changes !== undefined) data.changes = changes;
@@ -257,87 +262,4 @@ function mergeHistory(stored: unknown, incoming: unknown, allowedFields: Set<str
   }
   for (const entry of storedList) if (!taken.has(entry)) out.push(entry);
   return out;
-}
-
-// ---------- Stock updates from staff who handle orders ----------
-
-/** The keys an order's stock update may change on a product: the quantity (canonical `stockQuantity`;
- * `qty` is the web's own name, accepted the same), the stock history and an update stamp. */
-const STOCK_KEYS = new Set(["stockQuantity", "qty", "stockMoves", "updatedAt"]);
-/** The phones' order-driven stock reasons (iOS and Android StockMoveReason; the web's live-core). The
- * manual ones (received, damaged, correction) stay with the `products` permission. */
-const ORDER_STOCK_REASONS = new Set(["orderConfirmed", "orderCancelled", "orderEdited"]);
-/** The phones keep the last 50 stock moves (docs/sme-phase-2-cloud.md's product row). */
-const MAX_STOCK_MOVES = 50;
-
-/** Deep equality of JSON values, lenient only where clients legitimately differ in spelling: a missing
- * key equals null, and two ISO date strings are equal when they name the same instant. */
-function sameJson(a: unknown, b: unknown): boolean {
-  if (a === undefined) a = null;
-  if (b === undefined) b = null;
-  if (typeof a === "string" && typeof b === "string") {
-    if (a === b) return true;
-    if (ISO_DATE_RE.test(a) && ISO_DATE_RE.test(b)) {
-      const ta = Date.parse(a), tb = Date.parse(b);
-      return Number.isFinite(ta) && ta === tb;
-    }
-    return false;
-  }
-  if (Array.isArray(a) || Array.isArray(b)) {
-    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => sameJson(x, b[i]));
-  }
-  if (isPlainObject(a) || isPlainObject(b)) {
-    if (!isPlainObject(a) || !isPlainObject(b)) return false;
-    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-    for (const k of keys) if (!sameJson(a[k], b[k])) return false;
-    return true;
-  }
-  return a === b;
-}
-
-function quantityOf(data: Record<string, unknown>): number {
-  const v = data.stockQuantity ?? data.qty;
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
-}
-
-/**
- * True when `incoming` differs from the stored product `existing` only by stock an order moved:
- * - no key other than stockQuantity / qty / stockMoves / updatedAt changed;
- * - every stored stock move that is still listed is unchanged, and stored moves are only dropped off
- *   the end of a full (50-move) list;
- * - every new move has an id, a whole non-zero delta, an order-driven reason and the order's id;
- * - the quantity moved by exactly the sum of the new moves' deltas.
- * Staff who confirm, cancel or edit orders on a phone or the web push exactly this; anything else
- * (a price, a name, a manual stock correction) still needs the `products` permission.
- */
-export function isOrderStockUpdate(existing: Record<string, unknown>, incoming: Record<string, unknown>): boolean {
-  const keys = new Set([...Object.keys(existing), ...Object.keys(incoming)]);
-  for (const k of keys) if (!STOCK_KEYS.has(k) && !sameJson(existing[k], incoming[k])) return false;
-
-  const before = Array.isArray(existing.stockMoves) ? existing.stockMoves : [];
-  const after = Array.isArray(incoming.stockMoves) ? incoming.stockMoves : before;
-  if (after.length > MAX_STOCK_MOVES) return false;
-
-  const beforeById = new Map<string, unknown>();
-  for (const m of before) if (isPlainObject(m) && typeof m.id === "string") beforeById.set(m.id, m);
-
-  let added = 0;
-  const kept = new Set<string>();
-  for (const m of after) {
-    if (!isPlainObject(m) || typeof m.id !== "string" || !m.id) return false;
-    if (kept.has(m.id)) return false;
-    kept.add(m.id);
-    if (beforeById.has(m.id)) {
-      if (!sameJson(beforeById.get(m.id), m)) return false;
-      continue;
-    }
-    if (typeof m.delta !== "number" || !Number.isInteger(m.delta) || m.delta === 0) return false;
-    if (typeof m.reason !== "string" || !ORDER_STOCK_REASONS.has(m.reason)) return false;
-    if (typeof m.orderId !== "string" || !m.orderId) return false;
-    added += m.delta;
-  }
-  const dropped = [...beforeById.keys()].filter((id) => !kept.has(id));
-  if (dropped.length > 0 && after.length < MAX_STOCK_MOVES) return false;
-
-  return quantityOf(incoming) === quantityOf(existing) + added;
 }

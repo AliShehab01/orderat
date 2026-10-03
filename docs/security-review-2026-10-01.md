@@ -41,8 +41,10 @@ let each flag do (iOS `Store.canManageOrders` / `canChangeOrderStatus` / `canSee
 - **Shop record and settings.** These are owner only: the `shop` record and every setting, including
   `subscription` and `deliveryDefaults`. No synced setting belongs to a single staff member; per-device
   preferences never sync.
-- **Stock exception.** Staff with `orders` or `prepare` may still push an existing product when only its
-  stock changed (`isOrderStockUpdate`, unchanged). A product that is a tombstone no longer qualifies.
+- **Stock exception.** Staff with `orders` or `prepare` may still push an existing product to add
+  order-driven stock moves. A product that is a tombstone no longer qualifies. (Since 3 Oct 2026 this
+  goes through the stock merge, `mergeProductStock`, which replaced `isOrderStockUpdate`; see "Second
+  review, 3 Oct" below.)
 - **`prepare` and `money` order pushes.** For these (without `orders`), the server takes only the fields
   the flag covers and copies the rest from the stored order. These staff cannot create, delete or bring
   back an order, and stored history entries are never edited or dropped.
@@ -454,3 +456,78 @@ and Arabic, and checks that no button in `app.js` or `live.js` is labelled with 
   for `www.orderatweb.com` and Bulk Redirects for the `pages.dev` address, set up by the founder in the
   Cloudflare dashboard.
 - **Vitest 4** (see F04).
+
+## Second review, 3 Oct 2026 (L1 to L3: the stock ledger and stock moves)
+
+A second review of the order stock ledger (`stockDeducted`) and of stock moves found three server
+problems. All three are in `server/sync/`; no client change is needed (the wire stays compatible with
+iOS 1.0, Android 1.5.4 / 1.5.5 and the new builds). Rules: `docs/sme-phase-2-cloud.md` ("Stock with
+several phones", "Order stock ledger").
+
+### L1: a missing ledger cleared a stored one
+
+An order's ledger was an "optional" prepare field, so a prepare-only push that left `stockDeducted` out
+(an older app, or a stale copy) removed the stored ledger. The order then looked like a legacy order, and
+a later cancel derived what to give back from at most 50 stock moves, or restored nothing.
+
+- **Changed:** absent (or `null`, or an invalid value) never changes the stored ledger. Only an explicit
+  valid value does; an explicit `{}` clears it. For prepare/money pushes and for whole-order pushes (the
+  owner, `orders` staff: a record without the key keeps the stored ledger in what is written).
+- The old test that expected omission to clear the ledger is replaced.
+
+### L3: a prepare-only push could write any ledger
+
+Staff who only prepare orders could set the ledger to anything valid-looking (`{"unrelated":1000000}`),
+which a later cancel would then restore into stock.
+
+- **Changed:** prepare-only staff cannot edit items, so the stored order is the reference. A pushed ledger
+  is taken only when it equals the stored one; when the push moves the order into a deducted status and
+  every key is a product of a line of the stored order with at most that line's units; when it moves the
+  order out of a deducted status and is `{}`; or when a legacy order (no stored ledger) stays deducted and
+  the ledger fits its lines. Otherwise it is ignored like any other invalid prepare value, and the rest of
+  the push is handled as before. (The write still happens, with a fresh `seq`, so the phone gets the stored
+  order back on its pull.)
+
+### L2: stale stock pushes were refused or overwrote another phone's deduction
+
+Two phones hold the same product copy (stock 10). A confirms 3 (server 7). B confirms 2 from its stale
+copy and pushes 8 with its move. Staff pushes were refused (`isOrderStockUpdate` required the stored
+moves unchanged); an owner's push overwrote A's deduction. B's order and ledger `{p:2}` were stored either
+way, so a later cancel of B added 2 units that were never taken.
+
+- **Changed:** a product's stock is the result of its moves, each applied exactly once. A push whose copy
+  lacks moves the stored product has is rebased inside the compare-and-swap write: the stored quantity and
+  moves are the start, only the pushed moves the stored copy lacks are applied, and the merged quantity and
+  list (newest first, at most 50) are stored with a fresh `seq`, so the pushing phone receives them on the
+  same sync's pull. Moves are identified by id (compared without case: iOS sends uppercase UUIDs); a retry
+  applies nothing twice; `baseSeq` is not used. Staff without `products` still add order-driven moves
+  only; the other fields of the product come from the stored copy for them, from the pushed copy for
+  members who may edit products.
+- **Trimmed histories (the 50-move cap):** a move missing from a full list counts only when it is newer
+  than that list's oldest move (by `at`). An older one was trimmed, not new, and is never applied again.
+- Tests run through the real push path on PGlite with the interleavings made deterministic (a write
+  landing between a push's read and its write): the two-device scenario for owner and staff pairs
+  (stock 5 with both moves; cancelling B gives 7, then A gives 10), retries, order first and product later,
+  conflicting item edits, an owner's stale rename, and a trimmed history.
+
+### What remains
+
+- **Legacy orders on a busy product.** An order that has no ledger and whose deduction moves aged out of
+  the product's 50-move history derives `{}` on the phone and restores nothing. That under-counts stock
+  rather than inventing it. Orders confirmed since the ledger shipped carry their ledger and are not
+  affected; no server change can recover moves that are gone.
+- **Order records are still last-writer-wins.** Two phones that edit the same order's items from the same
+  copy each move stock by their own delta, and the product ends with both moves; the order keeps one
+  phone's items and ledger. The stock is what the moves say, but a later cancel gives back the ledger of
+  the order that won. Fixing it needs an item-level merge of orders, or reconciling the ledger with the
+  moves, which is a design decision for both phones and the server.
+- **Quantity changes with no move.** A new product's opening quantity and a quantity edit on a product that
+  does not track stock carry no stock move (iOS, Android and the web all do this today). They are stored
+  while the pushed copy is up to date for stock, and cannot be merged when it is stale.
+- **A phone that edits a product while its own sync is in flight** keeps its pre-merge copy (iOS, Android
+  and the web only replace a local record that was not edited during the round) and pushes it again. The
+  server merges that push by move ids as well, so no move is lost; the phone adopts the merged copy on its
+  next pull.
+- **Clock skew.** Trimmed histories compare a move's `at` with the oldest move of a full list. A phone
+  whose clock is off by more than the span of 50 moves can have a genuinely new move skipped, or a
+  trimmed one applied again. Only full lists (50 moves) are affected.
