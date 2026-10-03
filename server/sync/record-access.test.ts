@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STAFF_PERMISSIONS, type Member, type Permissions } from "./permissions.ts";
-import { canPull, decidePush, ENTITIES, isOrderStockUpdate, newlyVisibleEntities, type Entity } from "./record-access.ts";
+import { canPull, decidePush, ENTITIES, newlyVisibleEntities, type Entity } from "./record-access.ts";
 
 const staff = (flags: Partial<Permissions>): Member => ({ role: "staff", permissions: { ...DEFAULT_STAFF_PERMISSIONS, ...flags } });
 const owner: Member = { role: "owner", permissions: DEFAULT_STAFF_PERMISSIONS }; // Deliberately empty permissions: role alone should be enough.
@@ -171,7 +171,9 @@ describe("decidePush / prepare", () => {
 });
 
 // Staff who confirm or cancel orders without the products permission still move stock (review finding
-// 3 of 29 Sep): a product push that only adds order-driven stock moves and moves the quantity by their sum.
+// 3 of 29 Sep): a product push adds order-driven stock moves. Since the second review (3 Oct, L2) the push is
+// merged onto the stored copy, never refused for being stale (more in stock-merge.test.ts): staff store the
+// stored product plus the order-driven moves their copy adds, and nothing else of what they send.
 describe("decidePush / product stock from staff handling orders", () => {
   const oldMove = { id: "m0", delta: 5, reason: "received", orderId: null, note: null, at: "2026-09-29T10:00:00.000Z" };
   const stored = { nameAr: "كيك", nameEn: null, priceMinor: 5000, trackStock: true, stockQuantity: 10, lowStockThreshold: 3, stockMoves: [oldMove], createdAt: "2026-09-01T00:00:00.000Z" };
@@ -189,10 +191,13 @@ describe("decidePush / product stock from staff handling orders", () => {
     const { nameEn: _omit, ...withoutNameEn } = stored;
     void _omit;
     const incoming = { ...withoutNameEn, createdAt: "2026-09-01T00:00:00Z", stockQuantity: 12, stockMoves: [back, oldMove], updatedAt: "2026-09-30T11:00:00.000Z" };
-    expect(isOrderStockUpdate(stored, incoming)).toBe(true);
+    expect(decidePush(withPrepare, "product", "p1", incoming, false, live(stored))).toEqual({
+      allowed: true,
+      data: { ...stored, stockQuantity: 12, stockMoves: [back, oldMove], updatedAt: "2026-09-30T11:00:00.000Z" },
+    });
   });
 
-  it("still rejects staff without orders or prepare, a new product, a deletion and a deleted product", () => {
+  it("still refuses staff without orders or prepare, a new product, a deletion and a deleted product", () => {
     expect(decidePush(noPerms, "product", "p1", pushed(), false, live(stored))).toEqual(FORBIDDEN);
     expect(decidePush(withMoney, "product", "p1", pushed(), false, live(stored))).toEqual(FORBIDDEN);
     expect(decidePush(withOrders, "product", "p1", pushed(), false, undefined)).toEqual(FORBIDDEN);
@@ -201,26 +206,52 @@ describe("decidePush / product stock from staff handling orders", () => {
     expect(decidePush(withOrders, "product", "p1", pushed(), false, { data: stored, deleted: true })).toEqual(FORBIDDEN);
   });
 
-  it("rejects any change beyond stock: price, name, tracking", () => {
+  it("stores nothing of a price, name or tracking change: those fields stay as stored, the stock moves land", () => {
     for (const change of [{ priceMinor: 1 }, { nameAr: "x" }, { trackStock: false }, { lowStockThreshold: 0 }]) {
-      expect(decidePush(withOrders, "product", "p1", pushed(change), false, live(stored))).toEqual(FORBIDDEN);
+      expect(decidePush(withOrders, "product", "p1", pushed(change), false, live(stored)), JSON.stringify(change)).toEqual({ allowed: true, data: pushed() });
     }
   });
 
-  it("rejects a quantity that does not match the new moves, and manual reasons", () => {
-    expect(isOrderStockUpdate(stored, pushed({ stockQuantity: 100 }))).toBe(false);
-    expect(isOrderStockUpdate(stored, { ...stored, stockQuantity: 100 })).toBe(false);
-    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [{ ...confirm(), reason: "correction" }, oldMove] }))).toBe(false);
-    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [{ ...confirm(), orderId: null }, oldMove] }))).toBe(false);
-    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [{ ...confirm(), delta: -2.5 }, oldMove], stockQuantity: 7.5 }))).toBe(false);
+  it("with no new move there is nothing to store: a change beyond stock is refused as before, a stock-only difference changes nothing", () => {
+    expect(decidePush(withOrders, "product", "p1", { ...stored, priceMinor: 1 }, false, live(stored))).toEqual(FORBIDDEN);
+    expect(decidePush(withOrders, "product", "p1", { ...stored, stockQuantity: 100, priceMinor: 1 }, false, live(stored))).toEqual(FORBIDDEN);
+    expect(decidePush(withOrders, "product", "p1", { ...stored, stockQuantity: 100 }, false, live(stored))).toEqual({ allowed: true, data: stored });
   });
 
-  it("rejects rewriting or dropping stored moves (unless the list is full)", () => {
-    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [confirm(), { ...oldMove, delta: 50 }] }))).toBe(false);
-    expect(isOrderStockUpdate(stored, pushed({ stockMoves: [confirm()] }))).toBe(false);
-    const full = Array.from({ length: 50 }, (_, i) => ({ ...oldMove, id: `h${i}`, delta: 1 }));
+  it("the quantity is the stored one plus the new moves, never the pushed one", () => {
+    expect(decidePush(withOrders, "product", "p1", pushed({ stockQuantity: 100 }), false, live(stored))).toEqual({ allowed: true, data: pushed() });
+    expect(decidePush(withOrders, "product", "p1", pushed({ stockQuantity: 0 }), false, live(stored))).toEqual({ allowed: true, data: pushed() });
+  });
+
+  it("refuses a move that is not order-driven: a manual reason, no order id, no id, a fractional or zero delta", () => {
+    const bad = [
+      { ...confirm(), reason: "correction" },
+      { ...confirm(), orderId: null },
+      { ...confirm(), orderId: "" },
+      { ...confirm(), id: undefined },
+      { ...confirm(), delta: -2.5 },
+      { ...confirm(), delta: 0 },
+      { ...confirm(), delta: "2" },
+    ];
+    for (const move of bad) {
+      expect(decidePush(withOrders, "product", "p1", pushed({ stockMoves: [move, oldMove] }), false, live(stored)), JSON.stringify(move)).toEqual(FORBIDDEN);
+    }
+  });
+
+  it("stored moves stay as stored: a rewritten or dropped one changes nothing, a full list drops its oldest", () => {
+    expect(decidePush(withOrders, "product", "p1", pushed({ stockMoves: [confirm(), { ...oldMove, delta: 50 }] }), false, live(stored))).toEqual({ allowed: true, data: pushed() });
+    expect(decidePush(withOrders, "product", "p1", pushed({ stockMoves: [confirm()] }), false, live(stored))).toEqual({ allowed: true, data: pushed() });
+    const full = Array.from({ length: 50 }, (_, i) => ({ ...oldMove, id: `h${i}`, delta: 1, at: `2026-09-29T09:${String(59 - i).padStart(2, "0")}:00.000Z` }));
     const fullStored = { ...stored, stockMoves: full };
-    expect(isOrderStockUpdate(fullStored, { ...fullStored, stockQuantity: 8, stockMoves: [confirm(), ...full.slice(0, 49)] })).toBe(true);
+    const decision = decidePush(withOrders, "product", "p1", { ...fullStored, stockQuantity: 8, stockMoves: [confirm(), ...full.slice(0, 49)] }, false, live(fullStored));
+    expect(decision).toEqual({ allowed: true, data: { ...fullStored, stockQuantity: 8, stockMoves: [confirm(), ...full.slice(0, 49)] } });
+  });
+
+  it("the owner and staff with products write the product as sent while their copy is up to date for stock", () => {
+    const edited = pushed({ priceMinor: 6000, nameAr: "كيك كبير" });
+    for (const member of [owner, withProducts]) {
+      expect(decidePush(member, "product", "p1", edited, false, live(stored))).toEqual({ allowed: true, data: edited });
+    }
   });
 });
 
